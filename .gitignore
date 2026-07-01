@@ -1,0 +1,16 @@
+node_modules/
+dist/
+dist-electron/
+release/
+out/
+.axiom/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+.env.local
+.claude/
+*.exe
+*.exe~
+*~
+*.log

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "axiom": {
+      "command": "node",
+      "args": ["${AXIOM_PATH}/mcp/axiom-mcp.js"],
+      "description": "Axiom architectural graph — query your codebase structure with GQP"
+    }
+  }
+}

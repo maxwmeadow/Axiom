@@ -1,0 +1,75 @@
+{
+  "name": "axiom",
+  "version": "0.1.0",
+  "description": "Live Architectural Intelligence for the AI Development Era",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "electron-vite build && electron-builder",
+    "postinstall": "electron-rebuild",
+    "archd": "node out/main/archd.js",
+    "build:archd": "C:\\msys64\\usr\\bin\\bash.exe --login -c \"export PATH=/mingw64/bin:/mingw64/lib/go/bin:$PATH && cd /c/Users/maxst/VSCodeProjects/Axiom/archd-go && GOROOT=/mingw64/lib/go GOPATH=/c/Users/maxst/go CGO_ENABLED=1 go build -o archd.exe ./cmd/archd && echo Done\"",
+    "dbquery": "C:\\msys64\\usr\\bin\\bash.exe --login -c \"export PATH=/mingw64/bin:/mingw64/lib/go/bin:$PATH && cd /c/Users/maxst/VSCodeProjects/Axiom/archd-go && GOROOT=/mingw64/lib/go GOPATH=/c/Users/maxst/go CGO_ENABLED=1 go run ./cmd/dbquery/main.go -db /c/Users/maxst/.axiom/data/axiom.db\"",
+    "seed-arch": "npx tsx scripts/seed-architecture.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.0.5",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@xyflow/react": "^12.0.0",
+    "better-sqlite3": "^12.11.1",
+    "chokidar": "^3.6.0",
+    "electron-updater": "^6.2.1",
+    "elkjs": "^0.11.1",
+    "graphology": "^0.25.4",
+    "graphology-communities-louvain": "^2.0.1",
+    "graphology-types": "^0.24.7",
+    "hono": "^4.3.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "web-tree-sitter": "^0.22.6",
+    "ws": "^8.17.0",
+    "yjs": "^13.6.18",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.5.10",
+    "@vitejs/plugin-react": "^4.3.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.4.5",
+    "vite": "^5.3.0"
+  },
+  "build": {
+    "appId": "com.axiom.app",
+    "productName": "Axiom",
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}
