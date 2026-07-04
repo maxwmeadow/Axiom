@@ -151,10 +151,12 @@ func mostCommonAt(allParts [][]string, depth, minLen int) string {
 
 // CamelTail extracts the trailing CamelCase word from a filename stem.
 // Works across all naming conventions:
-//   PascalCase:  "HaulJobDriver.cs"    → "Driver"
-//   kebab-case:  "haul-job-driver.py"  → "Driver"
-//   snake_case:  "haul_job_driver.go"  → "Driver"
-//   mixed:       "JobDriver_MineTile.cs"→ "Tile"
+//
+//	PascalCase:  "HaulJobDriver.cs"    → "Driver"
+//	kebab-case:  "haul-job-driver.py"  → "Driver"
+//	snake_case:  "haul_job_driver.go"  → "Driver"
+//	mixed:       "JobDriver_MineTile.cs"→ "Tile"
+//
 // This is the counterpart to CamelHead and catches the *Controller, *Service,
 // *Repository, *Driver suffix patterns common across all language ecosystems.
 func CamelTail(filename string) string {

@@ -24,10 +24,23 @@ type client struct {
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[*client]struct{}
+
+	tapMu sync.RWMutex
+	tap   func(msgType string, payload json.RawMessage)
 }
 
 func New() *Hub {
 	return &Hub{clients: make(map[*client]struct{})}
+}
+
+// SetTap registers a single observer that receives every broadcast (type +
+// already-marshaled payload) before it is sent to clients. Used by the
+// investigation recorder to capture the live event stream. The tap must be
+// cheap and must never call back into Broadcast (it runs inline).
+func (h *Hub) SetTap(fn func(msgType string, payload json.RawMessage)) {
+	h.tapMu.Lock()
+	h.tap = fn
+	h.tapMu.Unlock()
 }
 
 // Register adds a new WebSocket connection and starts its write pump.
@@ -66,6 +79,12 @@ func (h *Hub) Broadcast(msgType string, payload any) {
 	if err != nil {
 		log.Printf("hub: marshal envelope: %v", err)
 		return
+	}
+	h.tapMu.RLock()
+	tap := h.tap
+	h.tapMu.RUnlock()
+	if tap != nil {
+		tap(msgType, raw)
 	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()

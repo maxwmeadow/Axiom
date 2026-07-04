@@ -12,10 +12,13 @@ import (
 	"sync/atomic"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/cpp"
 	"github.com/smacker/go-tree-sitter/csharp"
 	"github.com/smacker/go-tree-sitter/golang"
+	"github.com/smacker/go-tree-sitter/java"
 	"github.com/smacker/go-tree-sitter/javascript"
 	"github.com/smacker/go-tree-sitter/python"
+	"github.com/smacker/go-tree-sitter/ruby"
 	"github.com/smacker/go-tree-sitter/rust"
 	"github.com/smacker/go-tree-sitter/typescript/tsx"
 	"github.com/smacker/go-tree-sitter/typescript/typescript"
@@ -43,6 +46,10 @@ type Result struct {
 	// Calls holds raw (unresolved) function calls extracted by tree-sitter.
 	// The indexer resolves CalleeName → callee file ID using the symbols table.
 	Calls []RawCall
+	// VarRefs holds per-occurrence variable references (def/param/write/read).
+	// The indexer aggregates reads before storing; the data-flow API re-parses
+	// for exact per-line results.
+	VarRefs []VarRef
 }
 
 // ParseFile reads a file and extracts symbols and imports using tree-sitter.
@@ -71,7 +78,9 @@ func ParseFile(absPath, relPath string) (*Result, error) {
 				root := tree.RootNode()
 				result.Symbols = extractSymbols(root, src, lang)
 				result.Calls = extractCalls(root, src, lang)
+				tree.Close()
 			}
+			p.Close()
 		}
 		return result, nil
 	}
@@ -82,16 +91,19 @@ func ParseFile(absPath, relPath string) (*Result, error) {
 	}
 
 	p := sitter.NewParser()
+	defer p.Close()
 	p.SetLanguage(grammar)
 	tree := p.Parse(nil, src)
 	if tree == nil {
 		return result, nil
 	}
+	defer tree.Close()
 
 	rootNode := tree.RootNode()
 	result.Symbols = extractSymbols(rootNode, src, lang)
 	result.Imports = extractImports(rootNode, src, lang, relPath)
 	result.Calls = extractCalls(rootNode, src, lang)
+	result.VarRefs = extractVarRefs(rootNode, src, lang)
 	return result, nil
 }
 
@@ -115,6 +127,12 @@ func detectLanguage(path string) string {
 		return "rust"
 	case ".cs":
 		return "csharp"
+	case ".cpp", ".cc", ".cxx", ".hpp", ".hxx":
+		return "cpp"
+	case ".rb":
+		return "ruby"
+	case ".java":
+		return "java"
 	default:
 		return "unknown"
 	}
@@ -136,6 +154,12 @@ func grammarFor(lang string) *sitter.Language {
 		return rust.GetLanguage()
 	case "csharp":
 		return csharp.GetLanguage()
+	case "cpp":
+		return cpp.GetLanguage()
+	case "ruby":
+		return ruby.GetLanguage()
+	case "java":
+		return java.GetLanguage()
 	default:
 		return nil
 	}
@@ -147,15 +171,15 @@ func grammarFor(lang string) *sitter.Language {
 // Each language has slightly different names; we handle the union here.
 var symbolNodeTypes = map[string]string{
 	// TypeScript / JavaScript
-	"function_declaration":  "function",
-	"method_definition":     "method",
-	"class_declaration":     "class",
-	"interface_declaration": "interface",
+	"function_declaration":   "function",
+	"method_definition":      "method",
+	"class_declaration":      "class",
+	"interface_declaration":  "interface",
 	"type_alias_declaration": "type",
-	"lexical_declaration":   "variable",
-	"variable_declaration":  "variable",
-	"export_statement":      "", // descend into children
-	"arrow_function":        "function",
+	"lexical_declaration":    "variable",
+	"variable_declaration":   "variable",
+	"export_statement":       "", // descend into children
+	"arrow_function":         "function",
 	// Go
 	"function_declaration_go": "function", // handled by alias below
 	"method_declaration":      "method",
@@ -177,16 +201,30 @@ var symbolNodeTypes = map[string]string{
 	"enum_declaration":         "type",
 	"record_declaration":       "class",
 	"local_function_statement": "function",
+	// C++ (function_definition shared with Python above → "function")
+	"class_specifier":  "class",
+	"struct_specifier": "class",
+	// Ruby
+	"method":           "method",
+	"singleton_method": "method",
+	"module":           "type",
+	"class":            "class",
+	// (Ruby "class" and Java "class_declaration"/"interface_declaration" reuse
+	// the entries above; Java method_declaration reuses Go's mapping.)
 }
 
 // containerSymbolTypes are declaration nodes that name a scope we record as a symbol
 // but must also descend into — otherwise nested methods/functions inside classes are invisible.
 var containerSymbolTypes = map[string]bool{
-	"class_declaration":     true, // TS/JS/C#
-	"interface_declaration": true, // TS/JS/C#
+	"class_declaration":     true, // TS/JS/C#/Java
+	"interface_declaration": true, // TS/JS/C#/Java
 	"struct_declaration":    true, // C#
 	"record_declaration":    true, // C#
 	"class_definition":      true, // Python
+	"class_specifier":       true, // C++
+	"struct_specifier":      true, // C++
+	"class":                 true, // Ruby
+	"module":                true, // Ruby
 }
 
 func extractSymbols(root *sitter.Node, src []byte, lang string) []db.Symbol {
@@ -224,6 +262,15 @@ func extractName(node *sitter.Node, src []byte, lang string) string {
 	if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 		return nameNode.Content(src)
 	}
+	// C++: the function name is nested in a declarator chain
+	// (function_definition → declarator: function_declarator → declarator: identifier).
+	if lang == "cpp" {
+		if d := node.ChildByFieldName("declarator"); d != nil {
+			if n := cppDeclaratorName(d, src); n != "" {
+				return n
+			}
+		}
+	}
 	// Fallback: walk children for any identifier-like node
 	for i := 0; i < int(node.ChildCount()); i++ {
 		child := node.Child(i)
@@ -231,6 +278,26 @@ func extractName(node *sitter.Node, src []byte, lang string) string {
 		if t == "identifier" || t == "name" || t == "property_identifier" || t == "type_identifier" {
 			return child.Content(src)
 		}
+	}
+	return ""
+}
+
+// cppDeclaratorName walks a C++ declarator to the innermost declared name.
+// For a qualified name (Class::method) it returns the final segment.
+func cppDeclaratorName(node *sitter.Node, src []byte) string {
+	switch node.Type() {
+	case "identifier", "field_identifier", "type_identifier", "operator_name", "destructor_name":
+		return node.Content(src)
+	case "qualified_identifier":
+		// Class::method — take the rightmost name.
+		if n := node.ChildByFieldName("name"); n != nil {
+			return cppDeclaratorName(n, src)
+		}
+	}
+	// pointer_declarator / reference_declarator / function_declarator / etc. —
+	// descend through the nested "declarator" field.
+	if d := node.ChildByFieldName("declarator"); d != nil {
+		return cppDeclaratorName(d, src)
 	}
 	return ""
 }
@@ -395,9 +462,9 @@ func isCSharpExternal(ns string) bool {
 
 // callNodeTypes are tree-sitter node types that represent a function/method call.
 var callNodeTypes = map[string]bool{
-	"call_expression":    true, // TS, JS, Go, Rust
-	"call":               true, // Python
-	"new_expression":     true, // TS/JS: new Foo()
+	"call_expression":       true, // TS, JS, Go, Rust
+	"call":                  true, // Python
+	"new_expression":        true, // TS/JS: new Foo()
 	"invocation_expression": true, // C#
 }
 
@@ -406,10 +473,10 @@ var callNodeTypes = map[string]bool{
 // so we know which function is the caller for any calls found inside it.
 var scopeNodeTypes = map[string]bool{
 	// TypeScript / JavaScript
-	"function_declaration": true,
-	"method_definition":    true,
-	"arrow_function":       true,
-	"function":             true, // function expression
+	"function_declaration":           true,
+	"method_definition":              true,
+	"arrow_function":                 true,
+	"function":                       true, // function expression
 	"generator_function_declaration": true,
 	// Go
 	"method_declaration": true,

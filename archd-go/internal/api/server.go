@@ -1,24 +1,25 @@
 // Package api serves the HTTP + WebSocket endpoints consumed by Electron and the MCP server.
 //
 // Endpoint map:
-//   GET  /ws                           — WebSocket upgrade (renderer connects here)
-//   GET  /api/snapshot/:workspaceId    — full canvas snapshot
-//   POST /api/workspace                — create or open a workspace + root (opens per-project DB)
-//   DELETE /api/workspace/:id          — close workspace DB connection (call before deleting project dir)
-//   POST /api/systems                  — create / upsert a system
-//   PUT  /api/systems/:id              — update system (name, parent, description)
-//   DELETE /api/systems/:id?workspace= — delete system
-//   POST /api/systems/:id/position?workspace= — update canvas position
-//   POST /api/files/:id/assign         — assign file to system  {systemId, workspaceId}
-//   POST /api/files/:id/position       — update file canvas position  {x, y, workspaceId}
-//   PUT  /api/files/:id/size           — update file canvas size  {w, h, workspaceId}
-//   GET  /api/files/:id/symbols?workspace= — get symbols for a file
-//   POST /api/infra                    — create infra node
-//   POST /api/classification/start     — start a classification job
-//   GET  /api/classification/:jobId?workspace=    — get job status
-//   GET  /api/classification/:jobId/batch?workspace= — get next batch for agent
-//   POST /api/classification/:jobId/submit?workspace= — submit agent assignments
-//   GET  /api/call-path?from=&to=&workspace= — trace call path between two files
+//
+//	GET  /ws                           — WebSocket upgrade (renderer connects here)
+//	GET  /api/snapshot/:workspaceId    — full canvas snapshot
+//	POST /api/workspace                — create or open a workspace + root (opens per-project DB)
+//	DELETE /api/workspace/:id          — close workspace DB connection (call before deleting project dir)
+//	POST /api/systems                  — create / upsert a system
+//	PUT  /api/systems/:id              — update system (name, parent, description)
+//	DELETE /api/systems/:id?workspace= — delete system
+//	POST /api/systems/:id/position?workspace= — update canvas position
+//	POST /api/files/:id/assign         — assign file to system  {systemId, workspaceId}
+//	POST /api/files/:id/position       — update file canvas position  {x, y, workspaceId}
+//	PUT  /api/files/:id/size           — update file canvas size  {w, h, workspaceId}
+//	GET  /api/files/:id/symbols?workspace= — get symbols for a file
+//	POST /api/infra                    — create infra node
+//	POST /api/classification/start     — start a classification job
+//	GET  /api/classification/:jobId?workspace=    — get job status
+//	GET  /api/classification/:jobId/batch?workspace= — get next batch for agent
+//	POST /api/classification/:jobId/submit?workspace= — submit agent assignments
+//	GET  /api/call-path?from=&to=&workspace= — trace call path between two files
 package api
 
 import (
@@ -40,6 +41,7 @@ import (
 	"axiom.local/archd/internal/db"
 	"axiom.local/archd/internal/hub"
 	"axiom.local/archd/internal/indexer"
+	"axiom.local/archd/internal/runtime"
 )
 
 var upgrader = websocket.Upgrader{
@@ -57,15 +59,42 @@ type Server struct {
 	mu      sync.RWMutex
 	hub     *hub.Hub
 	roots   map[string]db.Root // rootID → Root; populated on workspace open
+	runtime *runtime.Manager
 }
 
-func NewServer(dataDir string, h *hub.Hub) *Server {
-	return &Server{
+func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
+	s := &Server{
 		dataDir: dataDir,
 		dbs:     make(map[string]*sql.DB),
 		hub:     h,
 		roots:   make(map[string]db.Root),
+		runtime: rt,
 	}
+	// Adapters started outside the launcher (PYTHONPATH opt-in) have no
+	// AXIOM_WORKSPACE_ID; map them to a workspace by their working directory.
+	rt.SetWorkspaceResolver(s.workspaceForCwd)
+	return s
+}
+
+// workspaceForCwd finds the workspace whose root contains (or equals) cwd.
+// The longest matching root wins so nested roots resolve correctly.
+func (s *Server) workspaceForCwd(cwd string) string {
+	if cwd == "" {
+		return ""
+	}
+	norm := strings.ToLower(filepath.ToSlash(filepath.Clean(cwd)))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	best := ""
+	bestLen := -1
+	for _, root := range s.roots {
+		rootNorm := strings.ToLower(filepath.ToSlash(filepath.Clean(root.Path)))
+		if (norm == rootNorm || strings.HasPrefix(norm, rootNorm+"/")) && len(rootNorm) > bestLen {
+			best = root.WorkspaceID
+			bestLen = len(rootNorm)
+		}
+	}
+	return best
 }
 
 // openDB opens (or creates) the per-project database at <dataDir>/<workspaceID>/axiom.db.
@@ -126,6 +155,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/classification/start", s.handleClassificationStart)
 	mux.HandleFunc("/api/classification/", s.handleClassification)
 	mux.HandleFunc("/api/call-path", s.handleCallPath)
+	mux.HandleFunc("/api/function-body", s.handleFunctionBody)
+	mux.HandleFunc("/api/data-flow", s.handleDataFlow)
+	s.registerRuntimeRoutes(mux)
+	s.registerInvestigationRoutes(mux)
 	mux.HandleFunc("/api/agent/activity", s.handleAgentActivity)
 	mux.HandleFunc("/api/query", s.handleQuery)
 }

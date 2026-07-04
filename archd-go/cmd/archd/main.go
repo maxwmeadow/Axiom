@@ -24,12 +24,14 @@ import (
 
 	"axiom.local/archd/internal/api"
 	"axiom.local/archd/internal/hub"
+	"axiom.local/archd/internal/runtime"
 )
 
 func main() {
 	dataDir := flag.String("data", "", "directory for axiom.db (required)")
 	wsPort := flag.Int("ws-port", 7744, "WebSocket port")
 	apiPort := flag.Int("api-port", 7743, "HTTP API port")
+	runtimePort := flag.Int("runtime-port", 7745, "runtime adapter TCP port")
 	flag.Parse()
 
 	if *dataDir == "" {
@@ -40,10 +42,22 @@ func main() {
 	// ── Hub ───────────────────────────────────────────────────────────────────
 	h := hub.New()
 
+	// ── Runtime adapter server ────────────────────────────────────────────────
+	// Language adapters running inside target processes connect here over TCP
+	// (newline-delimited JSON) to stream call/return events.
+	rt := runtime.NewManager(h)
+	if os.Getenv("AXIOM_AUTO_CONFIRM_INJECT") == "1" {
+		log.Println("archd: AXIOM_AUTO_CONFIRM_INJECT=1 — injections skip user confirmation")
+		rt.SetAutoConfirm(true)
+	}
+	if err := rt.Listen(*runtimePort); err != nil {
+		log.Fatalf("archd: runtime: %v", err)
+	}
+
 	// ── HTTP server ───────────────────────────────────────────────────────────
 	// Each project gets its own database at <dataDir>/<workspaceId>/axiom.db,
 	// opened on demand when POST /api/workspace is called. No global DB here.
-	srv := api.NewServer(*dataDir, h)
+	srv := api.NewServer(*dataDir, h, rt)
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 

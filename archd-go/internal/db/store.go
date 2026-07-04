@@ -21,10 +21,10 @@ type Workspace struct {
 }
 
 type Root struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspaceId"`
-	Path        string  `json:"path"`
-	IndexedAt   *int64  `json:"indexedAt"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspaceId"`
+	Path        string `json:"path"`
+	IndexedAt   *int64 `json:"indexedAt"`
 }
 
 type System struct {
@@ -75,7 +75,7 @@ type Dependency struct {
 	WorkspaceID    string `json:"workspaceId"`
 	Src            string `json:"src"`
 	Dst            string `json:"dst"`
-	SrcType        string `json:"srcType"`  // 'file'|'system'|'infra'
+	SrcType        string `json:"srcType"` // 'file'|'system'|'infra'
 	DstType        string `json:"dstType"`
 	DependencyType string `json:"dependencyType"` // 'IMPORTS'|'CALLS'|'DEPENDS_ON'|'READS_DB'|'CONTAINS'
 	Weight         int    `json:"weight"`
@@ -93,14 +93,14 @@ type InfraNode struct {
 }
 
 type ClassificationJob struct {
-	ID              string  `json:"id"`
-	WorkspaceID     string  `json:"workspaceId"`
-	Status          string  `json:"status"`
-	TotalFiles      int     `json:"totalFiles"`
-	ClassifiedFiles int     `json:"classifiedFiles"`
-	Strategy        string  `json:"strategy"`
-	CreatedAt       int64   `json:"createdAt"`
-	CompletedAt     *int64  `json:"completedAt"`
+	ID              string `json:"id"`
+	WorkspaceID     string `json:"workspaceId"`
+	Status          string `json:"status"`
+	TotalFiles      int    `json:"totalFiles"`
+	ClassifiedFiles int    `json:"classifiedFiles"`
+	Strategy        string `json:"strategy"`
+	CreatedAt       int64  `json:"createdAt"`
+	CompletedAt     *int64 `json:"completedAt"`
 }
 
 type ClassificationAssignment struct {
@@ -398,6 +398,58 @@ func GetFileByRelPath(db *sql.DB, rootID, relPath string) (*File, error) {
 	return &files[0], nil
 }
 
+// FindFileByIDOrPath resolves a file reference that may be a file ID, an exact
+// relative path, or a path suffix (agents often pass "payment.py" or
+// "services/payment.py" for "src/services/payment.py"). Backslashes are
+// normalized. Returns nil without error when nothing matches.
+func FindFileByIDOrPath(db *sql.DB, workspaceID, ref string) (*File, error) {
+	const selectCols = `
+		SELECT f.id, f.root_id, f.path, f.rel_path, f.language, f.system_id,
+		       f.line_count, f.churn_score, f.position_x, f.position_y, f.width, f.height, f.indexed_at
+		FROM files f
+		JOIN roots r ON r.id = f.root_id
+		WHERE r.workspace_id = ?`
+
+	query := func(clause string, args ...any) ([]File, error) {
+		rows, err := db.Query(selectCols+clause, append([]any{workspaceID}, args...)...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		return scanFiles(rows)
+	}
+
+	// 1. Exact ID.
+	files, err := query(` AND f.id = ?`, ref)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) > 0 {
+		return &files[0], nil
+	}
+
+	// 2. Exact relative path (normalized to forward slashes).
+	norm := strings.ReplaceAll(ref, "\\", "/")
+	files, err = query(` AND f.rel_path = ?`, norm)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) > 0 {
+		return &files[0], nil
+	}
+
+	// 3. Suffix match on a path-segment boundary; prefer the shortest rel_path
+	// (the closest match to the given suffix) when several files match.
+	files, err = query(` AND f.rel_path LIKE ? ORDER BY LENGTH(f.rel_path) ASC`, "%/"+norm)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) > 0 {
+		return &files[0], nil
+	}
+	return nil, nil
+}
+
 func AssignFileToSystem(db *sql.DB, fileID, systemID string) error {
 	_, err := db.Exec(`UPDATE files SET system_id=? WHERE id=?`, systemID, fileID)
 	return err
@@ -463,6 +515,152 @@ func UpsertSymbols(db *sql.DB, fileID string, symbols []Symbol) error {
 		}
 	}
 	return tx.Commit()
+}
+
+// VarRefRow is a stored variable reference. For kind 'read', one row
+// aggregates all reads of a variable in a file (Count>1, Line = first read).
+type VarRefRow struct {
+	FileID          string `json:"fileId"`
+	Variable        string `json:"variable"`
+	Kind            string `json:"kind"`
+	Line            int    `json:"line"`
+	Count           int    `json:"count"`
+	EnclosingSymbol string `json:"enclosingSymbol"`
+}
+
+// UpsertVarRefs replaces a file's variable references. def/param/write rows are
+// stored per-occurrence; 'read' rows are aggregated to one per (variable) with
+// a count, since reads dominate and per-occurrence storage would explode the
+// table (the data-flow API re-parses for exact read lines on demand).
+func UpsertVarRefs(db *sql.DB, fileID string, refs []VarRefRow) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`DELETE FROM variable_refs WHERE file_id=?`, fileID); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO variable_refs (file_id, variable, kind, line, count, enclosing_symbol)
+		VALUES (?,?,?,?,?,?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, r := range refs {
+		if _, err := stmt.Exec(fileID, r.Variable, r.Kind, r.Line, r.Count, r.EnclosingSymbol); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// VariableFileHit summarizes one file's involvement with a variable.
+type VariableFileHit struct {
+	FileID   string `json:"fileId"`
+	RelPath  string `json:"relPath"`
+	Path     string `json:"-"` // absolute path, for on-demand re-parsing
+	Language string `json:"language"`
+	Defs     int    `json:"defs"`
+	Params   int    `json:"params"`
+	Writes   int    `json:"writes"`
+	Reads    int    `json:"reads"`
+}
+
+// GetVariableFileHits returns every file in the workspace that references the
+// named variable, with per-kind counts, most-written first. This is the
+// candidate set the data-flow API re-parses for exact lines.
+func GetVariableFileHits(db *sql.DB, workspaceID, variable string) ([]VariableFileHit, error) {
+	rows, err := db.Query(`
+		SELECT f.id, f.rel_path, f.path, f.language,
+		       SUM(CASE WHEN vr.kind='def'   THEN vr.count ELSE 0 END) AS defs,
+		       SUM(CASE WHEN vr.kind='param' THEN vr.count ELSE 0 END) AS params,
+		       SUM(CASE WHEN vr.kind='write' THEN vr.count ELSE 0 END) AS writes,
+		       SUM(CASE WHEN vr.kind='read'  THEN vr.count ELSE 0 END) AS reads
+		FROM variable_refs vr
+		JOIN files f ON f.id = vr.file_id
+		JOIN roots r ON r.id = f.root_id
+		WHERE r.workspace_id = ? AND vr.variable = ?
+		GROUP BY f.id
+		ORDER BY writes DESC, defs DESC, reads DESC`, workspaceID, variable)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hits []VariableFileHit
+	for rows.Next() {
+		var h VariableFileHit
+		if err := rows.Scan(&h.FileID, &h.RelPath, &h.Path, &h.Language, &h.Defs, &h.Params, &h.Writes, &h.Reads); err != nil {
+			return nil, err
+		}
+		hits = append(hits, h)
+	}
+	return hits, rows.Err()
+}
+
+// ─── Investigation captures (Phase 8) ──────────────────────────────────────────
+
+// InvestigationMeta is the list-view summary of a saved investigation (no events).
+type InvestigationMeta struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Commit     string `json:"commit"`
+	Branch     string `json:"branch"`
+	CreatedAt  int64  `json:"createdAt"`
+	DurationMs int64  `json:"durationMs"`
+	EventCount int    `json:"eventCount"`
+}
+
+// SaveInvestigation persists a captured investigation. `data` is the full
+// AxiomTrace JSON document.
+func SaveInvestigation(db *sql.DB, id, workspaceID, name, commit, branch string, createdAt, durationMs int64, eventCount int, data []byte) error {
+	_, err := db.Exec(`
+		INSERT OR REPLACE INTO investigations
+		  (id, workspace_id, name, commit_sha, branch, created_at, duration_ms, event_count, data)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		id, workspaceID, name, commit, branch, createdAt, durationMs, eventCount, string(data))
+	return err
+}
+
+// ListInvestigations returns saved investigations for a workspace, newest first.
+func ListInvestigations(db *sql.DB, workspaceID string) ([]InvestigationMeta, error) {
+	rows, err := db.Query(`
+		SELECT id, name, commit_sha, branch, created_at, duration_ms, event_count
+		FROM investigations WHERE workspace_id=? ORDER BY created_at DESC`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]InvestigationMeta, 0)
+	for rows.Next() {
+		var m InvestigationMeta
+		if err := rows.Scan(&m.ID, &m.Name, &m.Commit, &m.Branch, &m.CreatedAt, &m.DurationMs, &m.EventCount); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// GetInvestigation returns the full AxiomTrace JSON for one investigation, or
+// nil if not found.
+func GetInvestigation(db *sql.DB, id string) (json.RawMessage, error) {
+	var data string
+	err := db.QueryRow(`SELECT data FROM investigations WHERE id=?`, id).Scan(&data)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
+}
+
+// DeleteInvestigation removes a saved investigation.
+func DeleteInvestigation(db *sql.DB, id string) error {
+	_, err := db.Exec(`DELETE FROM investigations WHERE id=?`, id)
+	return err
 }
 
 func GetSymbolsByFile(db *sql.DB, fileID string) ([]Symbol, error) {

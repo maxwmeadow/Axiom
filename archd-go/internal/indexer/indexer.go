@@ -40,6 +40,7 @@ var skipDirs = map[string]bool{
 var supportedExts = map[string]bool{
 	".ts": true, ".tsx": true, ".js": true, ".mjs": true,
 	".jsx": true, ".py": true, ".go": true, ".rs": true, ".cs": true,
+	".cpp": true, ".cc": true, ".cxx": true, ".hpp": true, ".hxx": true, ".rb": true, ".java": true,
 }
 
 // IndexRoot walks the root directory and indexes all source files.
@@ -220,10 +221,64 @@ func indexOneFile(sqlDB *sql.DB, root db.Root, relPath, absPath string, existing
 		return err
 	}
 
+	if err := db.UpsertVarRefs(sqlDB, fileID, aggregateVarRefs(fileID, result.VarRefs)); err != nil {
+		return err
+	}
+
 	if rawCallsMap != nil && len(result.Calls) > 0 {
 		rawCallsMap.Store(fileID, result.Calls)
 	}
 	return nil
+}
+
+// aggregateVarRefs prepares parser var refs for storage: def/param/write are
+// kept per-occurrence; reads are collapsed to one row per variable (count =
+// number of reads, line = first read) so the table stays small. Single-char
+// read-only names are dropped as noise, but names that are also defined/written
+// are always kept.
+func aggregateVarRefs(fileID string, refs []parser.VarRef) []db.VarRefRow {
+	var out []db.VarRefRow
+	type readAgg struct {
+		line, count     int
+		enclosingSymbol string
+	}
+	reads := make(map[string]*readAgg)
+	nonRead := make(map[string]bool)
+
+	for _, r := range refs {
+		if r.Kind == "read" {
+			a := reads[r.Name]
+			if a == nil {
+				reads[r.Name] = &readAgg{line: r.Line, count: 1, enclosingSymbol: r.EnclosingSymbol}
+			} else {
+				a.count++
+			}
+			continue
+		}
+		nonRead[r.Name] = true
+		out = append(out, db.VarRefRow{
+			FileID:          fileID,
+			Variable:        r.Name,
+			Kind:            r.Kind,
+			Line:            r.Line,
+			Count:           1,
+			EnclosingSymbol: r.EnclosingSymbol,
+		})
+	}
+	for name, a := range reads {
+		if len(name) < 2 && !nonRead[name] {
+			continue // single-char pure-read (loop counters etc.) — noise
+		}
+		out = append(out, db.VarRefRow{
+			FileID:          fileID,
+			Variable:        name,
+			Kind:            "read",
+			Line:            a.line,
+			Count:           a.count,
+			EnclosingSymbol: a.enclosingSymbol,
+		})
+	}
+	return out
 }
 
 // buildCallGraph resolves raw parser calls into call trace connections between project files.
@@ -328,8 +383,10 @@ func buildCallGraph(sqlDB *sql.DB, root db.Root, rawCallsMap *sync.Map) error {
 				continue // not a project symbol — built-in or external
 			}
 
-			// Remove self-calls.
-			filtered := candidates[:0]
+			// Remove self-calls. Allocate a new slice — candidates shares its
+			// backing array with the symbolToFiles map value, so filtering
+			// in place (candidates[:0]) would corrupt the shared index.
+			filtered := make([]string, 0, len(candidates))
 			for _, fid := range candidates {
 				if fid != callerFileID {
 					filtered = append(filtered, fid)
@@ -466,11 +523,16 @@ func clusterAndAssign(sqlDB *sql.DB, root db.Root) error {
 // clusterLevel is the three-tier hierarchical clustering entry point.
 //
 // Tier 1 — Directory structure: if files span multiple non-trivial directories,
-//           use directory as the primary grouping (most reliable signal).
+//
+//	use directory as the primary grouping (most reliable signal).
+//
 // Tier 2 — Naming prefix: within a flat directory, group by CamelCase/snake_case
-//           filename prefix. Residuals are assigned to the nearest group via TF-IDF.
+//
+//	filename prefix. Residuals are assigned to the nearest group via TF-IDF.
+//
 // Tier 3 — Louvain fallback: when neither directory nor naming gives structure,
-//           run multi-signal Louvain (TF-IDF + imports + co-change).
+//
+//	run multi-signal Louvain (TF-IDF + imports + co-change).
 //
 // TFIDF and Cochange are built once at the top level and passed through all
 // recursive calls unchanged; only Files is narrowed at each level.

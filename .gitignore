@@ -14,3 +14,8 @@ out/
 *.exe~
 *~
 *.log
+__pycache__/
+*.pyc
+*.class
+examples/**/bin/
+examples/**/obj/

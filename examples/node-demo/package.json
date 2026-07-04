@@ -1,0 +1,7 @@
+{
+  "name": "axiom-node-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Axiom Node.js runtime-layer demo (payment service with a seeded validator bug)",
+  "main": "app.js"
+}

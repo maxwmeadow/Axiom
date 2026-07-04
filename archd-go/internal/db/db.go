@@ -158,6 +158,40 @@ func migrate(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS cg_caller ON call_graph(caller_file);
 	CREATE INDEX IF NOT EXISTS cg_callee ON call_graph(callee_file);
 
+	-- ─── Variable references (data-flow, Phase 7) ─────────────────────────────
+	-- def/param/write rows are stored per-occurrence. 'read' rows are AGGREGATED
+	-- to one row per (file, variable) with count — reads are ~80% of references
+	-- and per-occurrence storage would explode the table. The data-flow API
+	-- re-parses candidate files on demand for exact read lines (hybrid model).
+	CREATE TABLE IF NOT EXISTS variable_refs (
+		id               INTEGER PRIMARY KEY AUTOINCREMENT,
+		file_id          TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+		variable         TEXT NOT NULL,
+		kind             TEXT NOT NULL,              -- 'def'|'param'|'write'|'read'
+		line             INTEGER NOT NULL,           -- first line for aggregated reads
+		count            INTEGER NOT NULL DEFAULT 1, -- >1 only for 'read' rows
+		enclosing_symbol TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS varrefs_variable ON variable_refs(variable);
+	CREATE INDEX IF NOT EXISTS varrefs_file ON variable_refs(file_id);
+
+	-- ─── Investigation captures (Phase 8) ─────────────────────────────────────
+	-- A recorded agent investigation: the full ordered event timeline serialized
+	-- as JSON (the 'data' column is the AxiomTrace document), linked to the git
+	-- commit it was captured against so replay renders the right code version.
+	CREATE TABLE IF NOT EXISTS investigations (
+		id            TEXT PRIMARY KEY,               -- short id (shareable)
+		workspace_id  TEXT NOT NULL,
+		name          TEXT NOT NULL DEFAULT '',
+		commit_sha    TEXT NOT NULL DEFAULT '',
+		branch        TEXT NOT NULL DEFAULT '',
+		created_at    INTEGER NOT NULL,
+		duration_ms   INTEGER NOT NULL DEFAULT 0,
+		event_count   INTEGER NOT NULL DEFAULT 0,
+		data          TEXT NOT NULL                   -- full AxiomTrace JSON
+	);
+	CREATE INDEX IF NOT EXISTS investigations_ws ON investigations(workspace_id);
+
 	-- ─── Infra nodes ──────────────────────────────────────────────────────────
 	CREATE TABLE IF NOT EXISTS infra_nodes (
 		id            TEXT PRIMARY KEY,
