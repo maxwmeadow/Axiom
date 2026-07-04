@@ -17,7 +17,7 @@
  *   ~400px of viewport — a "late reveal" Google Maps feel.
  *   Transitions use continuous fade (opacity + scale + blur) over a 30% range.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -45,6 +45,7 @@ import '@xyflow/react/dist/style.css'
 import { SystemNode } from './nodes/SystemNode'
 import { FileNode } from './nodes/FileNode'
 import { InfraNode } from './nodes/InfraNode'
+import { OrthogonalEdge } from './edges/OrthogonalEdge'
 import { useGraphStore } from '../store/graphStore'
 import { useShallow } from 'zustand/react/shallow'
 import type { DbSystem, DbFile, DbInfraNode, DbDependency } from '../../shared/types'
@@ -57,6 +58,10 @@ const NODE_TYPES: NodeTypes = {
   system: SystemNode as any,
   file:   FileNode   as any,
   infra:  InfraNode  as any,
+}
+
+const EDGE_TYPES = {
+  orthogonal: OrthogonalEdge as any,
 }
 
 // ─── Zoom thresholds ───────────────────────────────────────────────────────
@@ -165,7 +170,8 @@ function hUnitsExact(h: number, parentDepth: number): number {
 
 // ─── Color palette ─────────────────────────────────────────────────────────
 
-const PALETTE = ['#6366f1','#10b981','#f59e0b','#3b82f6','#8b5cf6','#06b6d4','#ec4899','#84cc16']
+// Muted technical accents, one per nesting depth — matches --depth-0..3 in global.css
+const PALETTE = ['#5B8A9A','#C4956A','#7A9E7E','#A07B8A']
 
 function systemColor(depth: number): string {
   return PALETTE[depth % PALETTE.length]
@@ -695,8 +701,7 @@ export interface SystemNodeData {
   isDropTarget?: boolean
   onResizeStart?: (w: number, h: number) => void
   onResizeEnd?: (w: number, h: number) => void
-  // Debug grid overlay
-  showDebugGrid?: boolean
+  // Drop-target grid overlay
   nodeW?: number
   nodeH?: number
   gridCellW?: number
@@ -982,7 +987,6 @@ function buildLayout(
         currentZoom,
         isChild: depth > 0,
         childrenVisible: 0,
-        showDebugGrid: true,
         nodeW: w,
         nodeH: h,
         gridCellW: fileNodeSize(depth).w,
@@ -1074,7 +1078,7 @@ interface AxiomCanvasProps {
 export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const {
     systems, files, infraNodes, dependencies,
-    selectedNodeId, agentTouchedIds, selectionMode, activeTrace,
+    selectedNodeId, agentTouchedIds, selectionMode, activeTrace, runtimeNodes, dataFlow,
   } = useGraphStore(useShallow(s => ({
     systems:         s.systems,
     files:           s.files,
@@ -1084,6 +1088,8 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     agentTouchedIds: s.agentTouchedIds,
     selectionMode:   s.selectionMode,
     activeTrace:     s.activeTrace,
+    runtimeNodes:    s.runtimeNodes,
+    dataFlow:        s.dataFlow,
   })))
 
   const { setSelectedNode, setSelectionMode } = useGraphStore(
@@ -1097,6 +1103,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [isTidying, setIsTidying] = useState(false)
   const [debugState, setDebugState] = useState<any>(null)
+  // Focused-subgraph mode: when a trace or runtime session is active, dim the
+  // nodes that are off the active path so the investigation stays legible on a
+  // large graph. User-toggleable; on by default.
+  const [focusEnabled, setFocusEnabled] = useState(true)
+  // Bumped whenever the layout is fully rebuilt, so overlay effects restamp.
+  const [layoutVersion, setLayoutVersion] = useState(0)
 
   const tidyCanvas = useCallback(async () => {
     if (systems.length === 0 && infraNodes.length === 0) return
@@ -1327,6 +1339,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       setRfNodes(fixed)
     }
     setRfEdges(newEdges)
+    // Signal overlay effects (runtime / focus / trace) to restamp their
+    // per-node flags, which this full rebuild just discarded.
+    setLayoutVersion(v => v + 1)
 
     if (isFirstLayout) {
       layoutBuiltRef.current = projectId
@@ -1343,6 +1358,76 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       ...n, data: { ...n.data, agentTouched: agentTouchedIds.has(n.id) },
     })))
   }, [agentTouchedIds])
+
+  // ── Runtime activity ─────────────────────────────────────────────────────
+  // Stamp live runtime state (watch markers, call counts, pulse triggers)
+  // onto the affected file nodes. runtimeNodes only contains watched files,
+  // so untouched nodes keep referential identity and skip re-render.
+  useEffect(() => {
+    setRfNodes(curr => curr.map(n => {
+      const rt = runtimeNodes[n.id]
+      const had = (n.data as any).runtime
+      if (!rt && !had) return n
+      if (rt === had) return n
+      return { ...n, data: { ...n.data, runtime: rt ?? null } }
+    }))
+  }, [runtimeNodes, layoutVersion])
+
+  // ── Data-flow slice (purple overlay) ───────────────────────────────────────
+  // Stamp `sliced` on file nodes in the current variable-reference slice.
+  useEffect(() => {
+    const ids = dataFlow?.fileIds ?? null
+    setRfNodes(curr => curr.map(n => {
+      const inSlice = !!ids && ids.has(n.id)
+      return (n.data as any).sliced === inSlice ? n : { ...n, data: { ...n.data, sliced: inSlice } }
+    }))
+  }, [dataFlow, layoutVersion])
+
+  // ── Focused subgraph ───────────────────────────────────────────────────────
+  // The focus set = files in the active trace + files with runtime activity,
+  // plus their ancestor systems (so a focused file's containers stay lit).
+  // Everything else is dimmed. Off when nothing is active or the user disables it.
+  // Stable content key: the SET of focused files changes only when a watch is
+  // added/removed or the trace changes — not on every runtime metric tick. This
+  // keeps the focus effect from re-running (and re-mapping all nodes) ~12×/sec.
+  const focusKey = useMemo(() => {
+    const ids: string[] = []
+    if (activeTrace) {
+      for (const step of activeTrace) { ids.push(step.callerFile); ids.push(step.calleeFile) }
+    }
+    ids.push(...Object.keys(runtimeNodes))
+    return Array.from(new Set(ids)).sort().join('|')
+  }, [activeTrace, runtimeNodes])
+
+  const focusFileIds = useMemo(
+    () => new Set(focusKey ? focusKey.split('|') : []),
+    [focusKey],
+  )
+
+  useEffect(() => {
+    const active = focusEnabled && focusFileIds.size > 0
+    if (!active) {
+      setRfNodes(curr => curr.some(n => (n.data as any).dimmed)
+        ? curr.map(n => (n.data as any).dimmed ? { ...n, data: { ...n.data, dimmed: false } } : n)
+        : curr)
+      return
+    }
+    // Keep focused files and every ancestor system on their parent chain lit.
+    const systemById = new Map(systems.map(s => [s.id, s]))
+    const fileById = new Map(files.map(f => [f.id, f]))
+    const keep = new Set<string>(focusFileIds)
+    for (const fileId of focusFileIds) {
+      let sysId = fileById.get(fileId)?.systemId ?? null
+      while (sysId && !keep.has(sysId)) {
+        keep.add(sysId)
+        sysId = systemById.get(sysId)?.parentId ?? null
+      }
+    }
+    setRfNodes(curr => curr.map(n => {
+      const dim = !keep.has(n.id)
+      return (n.data as any).dimmed === dim ? n : { ...n, data: { ...n.data, dimmed: dim } }
+    }))
+  }, [focusEnabled, focusFileIds, systems, files, layoutVersion])
 
   // ── Call trace ───────────────────────────────────────────────────────────
   // When the agent queries a call path, stamp isTraced on the involved file nodes
@@ -1382,7 +1467,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       zIndex: 1000,
     }))
     setRfEdges(curr => [...curr.filter(e => !e.id.startsWith('trace-')), ...traceEdges])
-  }, [activeTrace])
+  }, [activeTrace, layoutVersion])
 
   // ── WASD pan ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -2486,6 +2571,8 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         nodes={rfNodes}
         edges={rfEdges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
+        defaultEdgeOptions={{ type: 'orthogonal' }}
         onNodesChange={readOnly ? undefined : onNodesChange}
         onEdgesChange={readOnly ? undefined : onEdgesChange}
         onNodeClick={onNodeClick}
@@ -2507,6 +2594,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         nodesConnectable={!readOnly}
         elementsSelectable={!readOnly}
         snapToGrid={false}
+        // Large graphs: skip rendering off-screen nodes. Kept off for small
+        // graphs where the per-move visibility recompute isn't worth it.
+        onlyRenderVisibleElements={rfNodes.length > 150}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="rgba(255,255,255,0.04)" />
         <Controls showInteractive={false} />
@@ -2577,6 +2667,36 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
               </>
             )}
           </button>
+          {focusFileIds.size > 0 && (
+            <button
+              onClick={() => setFocusEnabled(v => !v)}
+              title="Dim nodes that are off the active trace / runtime path"
+              style={{
+                background: focusEnabled ? 'rgba(34, 211, 238, 0.15)' : 'rgba(22, 27, 39, 0.75)',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+                border: `1px solid ${focusEnabled ? 'rgba(34, 211, 238, 0.5)' : 'rgba(255, 255, 255, 0.08)'}`,
+                borderRadius: '8px',
+                padding: '8px 14px',
+                color: focusEnabled ? '#22d3ee' : '#f8fafc',
+                fontSize: '13px',
+                fontWeight: 500,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                boxShadow: '0 4px 18px rgba(0, 0, 0, 0.3)',
+                transition: 'all 0.2s ease-in-out',
+              }}
+            >
+              <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 5V3M12 21v-2M5 12H3M21 12h-2" />
+              </svg>
+              Focus{focusEnabled ? ' On' : ' Off'}
+            </button>
+          )}
         </Panel>
         <Panel position="bottom-left" style={{ margin: '0 0 12px 48px' }}>
           <ZoomIndicator />

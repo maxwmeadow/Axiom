@@ -8,6 +8,8 @@ import { DetailPanel } from './components/DetailPanel'
 import { SearchBar } from './components/SearchBar'
 import { AgentActivityLog } from './components/AgentActivityLog'
 import { AgentConnectBanner } from './components/AgentConnectBanner'
+import { InjectConfirmBanner } from './components/InjectConfirmBanner'
+import { ReplayBar } from './components/ReplayBar'
 import { HomeScreen } from './screens/HomeScreen'
 import { ProjectSetupScreen } from './screens/ProjectSetupScreen'
 import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
@@ -188,6 +190,12 @@ export default function App() {
 
           {/* Agent connect banner — shown after raw indexing completes */}
           <AgentConnectBanner />
+
+          {/* Perturbation warn-and-confirm gate */}
+          <InjectConfirmBanner />
+
+          {/* Investigation Capture replay controls */}
+          <ReplayBar />
         </div>
 
         {/* Status bar */}

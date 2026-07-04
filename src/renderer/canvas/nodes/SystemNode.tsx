@@ -5,14 +5,13 @@ import type { SystemNodeData } from '../AxiomCanvas'
 // World-space font sizes per depth — fixed, no counter-scaling.
 const DEPTH_TITLE_PX = [24, 14, 10, 8]
 
+// Drop-target feedback: renders the cell grid only while a node is being
+// dragged over this container (green = free, amber = displaced, red = occupied).
 function GridOverlay({ d }: { d: SystemNodeData }) {
-  if (!d.showDebugGrid || !d.nodeW || !d.nodeH || !d.gridCellW || !d.gridGap) return null
-  const containerAlpha = typeof d.childrenVisible === 'number' ? d.childrenVisible : (d.childrenVisible ? 1 : 0)
-  if (d.childSystemCount > 0 && containerAlpha > 0 && !d.isDropTarget) return null
+  if (!d.isDropTarget || !d.nodeW || !d.nodeH || !d.gridCellW || !d.gridGap) return null
 
   const w = d.nodeW, h = d.nodeH
   const cw = d.gridCellW, ch = d.gridCellH!, gap = d.gridGap
-  const pitch = { x: cw + gap, y: ch + gap }
 
   const els: React.ReactNode[] = []
 
@@ -29,28 +28,26 @@ function GridOverlay({ d }: { d: SystemNodeData }) {
         row >= d.snapPreview.row && row < d.snapPreview.row + d.snapPreview.hUnits)
 
       const isOccupied = d.occupiedCells?.has(`${col}-${row}`)
-      let fill = "rgba(255,255,255,0.02)"
-      let stroke = "rgba(255,255,255,0.06)"
-      let strokeDash = undefined
+      let fill: string
+      let stroke: string
+      let strokeDash: string | undefined
 
-      if (d.isDropTarget) {
-        if (isInSnapFootprint && isOccupied) {
-          // Amber = occupied cell under snap footprint → will be displaced
-          fill = "rgba(245, 158, 11, 0.10)"
-          stroke = "rgba(245, 158, 11, 0.55)"
-          strokeDash = "2,2"
-        } else if (isInSnapFootprint) {
-          // Bright green = free cell that will be occupied
-          fill = "rgba(16, 185, 129, 0.12)"
-          stroke = "rgba(16, 185, 129, 0.55)"
-        } else if (isOccupied) {
-          fill = "rgba(239, 68, 68, 0.01)" // faint red for occupied
-          stroke = "rgba(239, 68, 68, 0.08)"
-        } else {
-          fill = "rgba(16, 185, 129, 0.05)" // gorgeous semi-transparent green for free
-          stroke = "rgba(16, 185, 129, 0.25)"
-          strokeDash = "2,2"
-        }
+      if (isInSnapFootprint && isOccupied) {
+        // Amber = occupied cell under snap footprint → will be displaced
+        fill = "rgba(245, 158, 11, 0.10)"
+        stroke = "rgba(245, 158, 11, 0.55)"
+        strokeDash = "2,2"
+      } else if (isInSnapFootprint) {
+        // Bright green = free cell that will be occupied
+        fill = "rgba(16, 185, 129, 0.12)"
+        stroke = "rgba(16, 185, 129, 0.55)"
+      } else if (isOccupied) {
+        fill = "rgba(239, 68, 68, 0.01)" // faint red for occupied
+        stroke = "rgba(239, 68, 68, 0.08)"
+      } else {
+        fill = "rgba(16, 185, 129, 0.05)" // semi-transparent green for free
+        stroke = "rgba(16, 185, 129, 0.25)"
+        strokeDash = "2,2"
       }
 
       els.push(
@@ -62,31 +59,13 @@ function GridOverlay({ d }: { d: SystemNodeData }) {
           stroke={stroke}
           strokeWidth={0.5}
           strokeDasharray={strokeDash}
-          rx={2}
         />
       )
     }
-    // Vertical divider between gap and cell
-    if (x > gap) {
-      els.push(<line key={`v-${col}`} x1={x} y1={0} x2={x} y2={h}
-        stroke="rgba(255,220,0,0.15)" strokeWidth={0.4} />)
-    }
   }
-
-  // Horizontal dividers
-  for (let row = 1; ; row++) {
-    const y = row * pitch.y
-    if (y >= h) break
-    els.push(<line key={`h-${row}`} x1={0} y1={y} x2={w} y2={y}
-      stroke="rgba(255,220,0,0.15)" strokeWidth={0.4} />)
-  }
-
-  // Header line (gap = hdr height)
-  els.push(<line key="hdr" x1={0} y1={gap} x2={w} y2={gap}
-    stroke="rgba(0,255,255,0.3)" strokeWidth={0.6} strokeDasharray="6,4" />)
 
   // Snap preview overlay
-  if (d.isDropTarget && d.snapPreview) {
+  if (d.snapPreview) {
     const { col, row, wUnits, hUnits } = d.snapPreview
     const px = (col + 1) * gap + col * cw
     const py = (row + 1) * gap + row * ch
@@ -101,11 +80,7 @@ function GridOverlay({ d }: { d: SystemNodeData }) {
         fill="rgba(16, 185, 129, 0.15)"
         stroke="rgba(16, 185, 129, 0.8)"
         strokeWidth={1.5}
-        rx={4}
-        style={{
-          filter: "drop-shadow(0 0 4px rgba(16, 185, 129, 0.45))",
-          transition: "all 0.08s ease-out"
-        }}
+        style={{ transition: "all 0.08s ease-out" }}
       />
     )
   }
@@ -158,24 +133,17 @@ export function SystemNode({ data, selected }: NodeProps) {
       position: 'absolute',
       top: padY, left: padX, right: padX,
       display: 'flex',
-      alignItems: 'flex-start',
+      alignItems: 'center',
       gap: dotPx * 0.75,
       zIndex: 20,
       overflow: 'visible',
     }}>
-      <div style={{
-        width: dotPx, height: dotPx,
-        borderRadius: '50%',
-        background: color,
-        flexShrink: 0,
-        marginTop: titlePx * 0.1,
-        boxShadow: `0 0 ${dotPx * 0.8}px ${color}`,
-      }} />
       <span style={{
         fontSize: titlePx,
-        fontWeight: 700,
-        color: '#e2e8f0',
-        letterSpacing: '-0.02em',
+        fontWeight: 600,
+        fontFamily: 'var(--font-mono)',
+        color: 'var(--text-primary)',
+        letterSpacing: '-0.01em',
         lineHeight: 1.25,
         flex: 1,
         whiteSpace: 'nowrap',
@@ -189,8 +157,9 @@ export function SystemNode({ data, selected }: NodeProps) {
         <span style={{
           fontSize: badgePx,
           color,
-          background: `rgba(${colorRgb}, 0.18)`,
-          borderRadius: badgePx,
+          background: 'var(--bg-raised)',
+          border: '1px solid var(--border-dim)',
+          fontFamily: 'var(--font-mono)',
           padding: `${badgePx * 0.2}px ${badgePx * 0.65}px`,
           fontWeight: 700,
           flexShrink: 0,
@@ -204,10 +173,10 @@ export function SystemNode({ data, selected }: NodeProps) {
       {source === 'agent' && (
         <span style={{
           fontSize: badgePx * 0.85,
-          color: '#f59e0b',
-          background: 'rgba(245,158,11,0.12)',
-          border: '1px solid rgba(245,158,11,0.3)',
-          borderRadius: 4,
+          color: 'var(--agent-color)',
+          background: 'var(--bg-raised)',
+          border: '1px solid var(--agent-color)',
+          fontFamily: 'var(--font-mono)',
           padding: `${badgePx * 0.12}px ${badgePx * 0.5}px`,
           flexShrink: 0,
           pointerEvents: 'none',
@@ -218,47 +187,47 @@ export function SystemNode({ data, selected }: NodeProps) {
     </div>
   )
 
-  // Unified render — depth-0 vs child only differs in border/bg intensity, not structure.
-  const borderAlpha = isDropTarget ? 0.9
-    : selected    ? 0.85
-    : isChild     ? (0.25 + containerAlpha * 0.35)
-    : (0.12 + containerAlpha * 0.25)
+  // Opaque panel fill per depth — deeper nesting sits one step "higher" on the board.
+  const panelBg = `var(--panel-${Math.min(depth ?? 0, 3)})`
+  // Header compartment height: the layout reserves one grid gap for the header.
+  const headerH = d.gridGap ?? Math.round(padY * 2 + titlePx * 1.25)
 
-  const bgAlpha = isDropTarget ? 0.12
-    : isChild ? (0.04 + containerAlpha * 0.06)
-    : (0.01 + containerAlpha * 0.03)
-
-  const boxShadow = isDropTarget
-    ? `0 0 0 3px ${color}, 0 0 ${titlePx * 1.5}px rgba(${colorRgb}, 0.35)`
-    : containerAlpha > 0.2
-      ? (selected
-        ? `0 0 0 2px ${color}, 0 0 ${titlePx * 1.5}px rgba(${colorRgb}, 0.15)`
-        : `0 ${titlePx * 0.25}px ${titlePx * containerAlpha}px rgba(${colorRgb}, ${0.08 * containerAlpha})`)
-      : 'none'
+  const dimmed = !!(d as any).dimmed
 
   return (
     <div style={{
       width: '100%', height: '100%',
-      borderRadius: radius,
-      border: `1.5px solid ${isDropTarget ? color : selected ? color : `rgba(${colorRgb}, ${borderAlpha})`}`,
-      background: `rgba(${colorRgb}, ${bgAlpha})`,
-      backdropFilter: containerAlpha > 0.3 ? 'blur(4px)' : undefined,
-      boxShadow,
+      border: `1px solid ${isDropTarget || selected ? color : 'var(--border)'}`,
+      borderLeft: `3px solid ${color}`,
+      background: panelBg,
+      boxShadow: isDropTarget || selected ? `0 0 0 ${isDropTarget ? 2 : 1}px ${color}` : 'none',
       transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
       filter: blur > 0.1 ? `blur(${blur}px)` : undefined,
+      opacity: dimmed ? 0.3 : 1,
       transformOrigin: 'center center',
-      transition: 'border 0.12s, background 0.12s, box-shadow 0.15s, transform 0.22s cubic-bezier(0.25,1,0.5,1), filter 0.18s ease-out',
+      transition: 'border 0.12s, box-shadow 0.15s, transform 0.22s cubic-bezier(0.25,1,0.5,1), filter 0.18s ease-out, opacity 0.3s ease',
       position: 'relative',
       overflow: 'hidden',
     }}>
       <NodeResizer isVisible={selected} minWidth={60} minHeight={40} color={color}
         onResizeStart={(_e, p) => onResizeStart?.(p.width, p.height)}
         onResizeEnd={(_e, p) => onResizeEnd?.(p.width, p.height)} />
+      {/* Header compartment rule — UML-style name box across the full width */}
+      <div style={{
+        position: 'absolute',
+        top: 0, left: 0, right: 0,
+        height: headerH,
+        borderBottom: `1px solid var(--border-dim)`,
+        pointerEvents: 'none',
+        opacity: containerAlpha,
+        transition: 'opacity 0.15s ease',
+        zIndex: 1,
+      }} />
       <GridOverlay d={d} />
       {header}
       {agentTouched && (
         <div style={{
-          position: 'absolute', inset: -3, borderRadius: radius + 2,
+          position: 'absolute', inset: -3,
           border: '2px solid var(--agent-color, #f59e0b)',
           animation: 'agentPulse 1.5s ease-out 3',
           pointerEvents: 'none',

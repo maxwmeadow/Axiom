@@ -1,62 +1,66 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { InfraNodeData } from '../AxiomCanvas'
 
-const INFRA_ICONS: Record<string, string> = {
-  sqlite: '🗄',
-  postgres: '🐘',
-  redis: '⚡',
-  kafka: '📨',
-  s3: '🪣',
-  vercel: '▲',
-  railway: '🚂',
-  stripe: '💳',
-  custom: '🔌',
+// Short mono type codes — drafting-legend style, no emoji
+const INFRA_TAGS: Record<string, string> = {
+  sqlite: 'SQL',
+  postgres: 'PG',
+  redis: 'RDS',
+  kafka: 'KFK',
+  s3: 'S3',
+  vercel: 'VCL',
+  railway: 'RWY',
+  stripe: 'STR',
+  custom: 'EXT',
 }
 
 export function InfraNode({ data, selected }: NodeProps) {
   const d = data as unknown as InfraNodeData
-  const icon = INFRA_ICONS[d.infraType] ?? INFRA_ICONS.custom
+  const tag = INFRA_TAGS[d.infraType] ?? INFRA_TAGS.custom
 
   return (
     <div style={{
       width: '100%',
       height: '100%',
-      clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)',
-      background: selected
-        ? 'rgba(245,158,11,0.25)'
-        : d.agentTouched
-        ? 'rgba(245,158,11,0.18)'
-        : 'rgba(245,158,11,0.08)',
+      background: 'var(--bg-surface)',
+      border: `1px solid ${selected ? 'var(--infra-accent)' : 'var(--border)'}`,
+      borderLeft: '3px solid var(--infra-accent)',
       display: 'flex',
       flexDirection: 'column',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       justifyContent: 'center',
+      padding: '6px 10px',
       cursor: 'pointer',
       position: 'relative',
-      transition: 'background 0.15s ease',
+      transition: 'border-color 0.15s ease',
+      boxShadow: selected
+        ? 'var(--shadow-card), 0 0 0 1px var(--infra-accent)'
+        : 'var(--shadow-card)',
     }}>
-      {/* Inner hex border */}
-      <div style={{
-        position: 'absolute', inset: 3,
-        clipPath: 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)',
-        border: `1.5px solid rgba(245,158,11,${selected ? 0.7 : 0.35})`,
-        pointerEvents: 'none',
-      }} />
-
-      <span style={{ fontSize: 20, lineHeight: 1 }}>{icon}</span>
-      <span style={{
-        fontSize: 9,
-        color: '#f59e0b',
-        fontWeight: 700,
-        marginTop: 4,
-        textAlign: 'center',
-        maxWidth: 64,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}>
-        {d.name}
-      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{
+          fontSize: 8,
+          fontWeight: 700,
+          fontFamily: 'var(--font-mono)',
+          color: 'var(--infra-accent)',
+          border: '1px solid var(--infra-accent)',
+          padding: '2px 4px',
+          lineHeight: 1,
+          flexShrink: 0,
+        }}>{tag}</span>
+        <span style={{
+          fontSize: 11,
+          fontFamily: 'var(--font-mono)',
+          color: 'var(--text-primary)',
+          fontWeight: 600,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          maxWidth: 80,
+        }}>
+          {d.name}
+        </span>
+      </div>
 
       <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
       <Handle type="target" position={Position.Top}    style={{ opacity: 0 }} />

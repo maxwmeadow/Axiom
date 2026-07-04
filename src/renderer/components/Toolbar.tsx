@@ -13,6 +13,7 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
   const isIndexing = useGraphStore(s => s.isIndexing)
   const selectionMode = useGraphStore(s => s.selectionMode)
   const setSelectionMode = useGraphStore(s => s.setSelectionMode)
+  const workspaceId = useGraphStore(s => s.currentProject?.id ?? '')
 
   return (
     <div style={{
@@ -64,6 +65,9 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
         )}
       </ToolbarBtn>
 
+      {/* Investigations (capture replay) */}
+      <InvestigationsMenu workspaceId={workspaceId} />
+
       {/* Search */}
       <ToolbarBtn
         onClick={onSearch}
@@ -98,6 +102,82 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
           <span style={{ animation: 'pulse 1.5s ease-in-out infinite', fontSize: 14 }}>⟳</span>
           Indexing…
         </div>
+      )}
+    </div>
+  )
+}
+
+interface InvestigationMeta {
+  id: string; name: string; commit: string; branch: string
+  createdAt: number; durationMs: number; eventCount: number
+}
+
+/** Dropdown listing saved investigations; clicking one loads it for replay. */
+function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState<InvestigationMeta[]>([])
+  const [loading, setLoading] = useState(false)
+  const replay = useGraphStore(s => s.replay)
+  const startReplay = useGraphStore(s => s.startReplay)
+
+  const load = async () => {
+    if (!workspaceId) return
+    setLoading(true)
+    try {
+      const res = await fetch(`http://127.0.0.1:7743/api/investigation/list?workspace=${encodeURIComponent(workspaceId)}`)
+      if (res.ok) setItems(((await res.json()).investigations ?? []) as InvestigationMeta[])
+    } catch { /* daemon offline */ } finally { setLoading(false) }
+  }
+
+  const toggle = () => { const next = !open; setOpen(next); if (next) load() }
+
+  const openReplay = async (id: string) => {
+    try {
+      const res = await fetch(`http://127.0.0.1:7743/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceId)}`)
+      if (res.ok) { startReplay(await res.json()); setOpen(false) }
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <div style={{ position: 'relative', WebkitAppRegion: 'no-drag' }}>
+      <ToolbarBtn onClick={toggle} label="Investigations" active={open || !!replay}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="12" r="9" /><polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
+        </svg>
+      </ToolbarBtn>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 998 }} onClick={() => setOpen(false)} />
+          <div style={{
+            position: 'absolute', top: 38, right: 0, zIndex: 999, width: 320,
+            background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8,
+            boxShadow: '0 12px 40px rgba(0,0,0,0.5)', padding: 6, maxHeight: 380, overflowY: 'auto',
+          }}>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '6px 8px', fontWeight: 600 }}>
+              INVESTIGATION CAPTURES
+            </div>
+            {loading && <div style={{ padding: 8, fontSize: 12, color: 'var(--text-secondary)' }}>Loading…</div>}
+            {!loading && items.length === 0 && (
+              <div style={{ padding: 8, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                No captures yet. Ask your agent to <code>start_investigation</code>, debug, then <code>stop_investigation</code>.
+              </div>
+            )}
+            {items.map(inv => (
+              <button key={inv.id} onClick={() => openReplay(inv.id)} style={{
+                display: 'block', width: '100%', textAlign: 'left', background: 'transparent',
+                border: 'none', borderRadius: 6, padding: '8px', cursor: 'pointer', color: 'var(--text-primary)',
+              }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inv.name}</div>
+                <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'ui-monospace, monospace' }}>
+                  {inv.eventCount} events · {(inv.durationMs / 1000).toFixed(1)}s · {inv.branch}@{inv.commit ? inv.commit.slice(0, 7) : '—'}
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
       )}
     </div>
   )
