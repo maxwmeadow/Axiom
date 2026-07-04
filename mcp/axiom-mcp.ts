@@ -296,6 +296,163 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       inputSchema: { type: 'object', properties: {} },
     },
     {
+      name: 'watch_function',
+      description: 'Place a live watch on a function. Every future call streams to the Axiom canvas in real-time (node pulses, call count badge, last args/return values). Requires a running target process with the Axiom adapter — use launch_target to start one. Auto-disables above 100 calls/sec.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          file: { type: 'string', description: 'File ID (UUID), relative path, or path suffix' },
+          symbol: { type: 'string', description: 'Function or method name to watch' },
+        },
+        required: ['file', 'symbol'],
+      },
+    },
+    {
+      name: 'unwatch_function',
+      description: 'Remove a live function watch and stop streaming its calls.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          file: { type: 'string', description: 'File ID (UUID), relative path, or path suffix' },
+          symbol: { type: 'string', description: 'Function or method name to unwatch' },
+        },
+        required: ['file', 'symbol'],
+      },
+    },
+    {
+      name: 'inject_value',
+      description: 'Perturbation: override one parameter of a function on its NEXT call (one-shot by default), then observe whether downstream behavior changes — the canvas colors the perturbed path green (clean return) or red (exception). SAFETY: requires user confirmation on the canvas before arming; only primitives or flat lists/dicts can be injected; the target process must be running with the Axiom adapter. Returns pending_confirm — poll get_runtime_snapshot for armed → fired status and the observed original/injected values.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          file: { type: 'string', description: 'File ID (UUID), relative path, or path suffix' },
+          symbol: { type: 'string', description: 'Function or method name to perturb' },
+          param_name: { type: 'string', description: 'Name of the parameter to override' },
+          value: { description: 'Value to inject: number, string, boolean, null, or a flat array/object of those' },
+          once: { type: 'boolean', description: 'Fire once then auto-remove (default true). Persistent injection requires explicit false.', default: true },
+        },
+        required: ['file', 'symbol', 'param_name', 'value'],
+      },
+    },
+    {
+      name: 'cancel_injection',
+      description: 'Cancel an armed or pending value injection before it fires.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          injectId: { type: 'string', description: 'Injection ID returned by inject_value' },
+        },
+        required: ['injectId'],
+      },
+    },
+    {
+      name: 'get_runtime_snapshot',
+      description: 'Get the current runtime debugging state: connected target processes, active function watches (with call counts and last seen argument/return values), launched targets, and the most recent runtime events.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'launch_target',
+      description: 'Launch the user\'s application under Axiom with runtime tracing attached (zero code changes). Python 3.12+ streams calls with near-zero overhead via sys.monitoring. Node.js (auto-detected from `node`/`.js`/`.mjs`/`.cjs`) is AST-instrumented at module load — exact call/return/exception events with args, works for CJS and ESM including non-exported functions, and supports inject_value. Go (delve) and C#/.NET (netcoredbg) are traced via DAP — NOTE: the debugger stops the whole process on every breakpoint hit, so these are inspection-mode only (call events with args, no return events); Go auto-detected from `go run`/`.go`, C# from a `.dll` or `dotnet app.dll` (keep watches to low-frequency synchronous methods; requires a prebuilt .dll with .pdb). Pass language ("go"/"csharp") for prebuilt binaries. stdout/stderr stream to the canvas (Python/Node; retrievable via get_target_log).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          command: { type: 'array', items: { type: 'string' }, description: 'Command as argv array, e.g. ["python", "app.py"], ["node", "app.js"], ["go", "run", "."], or ["dotnet", "app.dll"]' },
+          cwd: { type: 'string', description: 'Working directory (defaults to the workspace root)' },
+          language: { type: 'string', enum: ['python', 'javascript', 'go', 'csharp', 'cpp', 'ruby', 'java'], description: 'Optional language hint. Needed to trace a prebuilt Go/C# binary, a C++ executable (gdb — build with -g, static-link on MinGW), Ruby (rdbg), or Java (java-debug). C++/Ruby/Java use blocking DAP: keep watches to low-frequency functions.' },
+        },
+        required: ['command'],
+      },
+    },
+    {
+      name: 'stop_target',
+      description: 'Stop a target process previously started with launch_target.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targetId: { type: 'string', description: 'Target ID returned by launch_target' },
+        },
+        required: ['targetId'],
+      },
+    },
+    {
+      name: 'get_target_log',
+      description: 'Get the recent stdout/stderr output of a target process started with launch_target.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          targetId: { type: 'string', description: 'Target ID returned by launch_target' },
+        },
+        required: ['targetId'],
+      },
+    },
+    {
+      name: 'get_data_flow',
+      description: 'Variable references / data-flow slice: every file and line where a variable is defined, passed as a parameter, written (reassigned/mutated), or read. Highlights the affected files on the Axiom canvas in purple. Static analysis (tree-sitter) — cross-file matches are NAME-BASED (no type resolution), so same-named variables in unrelated files may appear; pass `file` to scope to one file, and use each ref\'s enclosingSymbol to disambiguate. Supports TS/JS/Python/Go.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          variable: { type: 'string', description: 'Variable name to slice on' },
+          file: { type: 'string', description: 'Optional: scope to a single file (ID, relative path, or path suffix) — strongly recommended for common names' },
+          maxFiles: { type: 'number', description: 'Max files to return (default 50)' },
+        },
+        required: ['variable'],
+      },
+    },
+    {
+      name: 'start_investigation',
+      description: 'Begin capturing an Investigation: from now on every call path traced, function watched, runtime call/return/exception observed, value injected, data-flow slice, and note is recorded into an ordered, replayable timeline linked to the current git commit. Use this at the start of a debugging session so the whole investigation can be saved and shared. Call stop_investigation to save it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Human-readable name, e.g. "negative amount bypasses validation"' },
+        },
+      },
+    },
+    {
+      name: 'annotate_investigation',
+      description: 'Add a note to the active investigation timeline — your hypothesis, a finding, or a conclusion. Notes appear inline in the replay so a teammate follows your reasoning. Requires an active investigation (start_investigation).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The note / finding / hypothesis to record at this point in the timeline' },
+        },
+        required: ['text'],
+      },
+    },
+    {
+      name: 'stop_investigation',
+      description: 'Finalize and save the active investigation. Returns a short shareable id; opening it on the Axiom canvas replays the entire investigation step by step (traces, values, perturbations, notes) against the captured git commit.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'list_investigations',
+      description: 'List saved investigations for the current workspace (id, name, commit, event count, duration), plus the one currently recording if any.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'get_investigation',
+      description: 'Get the full recorded timeline of a saved investigation by id (all captured events with their relative timestamps, the git commit, and the canvas snapshot). Use to inspect or replay a past investigation.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Investigation id from stop_investigation / list_investigations' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'get_function_body',
+      description: 'Read the actual source code of a specific function, class, or method from the indexed symbol table. Use this after tracing a call path to inspect what each hop really does — no runtime required.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          file: { type: 'string', description: 'File ID (UUID), relative path, or path suffix (e.g. "services/payment.py")' },
+          symbol: { type: 'string', description: 'Function/class/method name as it appears in the symbol table' },
+        },
+        required: ['file', 'symbol'],
+      },
+    },
+    {
       name: 'get_call_path',
       description: 'Trace the function call path between two files (by file ID or relative path). Returns each hop (caller symbol → callee symbol) and automatically animates the path on the Axiom canvas so the user can follow the agent\'s debugging path in real-time.',
       inputSchema: {
@@ -1087,6 +1244,194 @@ Steps to execute:
 4. Rename and document systems semantically, nesting subsystems as needed. Use update_systems_bulk to apply updates in parallel.
 5. Keep file/system operations batched to stay within context limits.`
         }
+        break
+      }
+
+      case 'watch_function': {
+        const file = args.file as string
+        const symbol = args.symbol as string
+        await postAgentActivity(project.workspaceId, `Agent watching function: ${symbol} in ${file}`, 'info')
+        const res = await fetch('http://localhost:7743/api/runtime/watch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol }),
+        })
+        if (!res.ok) throw new Error(`watch failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'unwatch_function': {
+        const file = args.file as string
+        const symbol = args.symbol as string
+        await postAgentActivity(project.workspaceId, `Agent removed watch: ${symbol} in ${file}`, 'info')
+        const res = await fetch('http://localhost:7743/api/runtime/unwatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol }),
+        })
+        if (!res.ok) throw new Error(`unwatch failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'inject_value': {
+        const file = args.file as string
+        const symbol = args.symbol as string
+        const paramName = args.param_name as string
+        const value = args.value
+        const once = args.once !== false
+        await postAgentActivity(
+          project.workspaceId,
+          `Agent requests injection: ${symbol}(${paramName}=${JSON.stringify(value)}) in ${file} — awaiting user confirmation`,
+          'warn',
+        )
+        const res = await fetch('http://localhost:7743/api/runtime/inject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol, paramName, value, once }),
+        })
+        if (!res.ok) throw new Error(`inject failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'cancel_injection': {
+        const injectId = args.injectId as string
+        await postAgentActivity(project.workspaceId, `Agent cancelled injection ${injectId}`, 'info')
+        const res = await fetch('http://localhost:7743/api/runtime/inject/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, injectId }),
+        })
+        if (!res.ok) throw new Error(`cancel failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'get_runtime_snapshot': {
+        const res = await fetch(
+          `http://localhost:7743/api/runtime/snapshot?workspace=${encodeURIComponent(project.workspaceId)}`
+        )
+        if (!res.ok) throw new Error(`snapshot failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'launch_target': {
+        const command = args.command as string[]
+        const cwd = args.cwd as string | undefined
+        const language = args.language as string | undefined
+        await postAgentActivity(project.workspaceId, `Agent launching target: ${command.join(' ')}`, 'info')
+        const res = await fetch('http://localhost:7743/api/runtime/launch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, command, cwd, language }),
+        })
+        if (!res.ok) throw new Error(`launch failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'stop_target': {
+        const targetId = args.targetId as string
+        await postAgentActivity(project.workspaceId, `Agent stopping target ${targetId}`, 'info')
+        const res = await fetch('http://localhost:7743/api/runtime/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ targetId }),
+        })
+        if (!res.ok) throw new Error(`stop failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'get_target_log': {
+        const targetId = args.targetId as string
+        const res = await fetch(
+          `http://localhost:7743/api/runtime/target-log?target=${encodeURIComponent(targetId)}`
+        )
+        if (!res.ok) throw new Error(`target-log failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'start_investigation': {
+        const name = (args.name as string) ?? ''
+        const res = await fetch('http://localhost:7743/api/investigation/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, name }),
+        })
+        if (!res.ok) throw new Error(`start_investigation failed: ${await res.text()}`)
+        result = await res.json()
+        await postAgentActivity(project.workspaceId, `Agent started investigation "${name || 'untitled'}" — recording`, 'success')
+        break
+      }
+
+      case 'annotate_investigation': {
+        const text = args.text as string
+        const res = await fetch('http://localhost:7743/api/investigation/note', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, text }),
+        })
+        if (!res.ok) throw new Error(`annotate_investigation failed: ${await res.text()}`)
+        result = await res.json()
+        await postAgentActivity(project.workspaceId, `📝 ${text}`, 'info')
+        break
+      }
+
+      case 'stop_investigation': {
+        const res = await fetch('http://localhost:7743/api/investigation/stop', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId }),
+        })
+        if (!res.ok) throw new Error(`stop_investigation failed: ${await res.text()}`)
+        result = await res.json()
+        await postAgentActivity(project.workspaceId, `Agent saved investigation ${(result as any).id}`, 'success')
+        break
+      }
+
+      case 'list_investigations': {
+        const res = await fetch(`http://localhost:7743/api/investigation/list?workspace=${encodeURIComponent(project.workspaceId)}`)
+        if (!res.ok) throw new Error(`list_investigations failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'get_investigation': {
+        const id = args.id as string
+        const res = await fetch(`http://localhost:7743/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(project.workspaceId)}`)
+        if (!res.ok) throw new Error(`get_investigation failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'get_data_flow': {
+        const variable = args.variable as string
+        const file = args.file as string | undefined
+        const maxFiles = args.maxFiles as number | undefined
+        await postAgentActivity(project.workspaceId, `Agent slicing data-flow for variable "${variable}"${file ? ` in ${file}` : ''}`, 'info')
+        const params = new URLSearchParams({ workspace: project.workspaceId, variable })
+        if (file) params.set('file', file)
+        if (maxFiles) params.set('maxFiles', String(maxFiles))
+        const res = await fetch(`http://localhost:7743/api/data-flow?${params.toString()}`)
+        if (!res.ok) throw new Error(`data-flow failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'get_function_body': {
+        const file = args.file as string
+        const symbol = args.symbol as string
+        await postAgentActivity(project.workspaceId, `Agent reading function body: ${symbol} in ${file}`, 'info')
+        const res = await fetch(
+          `http://localhost:7743/api/function-body?workspace=${encodeURIComponent(project.workspaceId)}&file=${encodeURIComponent(file)}&symbol=${encodeURIComponent(symbol)}`
+        )
+        if (!res.ok) {
+          const errMsg = await res.text()
+          throw new Error(`function-body failed: ${errMsg}`)
+        }
+        result = await res.json()
         break
       }
 
