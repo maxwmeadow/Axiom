@@ -182,7 +182,7 @@ export function ProjectSetupScreen({ baseConfig, onConfirm, onCancel }: ProjectS
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     padding: '2px 6px',
                     background: 'var(--bg-raised)',
-                    borderRadius: 3,
+                    borderRadius: 0,
                   }}>
                     {p.replace(rootPath, '').replace(/^[/\\]/, '')}
                   </div>
@@ -201,7 +201,7 @@ export function ProjectSetupScreen({ baseConfig, onConfirm, onCancel }: ProjectS
             style={{
               padding: '10px 16px',
               background: 'var(--accent)',
-              borderRadius: 8,
+              borderRadius: 0,
               fontSize: 13, fontWeight: 600, color: '#fff',
               textAlign: 'center',
             }}

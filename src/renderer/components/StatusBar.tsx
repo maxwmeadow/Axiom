@@ -39,9 +39,9 @@ export function StatusBar() {
       {/* Indexing progress */}
       {isIndexing && indexingProgress && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--accent)' }}>
-          <div style={{ width: 80, height: 3, background: 'var(--bg-raised)', borderRadius: 2 }}>
+          <div style={{ width: 80, height: 3, background: 'var(--bg-raised)', borderRadius: 0 }}>
             <div style={{
-              height: '100%', borderRadius: 2,
+              height: '100%', borderRadius: 0,
               background: 'var(--accent)',
               width: `${Math.round((indexingProgress.indexed / indexingProgress.total) * 100)}%`,
               transition: 'width 0.1s',

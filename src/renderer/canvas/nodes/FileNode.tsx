@@ -74,7 +74,7 @@ function RuntimeTooltip({ runtime, color }: { runtime: RuntimeNodeState; color: 
         borderRadius: 0,
         background: 'var(--bg-overlay)',
         border: `1px solid ${color}`,
-        boxShadow: '0 8px 24px rgba(0,0,0,0.55)',
+        boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
         zIndex: 100,
         fontSize: 11,
         pointerEvents: 'none',
@@ -435,7 +435,6 @@ export function FileNode({ data, selected }: NodeProps) {
           position: 'absolute', inset: -3,
           borderRadius: 0,
           border: '2px solid #a855f7',
-          boxShadow: '0 0 12px rgba(168,85,247,0.45)',
           background: 'rgba(168,85,247,0.06)',
           pointerEvents: 'none',
         }} />

@@ -68,7 +68,7 @@ export function HomeScreen({ onOpenProject, onOpenDialog }: HomeScreenProps) {
           display: 'flex', alignItems: 'center', gap: 10,
           padding: '12px 24px',
           background: 'var(--accent)',
-          borderRadius: 10,
+          borderRadius: 0,
           fontSize: 14, fontWeight: 600,
           color: '#fff',
           boxShadow: '0 0 20px var(--accent-glow)',
@@ -105,7 +105,7 @@ export function HomeScreen({ onOpenProject, onOpenDialog }: HomeScreenProps) {
                   padding: '10px 14px',
                   background: 'var(--bg-surface)',
                   border: '1px solid var(--border)',
-                  borderRadius: 8,
+                  borderRadius: 0,
                   textAlign: 'left',
                   transition: 'border-color 0.15s, background 0.15s',
                 }}
@@ -150,7 +150,7 @@ export function HomeScreen({ onOpenProject, onOpenDialog }: HomeScreenProps) {
         ].map(f => (
           <div key={f.title} style={{
             width: 140, padding: 14, textAlign: 'center',
-            background: 'var(--bg-surface)', borderRadius: 10, border: '1px solid var(--border)',
+            background: 'var(--bg-surface)', borderRadius: 0, border: '1px solid var(--border)',
           }}>
             <div style={{ fontSize: 20, marginBottom: 6 }}>{f.icon}</div>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{f.title}</div>
@@ -175,9 +175,9 @@ function timeAgo(ts: number): string {
 function AxiomHeroLogo() {
   return (
     <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{ margin: '0 auto 12px', display: 'block' }}>
-      <polygon points="32,4 60,18 60,46 32,60 4,46 4,18" fill="rgba(99,102,241,0.08)" stroke="rgba(99,102,241,0.4)" strokeWidth="1.5"/>
-      <polygon points="32,14 50,22 50,42 32,50 14,42 14,22" fill="rgba(99,102,241,0.05)" stroke="rgba(99,102,241,0.25)" strokeWidth="1"/>
-      <circle cx="32" cy="32" r="8" fill="rgba(99,102,241,0.3)" stroke="var(--accent)" strokeWidth="1.5"/>
+      <polygon points="32,4 60,18 60,46 32,60 4,46 4,18" fill="rgba(91,138,154,0.08)" stroke="rgba(91,138,154,0.4)" strokeWidth="1.5"/>
+      <polygon points="32,14 50,22 50,42 32,50 14,42 14,22" fill="rgba(91,138,154,0.05)" stroke="rgba(91,138,154,0.25)" strokeWidth="1"/>
+      <circle cx="32" cy="32" r="8" fill="rgba(91,138,154,0.3)" stroke="var(--accent)" strokeWidth="1.5"/>
       <circle cx="32" cy="32" r="3" fill="var(--accent)"/>
       {/* Spokes */}
       {[[32,4],[60,18],[60,46],[32,60],[4,46],[4,18]].map(([x,y], i) => (

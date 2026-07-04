@@ -1050,17 +1050,14 @@ function ZoomIndicator() {
   const { zoom } = useViewport()
   return (
     <div style={{
-      background: 'rgba(22, 27, 39, 0.75)',
-      backdropFilter: 'blur(12px)',
-      WebkitBackdropFilter: 'blur(12px)',
-      border: '1px solid rgba(255, 255, 255, 0.08)',
-      borderRadius: '8px',
+      background: 'var(--bg-surface)',
+      border: '1px solid var(--border)',
       padding: '6px 12px',
-      color: '#94a3b8',
+      color: 'var(--text-secondary)',
       fontSize: '12px',
-      fontFamily: 'monospace',
+      fontFamily: 'var(--font-mono)',
       fontWeight: 600,
-      boxShadow: '0 4px 18px rgba(0, 0, 0, 0.3)',
+      boxShadow: 'var(--shadow-card)',
       pointerEvents: 'none',
       userSelect: 'none',
     }}>
@@ -2598,16 +2595,18 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         // graphs where the per-move visibility recompute isn't worth it.
         onlyRenderVisibleElements={rfNodes.length > 150}
       >
-        <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="rgba(255,255,255,0.04)" />
+        {/* Pattern color transparent — the drafting line grid is painted by
+            .react-flow__background CSS; this component just provides the element. */}
+        <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="transparent" />
         <Controls showInteractive={false} />
         <MiniMap
           style={{ width: 160, height: 100 }}
           nodeColor={(n) => {
             const d = n.data as unknown as SystemNodeData | FileNodeData | InfraNodeData
             if ('color' in d && d.color) return d.color
-            if (n.type === 'file') return '#3b82f6'
-            if (n.type === 'infra') return '#f59e0b'
-            return '#2a3347'
+            if (n.type === 'file') return '#6C757D'
+            if (n.type === 'infra') return '#D4A843'
+            return '#2a2e33'
           }}
           maskColor="rgba(10,13,20,0.8)"
         />
@@ -2616,21 +2615,18 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             onClick={tidyCanvas}
             disabled={isTidying || readOnly}
             style={{
-              background: 'rgba(22, 27, 39, 0.75)',
-              backdropFilter: 'blur(12px)',
-              WebkitBackdropFilter: 'blur(12px)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              borderRadius: '8px',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border)',
               padding: '8px 14px',
-              color: '#f8fafc',
+              color: 'var(--text-primary)',
               fontSize: '13px',
               fontWeight: 500,
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
               cursor: (isTidying || readOnly) ? 'not-allowed' : 'pointer',
-              boxShadow: '0 4px 18px rgba(0, 0, 0, 0.3)',
-              transition: 'all 0.2s ease-in-out',
+              boxShadow: 'var(--shadow-card)',
+              transition: 'border-color 0.15s ease, color 0.15s ease',
             }}
             className="tidy-layout-btn"
           >
@@ -2672,21 +2668,18 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
               onClick={() => setFocusEnabled(v => !v)}
               title="Dim nodes that are off the active trace / runtime path"
               style={{
-                background: focusEnabled ? 'rgba(34, 211, 238, 0.15)' : 'rgba(22, 27, 39, 0.75)',
-                backdropFilter: 'blur(12px)',
-                WebkitBackdropFilter: 'blur(12px)',
-                border: `1px solid ${focusEnabled ? 'rgba(34, 211, 238, 0.5)' : 'rgba(255, 255, 255, 0.08)'}`,
-                borderRadius: '8px',
+                background: focusEnabled ? 'var(--bg-raised)' : 'var(--bg-surface)',
+                border: `1px solid ${focusEnabled ? 'var(--trace-color)' : 'var(--border)'}`,
                 padding: '8px 14px',
-                color: focusEnabled ? '#22d3ee' : '#f8fafc',
+                color: focusEnabled ? 'var(--trace-color)' : 'var(--text-primary)',
                 fontSize: '13px',
                 fontWeight: 500,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
                 cursor: 'pointer',
-                boxShadow: '0 4px 18px rgba(0, 0, 0, 0.3)',
-                transition: 'all 0.2s ease-in-out',
+                boxShadow: 'var(--shadow-card)',
+                transition: 'border-color 0.15s ease, color 0.15s ease',
               }}
             >
               <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none"
@@ -2707,8 +2700,8 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         <div style={{
           position: 'absolute', bottom: 24, left: '50%', transform: 'translateX(-50%)',
           zIndex: 1000, background: 'var(--bg-surface)', border: '1px solid var(--border)',
-          borderRadius: 8, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          borderRadius: 0, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12,
+          boxShadow: 'var(--shadow-card)',
         }}>
           <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>
             {selectedFileIds.length} files selected
@@ -2717,7 +2710,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             onClick={() => setGroupDialogOpen(true)}
             style={{
               background: 'var(--accent)', color: '#fff', border: 'none',
-              borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              borderRadius: 0, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
             }}
           >
             Group into System
@@ -2726,7 +2719,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             onClick={() => setSelectionMode(false)}
             style={{
               background: 'transparent', color: 'var(--text-secondary)',
-              border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6,
+              border: '1px solid var(--border)', borderRadius: 0,
               padding: '6px 10px', fontSize: 12, cursor: 'pointer',
             }}
           >
@@ -2751,10 +2744,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           bottom: 24,
           right: 24,
           zIndex: 99999,
-          background: 'rgba(15, 23, 42, 0.95)',
+          background: 'var(--bg-surface)',
           color: '#34d399',
           padding: '12px',
-          borderRadius: '8px',
+          borderRadius: 0,
           fontFamily: 'monospace',
           fontSize: '11px',
           pointerEvents: 'none',
@@ -2762,7 +2755,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           width: '280px',
           overflow: 'auto',
           border: '1px solid rgba(52, 211, 153, 0.3)',
-          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5)',
+          boxShadow: 'var(--shadow-card)',
         }}>
           <div style={{ fontWeight: 'bold', marginBottom: '6px', borderBottom: '1px solid rgba(52, 211, 153, 0.2)', paddingBottom: '4px' }}>
             Axiom Drag Debug Overlay

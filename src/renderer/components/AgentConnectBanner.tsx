@@ -25,22 +25,20 @@ export function AgentConnectBanner() {
       zIndex: 500,
       background: 'var(--bg-surface)',
       border: '1px solid var(--accent)',
-      borderRadius: 12,
+      borderRadius: 0,
       padding: '14px 20px',
       display: 'flex',
       alignItems: 'center',
       gap: 16,
-      boxShadow: '0 4px 32px rgba(99,102,241,0.25), 0 0 0 1px rgba(99,102,241,0.1)',
+      boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
       animation: 'fadeIn 0.3s ease-out',
       maxWidth: 560,
-      backdropFilter: 'blur(8px)',
     }}>
       <div style={{
         width: 10, height: 10, borderRadius: '50%',
         background: 'var(--accent)',
         flexShrink: 0,
         animation: 'pulse 2s ease-in-out infinite',
-        boxShadow: '0 0 12px var(--accent-glow)',
       }} />
 
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -80,9 +78,9 @@ function CopyButton({ text }: { text: string }) {
       style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '6px 12px',
-        background: copied ? 'rgba(16,185,129,0.15)' : 'var(--bg-raised)',
+        background: 'var(--bg-raised)',
         border: `1px solid ${copied ? 'var(--ok)' : 'var(--border)'}`,
-        borderRadius: 7,
+        borderRadius: 0,
         fontSize: 11, fontWeight: 600,
         color: copied ? 'var(--ok)' : 'var(--text-secondary)',
         flexShrink: 0,

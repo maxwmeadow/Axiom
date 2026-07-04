@@ -150,8 +150,8 @@ function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
           <div style={{ position: 'fixed', inset: 0, zIndex: 998 }} onClick={() => setOpen(false)} />
           <div style={{
             position: 'absolute', top: 38, right: 0, zIndex: 999, width: 320,
-            background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8,
-            boxShadow: '0 12px 40px rgba(0,0,0,0.5)', padding: 6, maxHeight: 380, overflowY: 'auto',
+            background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 0,
+            boxShadow: '6px 6px 0 rgba(0,0,0,0.35)', padding: 6, maxHeight: 380, overflowY: 'auto',
           }}>
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '6px 8px', fontWeight: 600 }}>
               INVESTIGATION CAPTURES
@@ -165,7 +165,7 @@ function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
             {items.map(inv => (
               <button key={inv.id} onClick={() => openReplay(inv.id)} style={{
                 display: 'block', width: '100%', textAlign: 'left', background: 'transparent',
-                border: 'none', borderRadius: 6, padding: '8px', cursor: 'pointer', color: 'var(--text-primary)',
+                border: 'none', borderRadius: 0, padding: '8px', cursor: 'pointer', color: 'var(--text-primary)',
               }}
                 onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -194,7 +194,7 @@ function ToolbarBtn({
 }) {
   const [hovered, setHovered] = useState(false)
   const bg = active
-    ? 'rgba(99,102,241,0.15)'
+    ? 'var(--bg-raised)'
     : hovered
     ? 'var(--bg-raised)'
     : 'transparent'
@@ -203,7 +203,7 @@ function ToolbarBtn({
     : hovered
     ? 'var(--text-primary)'
     : 'var(--text-secondary)'
-  const border = active ? '1px solid rgba(99,102,241,0.3)' : '1px solid transparent'
+  const border = active ? '1px solid var(--accent)' : '1px solid transparent'
 
   return (
     <button
@@ -215,7 +215,7 @@ function ToolbarBtn({
         WebkitAppRegion: 'no-drag',
         display: 'flex', alignItems: 'center', gap: 5,
         padding: '5px 9px',
-        borderRadius: 6,
+        borderRadius: 0,
         border,
         color,
         background: bg,
@@ -229,7 +229,7 @@ function ToolbarBtn({
       {shortcut && (
         <kbd style={{
           fontSize: 9, color: 'var(--text-dim)',
-          background: 'var(--bg-overlay)', borderRadius: 3,
+          background: 'var(--bg-overlay)', borderRadius: 0,
           padding: '1px 4px', border: '1px solid var(--border)',
         }}>{shortcut}</kbd>
       )}
@@ -240,7 +240,7 @@ function ToolbarBtn({
 function AxiomLogo() {
   return (
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-      <polygon points="10,1 19,6 19,14 10,19 1,14 1,6" fill="rgba(99,102,241,0.15)" stroke="var(--accent)" strokeWidth="1.5"/>
+      <polygon points="10,1 19,6 19,14 10,19 1,14 1,6" fill="rgba(91,138,154,0.15)" stroke="var(--accent)" strokeWidth="1.5"/>
       <circle cx="10" cy="10" r="3" fill="var(--accent)" opacity="0.8"/>
       <line x1="10" y1="1" x2="10" y2="7" stroke="var(--accent)" strokeWidth="1" opacity="0.5"/>
       <line x1="10" y1="13" x2="10" y2="19" stroke="var(--accent)" strokeWidth="1" opacity="0.5"/>

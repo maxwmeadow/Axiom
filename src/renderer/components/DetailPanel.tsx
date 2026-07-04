@@ -167,7 +167,7 @@ function DependencySection({ title, dependencies, direction, onClick }: {
           onClick={() => onClick(direction === 'out' ? d.dst : d.src)}
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
-            padding: '4px 6px', borderRadius: 4, cursor: 'pointer', marginBottom: 2,
+            padding: '4px 6px', borderRadius: 0, cursor: 'pointer', marginBottom: 2,
           }}
           onMouseEnter={ev => (ev.currentTarget.style.background = 'var(--bg-raised)')}
           onMouseLeave={ev => (ev.currentTarget.style.background = 'transparent')}
@@ -191,7 +191,7 @@ function DependencySection({ title, dependencies, direction, onClick }: {
 
 function Stat({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div style={{ background: 'var(--bg-raised)', borderRadius: 6, padding: '6px 10px' }}>
+    <div style={{ background: 'var(--bg-raised)', borderRadius: 0, padding: '6px 10px' }}>
       <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 2 }}>{label}</div>
       <div style={{ fontSize: 13, fontWeight: 600, color: warn ? 'var(--warn)' : 'var(--text-primary)' }}>
         {value}

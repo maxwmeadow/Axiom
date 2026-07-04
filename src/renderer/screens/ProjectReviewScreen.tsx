@@ -65,7 +65,7 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
       {/* Left Panel: Instructions, Agent Config, Log */}
       <div style={{
         width: 480,
-        borderRight: '1px solid rgba(255,255,255,0.06)',
+        borderRight: '1px solid var(--border-dim)',
         display: 'flex',
         flexDirection: 'column',
         background: '#0f1118',
@@ -75,7 +75,7 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
         zIndex: 10,
       }}>
         {/* Header Block */}
-        <div style={{ padding: '24px 24px 16px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+        <div style={{ padding: '24px 24px 16px', borderBottom: '1px solid var(--border-dim)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <button
               onClick={onBack}
@@ -93,7 +93,7 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
               display: 'flex', alignItems: 'center', gap: 6,
               background: isAgentActive ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
               border: `1px solid ${isAgentActive ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
-              padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600,
+              padding: '4px 10px', borderRadius: 0, fontSize: 11, fontWeight: 600,
               color: isAgentActive ? '#10b981' : '#f59e0b',
             }}>
               <span style={{
@@ -117,7 +117,7 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
         <div style={{ flex: 1, overflowY: 'auto', padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
           
           {/* Universal MCP setup box */}
-          <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)', borderRadius: 8, padding: 14 }}>
+          <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-dim)', borderRadius: 0, padding: 14 }}>
             <div style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 600, marginBottom: 6 }}>Universal MCP Connection</div>
             <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5, marginBottom: 12 }}>
               Point your AI editor (Claude Code, Cursor, Windsurf, etc.) to this MCP server configuration:
@@ -127,15 +127,15 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div>
                 <div style={{ fontSize: 10, color: '#64748b', fontWeight: 700, marginBottom: 4, letterSpacing: '0.04em' }}>MCP COMMAND</div>
-                <div style={{ display: 'flex', gap: 8, background: '#090b11', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 6, padding: '8px 10px' }}>
+                <div style={{ display: 'flex', gap: 8, background: 'var(--bg-deep)', border: '1px solid var(--border-dim)', borderRadius: 0, padding: '8px 10px' }}>
                   <code style={{ fontSize: 11, color: '#cbd5e1', fontFamily: 'monospace', wordBreak: 'break-all', flex: 1, alignSelf: 'center' }}>
                     {universalCommand}
                   </code>
                   <button
                     onClick={() => handleCopy(universalCommand, 'cmd')}
                     style={{
-                      background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: 4, color: '#fff', fontSize: 10, padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap', alignSelf: 'flex-start'
+                      background: 'var(--bg-raised)', border: '1px solid var(--border)',
+                      borderRadius: 0, color: '#fff', fontSize: 10, padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap', alignSelf: 'flex-start'
                     }}
                   >
                     {copiedText === 'cmd' ? 'Copied' : 'Copy'}
@@ -145,15 +145,15 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
 
               <div>
                 <div style={{ fontSize: 10, color: '#64748b', fontWeight: 700, marginBottom: 4, letterSpacing: '0.04em' }}>ABSOLUTE PATH</div>
-                <div style={{ display: 'flex', gap: 8, background: '#090b11', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 6, padding: '8px 10px' }}>
+                <div style={{ display: 'flex', gap: 8, background: 'var(--bg-deep)', border: '1px solid var(--border-dim)', borderRadius: 0, padding: '8px 10px' }}>
                   <code style={{ fontSize: 11, color: '#cbd5e1', fontFamily: 'monospace', wordBreak: 'break-all', flex: 1, alignSelf: 'center' }}>
                     {mcpPath}
                   </code>
                   <button
                     onClick={() => handleCopy(mcpPath, 'path')}
                     style={{
-                      background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: 4, color: '#fff', fontSize: 10, padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap', alignSelf: 'flex-start'
+                      background: 'var(--bg-raised)', border: '1px solid var(--border)',
+                      borderRadius: 0, color: '#fff', fontSize: 10, padding: '4px 8px', cursor: 'pointer', whiteSpace: 'nowrap', alignSelf: 'flex-start'
                     }}
                   >
                     {copiedText === 'path' ? 'Copied' : 'Copy'}
@@ -162,7 +162,7 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
               </div>
 
               {/* Kickoff Instruction box */}
-              <div style={{ marginTop: 6, borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: 12 }}>
+              <div style={{ marginTop: 6, borderTop: '1px solid var(--border-dim)', paddingTop: 12 }}>
                 <div style={{ fontSize: 10, color: '#64748b', fontWeight: 700, marginBottom: 4, letterSpacing: '0.04em' }}>HOW TO KICKOFF</div>
                 <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>
                   Once your agent is connected, type <strong>"start a review"</strong> in your AI editor's chat window. The agent will run the <code>start_review</code> tool and fetch the audit guidelines automatically.
@@ -188,8 +188,8 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
             <div style={{
               flex: 1,
               background: '#07090e',
-              border: '1px solid rgba(255,255,255,0.04)',
-              borderRadius: 8,
+              border: '1px solid var(--border-dim)',
+              borderRadius: 0,
               padding: 12,
               fontFamily: 'monospace',
               fontSize: 11,
@@ -226,7 +226,7 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
         </div>
 
         {/* Footer actions */}
-        <div style={{ padding: 24, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', flexDirection: 'column', gap: 10, background: '#0e1017' }}>
+        <div style={{ padding: 24, borderTop: '1px solid var(--border-dim)', display: 'flex', flexDirection: 'column', gap: 10, background: 'var(--bg-base)' }}>
           <button
             onClick={onFinishReview}
             style={{
@@ -234,12 +234,12 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
               padding: '12px 16px',
               background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
               border: 'none',
-              borderRadius: 8,
+              borderRadius: 0,
               fontSize: 13,
               fontWeight: 600,
               color: '#fff',
               cursor: 'pointer',
-              boxShadow: '0 4px 14px rgba(37,99,235,0.3)',
+              boxShadow: 'none',
               transition: 'all 0.15s ease',
             }}
             onMouseEnter={(e) => {
@@ -268,13 +268,12 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
           top: 20,
           right: 20,
           zIndex: 1000,
-          background: 'rgba(15,23,42,0.75)',
-          backdropFilter: 'blur(8px)',
-          border: '1px solid rgba(255,255,255,0.08)',
-          borderRadius: 10,
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border)',
+          borderRadius: 0,
           padding: '12px 16px',
           maxWidth: 320,
-          boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+          boxShadow: 'var(--shadow-card)',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
             <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: '#10b981', animation: 'pulse 2s ease-in-out infinite' }} />

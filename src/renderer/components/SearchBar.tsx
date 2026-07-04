@@ -58,8 +58,8 @@ export function SearchBar({ onClose }: SearchBarProps) {
       width: 480, zIndex: 1000,
       background: 'var(--bg-surface)',
       border: '1px solid var(--border)',
-      borderRadius: 12,
-      boxShadow: '0 24px 60px rgba(0,0,0,0.6)',
+      borderRadius: 0,
+      boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
       overflow: 'hidden',
       animation: 'fadeIn 0.12s ease-out',
     }}>
@@ -83,7 +83,7 @@ export function SearchBar({ onClose }: SearchBarProps) {
         />
         <kbd style={{
           fontSize: 10, color: 'var(--text-dim)',
-          background: 'var(--bg-raised)', borderRadius: 4,
+          background: 'var(--bg-raised)', borderRadius: 0,
           padding: '2px 6px', border: '1px solid var(--border)',
         }}>ESC</kbd>
       </div>
@@ -120,13 +120,13 @@ export function SearchBar({ onClose }: SearchBarProps) {
                 {sysName && (
                   <span style={{
                     fontSize: 9, fontWeight: 600, color: 'var(--text-secondary)',
-                    background: 'var(--bg-raised)', borderRadius: 4, padding: '1px 5px',
+                    background: 'var(--bg-raised)', borderRadius: 0, padding: '1px 5px',
                     flexShrink: 0,
                   }}>{sysName}</span>
                 )}
                 <span style={{
                   fontSize: 9, fontWeight: 600, color: 'var(--text-dim)',
-                  background: 'var(--bg-raised)', borderRadius: 4, padding: '1px 5px',
+                  background: 'var(--bg-raised)', borderRadius: 0, padding: '1px 5px',
                   flexShrink: 0,
                 }}>{file.language}</span>
               </div>

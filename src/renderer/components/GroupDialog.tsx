@@ -114,11 +114,10 @@ export function GroupDialog({ isOpen, onClose, selectedFileIds, onSuccess }: Gro
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 9999,
-      backdropFilter: 'blur(4px)',
     }}>
       <div
         className="glass-dialog animate-fade-in"
-        style={{ padding: 28, width: 420, maxWidth: '90%', borderRadius: 12 }}
+        style={{ padding: 28, width: 420, maxWidth: '90%', borderRadius: 0 }}
       >
         <h3 style={{
           margin: '0 0 20px 0',
@@ -136,7 +135,7 @@ export function GroupDialog({ isOpen, onClose, selectedFileIds, onSuccess }: Gro
               color: '#f87171',
               background: 'rgba(248,113,113,0.08)',
               border: '1.5px solid rgba(248,113,113,0.15)',
-              borderRadius: 6,
+              borderRadius: 0,
               padding: '10px 14px',
               fontSize: 12,
             }}>
@@ -185,8 +184,8 @@ export function GroupDialog({ isOpen, onClose, selectedFileIds, onSuccess }: Gro
               style={{
                 background: 'transparent',
                 color: 'var(--text-secondary)',
-                border: '1.5px solid rgba(255,255,255,0.08)',
-                borderRadius: 6,
+                border: '1px solid var(--border)',
+                borderRadius: 0,
                 padding: '9px 16px',
                 fontSize: 13,
                 fontWeight: 600,
@@ -202,13 +201,13 @@ export function GroupDialog({ isOpen, onClose, selectedFileIds, onSuccess }: Gro
                 background: 'linear-gradient(135deg, var(--accent) 0%, #4f46e5 100%)',
                 color: '#fff',
                 border: 'none',
-                borderRadius: 6,
+                borderRadius: 0,
                 padding: '9px 18px',
                 fontSize: 13,
                 fontWeight: 700,
                 cursor: loading ? 'not-allowed' : 'pointer',
                 opacity: loading ? 0.7 : 1,
-                boxShadow: '0 4px 14px rgba(99,102,241,0.3)',
+                boxShadow: 'none',
               }}
             >
               {loading ? 'Creating…' : 'Create System'}

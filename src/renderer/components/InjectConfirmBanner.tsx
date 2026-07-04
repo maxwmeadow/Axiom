@@ -51,10 +51,11 @@ export function InjectConfirmBanner() {
       zIndex: 1200,
       maxWidth: 560,
       padding: '14px 18px',
-      borderRadius: 12,
-      background: 'rgba(24,16,4,0.95)',
-      border: '1.5px solid #f59e0b',
-      boxShadow: '0 8px 32px rgba(0,0,0,0.5), 0 0 24px rgba(245,158,11,0.25)',
+      borderRadius: 0,
+      background: 'var(--bg-raised)',
+      border: '1px solid var(--agent-color)',
+      borderLeft: '3px solid var(--agent-color)',
+      boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
       color: 'var(--text-primary)',
       fontSize: 13,
     }}>
@@ -79,9 +80,9 @@ export function InjectConfirmBanner() {
           onClick={() => respond(false)}
           disabled={busy === inj.id}
           style={{
-            padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+            padding: '6px 14px', borderRadius: 0, cursor: 'pointer',
             background: 'transparent', color: 'var(--text-primary)',
-            border: '1px solid rgba(255,255,255,0.2)', fontSize: 12,
+            border: '1px solid var(--border)', fontSize: 12,
           }}
         >
           Deny
@@ -90,7 +91,7 @@ export function InjectConfirmBanner() {
           onClick={() => respond(true)}
           disabled={busy === inj.id}
           style={{
-            padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+            padding: '6px 14px', borderRadius: 0, cursor: 'pointer',
             background: '#f59e0b', color: '#1a1206', fontWeight: 700,
             border: 'none', fontSize: 12,
           }}

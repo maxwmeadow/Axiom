@@ -16,7 +16,7 @@ export function AgentActivityLog() {
         padding: '5px 10px',
         background: 'rgba(245,158,11,0.12)',
         border: '1px solid rgba(245,158,11,0.3)',
-        borderRadius: 20,
+        borderRadius: 0,
         color: 'var(--agent-color)',
         fontSize: 11, fontWeight: 600,
       }}>

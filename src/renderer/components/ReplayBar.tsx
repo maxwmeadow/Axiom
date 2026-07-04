@@ -80,9 +80,9 @@ export function ReplayBar() {
     <div style={{
       position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
       zIndex: 1200, width: 640, maxWidth: 'calc(100vw - 48px)',
-      background: 'rgba(16,20,30,0.96)', backdropFilter: 'blur(12px)',
-      border: '1px solid rgba(139,92,246,0.4)', borderRadius: 12,
-      boxShadow: '0 12px 40px rgba(0,0,0,0.55), 0 0 24px rgba(139,92,246,0.15)',
+      background: 'var(--bg-raised)',
+      border: '1px solid #a855f7', borderLeft: '3px solid #a855f7', borderRadius: 0,
+      boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
       padding: '12px 16px', color: 'var(--text-primary)',
     }}>
       {/* Header */}
@@ -117,7 +117,7 @@ export function ReplayBar() {
         <button
           onClick={() => { if (atEnd) return; setPlaying(p => !p) }}
           disabled={atEnd}
-          style={{ ...ctrlBtn, background: playing ? 'rgba(168,85,247,0.25)' : ctrlBtn.background, opacity: atEnd ? 0.4 : 1, minWidth: 64 }}
+          style={{ ...ctrlBtn, background: playing ? 'var(--bg-overlay)' : ctrlBtn.background, borderColor: playing ? '#a855f7' : 'var(--border)', color: playing ? '#a855f7' : 'var(--text-primary)', opacity: atEnd ? 0.4 : 1, minWidth: 64 }}
         >
           {playing ? '❚❚ Pause' : atEnd ? 'End' : '▶ Play'}
         </button>
@@ -127,8 +127,8 @@ export function ReplayBar() {
         {lastNote && (
           <div style={{
             marginLeft: 8, flex: 1, fontSize: 12, color: '#e9d5ff',
-            background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.25)',
-            borderRadius: 6, padding: '4px 8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            background: 'var(--bg-overlay)', border: '1px solid #a855f7',
+            borderRadius: 0, padding: '4px 8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             📝 {lastNote}
           </div>
@@ -140,10 +140,10 @@ export function ReplayBar() {
 
 const iconBtn: React.CSSProperties = {
   background: 'transparent', border: 'none', color: 'var(--text-secondary)',
-  cursor: 'pointer', fontSize: 13, padding: '2px 6px', borderRadius: 4,
+  cursor: 'pointer', fontSize: 13, padding: '2px 6px', borderRadius: 0,
 }
 const ctrlBtn: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
-  color: 'var(--text-primary)', borderRadius: 6, padding: '5px 10px',
+  background: 'var(--bg-surface)', border: '1px solid var(--border)',
+  color: 'var(--text-primary)', borderRadius: 0, padding: '5px 10px',
   cursor: 'pointer', fontSize: 12, fontWeight: 600,
 }
