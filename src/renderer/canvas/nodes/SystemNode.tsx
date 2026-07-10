@@ -119,6 +119,12 @@ export function SystemNode({ data, selected }: NodeProps) {
   const padY     = Math.round(titlePx * 0.55)
   const radius   = Math.round(titlePx * 0.55)
 
+  // Header compartment: the layout reserves one grid gap above the first cell
+  // row. Draw the rule at 80% of that so there's clear space between the rule
+  // and the cell tops; the title centers vertically inside the shorter band.
+  const reservedGap = d.gridGap ?? Math.round(padY * 2 + titlePx * 1.25)
+  const headerH = Math.round(reservedGap * 0.8)
+
   const handles = (
     <>
       <Handle type="source" position={Position.Right}  style={{ opacity: 0, right: -6 }} />
@@ -131,7 +137,8 @@ export function SystemNode({ data, selected }: NodeProps) {
   const header = (
     <div style={{
       position: 'absolute',
-      top: padY, left: padX, right: padX,
+      top: 0, left: padX, right: padX,
+      height: headerH,
       display: 'flex',
       alignItems: 'center',
       gap: dotPx * 0.75,
@@ -189,8 +196,6 @@ export function SystemNode({ data, selected }: NodeProps) {
 
   // Opaque panel fill per depth — deeper nesting sits one step "higher" on the board.
   const panelBg = `var(--panel-${Math.min(depth ?? 0, 3)})`
-  // Header compartment height: the layout reserves one grid gap for the header.
-  const headerH = d.gridGap ?? Math.round(padY * 2 + titlePx * 1.25)
 
   const dimmed = !!(d as any).dimmed
 
