@@ -11,6 +11,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { join } from 'path'
 import { homedir } from 'os'
@@ -66,10 +68,103 @@ async function postAgentActivity(workspaceId: string, message: string, level: 'i
   }
 }
 
+// Helper: resolve a sheet by ID or exact name.
+async function resolveSheetId(workspaceId: string, ref: string): Promise<string> {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(ref)) return ref
+  const res = await fetch(`http://localhost:7743/api/sheets?workspace=${encodeURIComponent(workspaceId)}`)
+  if (!res.ok) throw new Error(`sheets list failed: ${await res.text()}`)
+  const sheets = await res.json() as { id: string; name: string }[]
+  const hit = (sheets ?? []).find(s => s.name === ref) ?? (sheets ?? []).find(s => s.name.toLowerCase() === ref.toLowerCase())
+  if (!hit) throw new Error(`Sheet not found: ${ref}. Existing: ${(sheets ?? []).map(s => s.name).join(', ') || '(none)'}`)
+  return hit.id
+}
+
+// Helper: resolve a model ref (file rel path / system name / infra name / UUID)
+// to exactly one of {fileId|systemId|infraId} for sheet membership.
+async function resolveModelRef(workspaceId: string, ref: string): Promise<{ fileId?: string; systemId?: string; infraId?: string }> {
+  const norm = ref.replace(/\\/g, '/').replace(/^(file|sys|infra):\/\//, '')
+  // Files: exact rel path, then unique suffix.
+  const fileRows = await queryDb(workspaceId, `
+    SELECT f.id FROM files f JOIN roots r ON f.root_id = r.id
+    WHERE r.workspace_id = ? AND (f.id = ? OR f.rel_path = ? OR f.rel_path LIKE ?)
+    LIMIT 2`, [workspaceId, ref, norm, `%/${norm.split('/').pop()}`])
+  if (fileRows.length === 1) return { fileId: fileRows[0].id }
+  if (fileRows.length > 1) {
+    const exact = await queryDb(workspaceId, `
+      SELECT f.id FROM files f JOIN roots r ON f.root_id = r.id
+      WHERE r.workspace_id = ? AND f.rel_path = ? LIMIT 1`, [workspaceId, norm])
+    if (exact.length === 1) return { fileId: exact[0].id }
+    throw new Error(`Ambiguous file ref "${ref}" — use the full relative path`)
+  }
+  const sysRows = await queryDb(workspaceId,
+    `SELECT id FROM systems WHERE workspace_id = ? AND (id = ? OR name = ?) LIMIT 2`,
+    [workspaceId, ref, norm])
+  if (sysRows.length === 1) return { systemId: sysRows[0].id }
+  if (sysRows.length > 1) throw new Error(`Ambiguous system name "${ref}" — pass the system ID`)
+  const infraRows = await queryDb(workspaceId,
+    `SELECT id FROM infra_nodes WHERE workspace_id = ? AND (id = ? OR name = ? OR service = ?) LIMIT 2`,
+    [workspaceId, ref, norm, norm])
+  if (infraRows.length === 1) return { infraId: infraRows[0].id }
+  if (infraRows.length > 1) throw new Error(`Ambiguous infra ref "${ref}" — pass the node ID`)
+  throw new Error(`No file, system, or infra node matches "${ref}"`)
+}
+
+// Piggyback trailer: Axiom owns one channel into every agent's context on
+// every MCP host — its own tool results. When canvas messages are queued,
+// every response carries a one-line hint (except on the canvas tools
+// themselves, which are already the answer to the hint).
+const CANVAS_TOOLS = new Set(['get_canvas_updates', 'await_canvas', 'reply_to_canvas'])
+async function canvasTrailer(workspaceId: string, toolName: string): Promise<string> {
+  if (CANVAS_TOOLS.has(toolName)) return ''
+  try {
+    const res = await fetch(
+      `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(workspaceId)}&peek=1`
+    )
+    if (!res.ok) return ''
+    const { queued } = await res.json() as { queued: number }
+    if (queued > 0) {
+      return `\n\n⚑ ${queued} unread canvas message${queued === 1 ? '' : 's'} from the user — call get_canvas_updates now and reply with reply_to_canvas.`
+    }
+  } catch { /* archd down or no workspace — stay silent */ }
+  return ''
+}
+
 const server = new Server(
   { name: 'axiom', version: '0.3.0' },
-  { capabilities: { tools: {} } }
+  { capabilities: { tools: {}, prompts: {} } }
 )
+
+// ─── MCP Prompts: /axiom:review-canvas ──────────────────────────────────────
+
+server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+  prompts: [
+    {
+      name: 'review-canvas',
+      description: 'Pull the latest canvas messages and staged UML changes from Axiom and act on them.',
+      arguments: [],
+    },
+  ],
+}))
+
+server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  if (request.params.name !== 'review-canvas') {
+    throw new Error(`Unknown prompt: ${request.params.name}`)
+  }
+  const project = getActiveProject()
+  const res = await fetch(
+    `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=prompt`
+  )
+  const msgs = res.ok ? (await res.json() as any[]) ?? [] : []
+  const text = msgs.length === 0
+    ? 'The user invoked the Axiom canvas review, but there are no unread canvas messages. Call list_sheets / get_sheet to inspect the current diagrams and ask what they would like to look at.'
+    : `The user sent ${msgs.length} message(s) from the Axiom UML canvas. For each: read it, inspect the referenced elements with axiom tools if needed, then ALWAYS answer via reply_to_canvas(msgId, body) — the user is watching the canvas, not this chat.\n\n` +
+      msgs.map((m, i) =>
+        `--- message ${i + 1} (msgId: ${m.id}) ---\nNote: ${m.note}\nSelection: ${m.selection}\nStaged canvas changes: ${m.changeSummary || '(none)'}${m.sheetId ? `\nSheet: ${m.sheetId}` : ''}`
+      ).join('\n\n')
+  return {
+    messages: [{ role: 'user', content: { type: 'text', text } }],
+  }
+})
 
 // ─── Tool list ─────────────────────────────────────────────────────────────
 
@@ -462,6 +557,207 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           to:   { type: 'string', description: 'Target file ID (UUID) or relative path' },
         },
         required: ['from', 'to'],
+      },
+    },
+    {
+      name: 'list_infra_services',
+      description: 'List the infra service registry: every external-infrastructure service Axiom can render (aws/rds, openai/api, stripe/api, generic/database, ...), grouped with its category and the edge kinds legal for that category. Call this before create_infra_node to pick a valid service id.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'list_infra',
+      description: 'List all infra nodes (databases, queues, external APIs, platforms) in the workspace with their categories, providers, statuses, and connection edges.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['proposed', 'confirmed', 'dismissed'], description: 'Optional: filter by proposal status' },
+        },
+      },
+    },
+    {
+      name: 'create_infra_node',
+      description: 'Create an infra node on the canvas representing an external dependency (database, cache, queue, storage, LLM API, SaaS API, auth, platform, CDN, monitoring, email). Prefer passing a registry `service` id (see list_infra_services) so the node gets correct branding and edge semantics; pass only `category` for an unbranded generic node the user can assign later.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          service: { type: 'string', description: 'Registry service id, e.g. "postgresql/postgres", "aws/s3", "openai/api". Category/provider/branding derive from it.' },
+          name: { type: 'string', description: 'Display name, e.g. "Primary DB", "Payments API". Defaults to the service name.' },
+          category: { type: 'string', description: 'Only when no service is given: database|cache|queue|storage|search|llm|api|auth|platform|cdn|observability|email' },
+          subtype: { type: 'string', description: 'Optional category subtype, e.g. sql|document|kv|vector for databases' },
+          config: { type: 'object', description: 'Optional config values for the service\'s configFields (never put secrets here)' },
+        },
+      },
+    },
+    {
+      name: 'update_infra_node',
+      description: 'Update an infra node: rename, reskin to a different service (e.g. generic/database → aws/rds once the actual DB is known), change status (confirm/dismiss a proposal), or edit config.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Infra node ID (UUID)' },
+          name: { type: 'string' },
+          service: { type: 'string', description: 'New registry service id — re-derives category, provider, and branding' },
+          status: { type: 'string', enum: ['proposed', 'confirmed', 'dismissed'] },
+          config: { type: 'object' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'delete_infra_node',
+      description: 'Delete an infra node from the canvas. Its connection edges are removed automatically.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Infra node ID (UUID)' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'connect_infra',
+      description: 'Connect a file or system to an infra node with a semantically typed edge. The edge kind must be legal for the node\'s category: database READS|WRITES|MIGRATES, cache READS|WRITES, queue PUBLISHES|CONSUMES, storage READS|WRITES, search QUERIES|INDEXES, llm/api CALLS (api also HANDLES_WEBHOOK), auth AUTHENTICATES_VIA, platform DEPLOYS_TO, cdn SERVES_VIA, observability REPORTS_TO, email SENDS_VIA.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          src: { type: 'string', description: 'Source file ID/relative path, or system ID' },
+          srcType: { type: 'string', enum: ['file', 'system'], description: 'What src refers to', default: 'file' },
+          infraId: { type: 'string', description: 'Target infra node ID (UUID)' },
+          kind: { type: 'string', description: 'Edge kind (see description for legal kinds per category)' },
+          evidence: { type: 'string', description: 'Optional file:line justifying the connection, e.g. "src/db.ts:14"' },
+        },
+        required: ['src', 'infraId', 'kind'],
+      },
+    },
+    {
+      name: 'get_activity_hotspots',
+      description: 'List the files with the most recent live edit activity, ranked by a time-decayed score (24h half-life) weighted by structural change (symbols added/removed/moved). This is where the codebase is changing RIGHT NOW — the highest-value places to look for fresh bugs, regressions, or in-flight work. Tracks live saves (human and agent), not git commits.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', description: 'Max files to return', default: 20 },
+        },
+      },
+    },
+    {
+      name: 'list_sheets',
+      description: 'List all Sheets (named, curated UML-style diagrams over the live code model) with their names, purposes, kinds, and revisions.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'get_sheet',
+      description: 'Read a Sheet as ASM text (Axiom Sheet Markup) — the agent-facing rendering: members as durable URIs (file://relpath, sys://name, infra://service), containment by indentation, notes inline, tombstones/ghosts as bracket tags. This is how you SEE a diagram.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sheet: { type: 'string', description: 'Sheet ID or exact sheet name' },
+        },
+        required: ['sheet'],
+      },
+    },
+    {
+      name: 'create_sheet',
+      description: 'Create a Sheet — a curated diagram telling one story about the codebase (e.g. "Payment flow"). Pass member refs (file relative paths, system names, or infra node names/ids); elements are live references, never copies. Use this to ANSWER architecture questions visually: build the sheet, then direct the user to it.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Sheet title, e.g. "Checkout flow"' },
+          purpose: { type: 'string', description: 'One line: what story this sheet tells' },
+          members: { type: 'array', items: { type: 'string' }, description: 'Refs: file relative paths, system names, infra names, or UUIDs' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'add_to_sheet',
+      description: 'Add elements to an existing sheet by ref (file relative path, system name, infra name, or UUID).',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sheet: { type: 'string', description: 'Sheet ID or name' },
+          members: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['sheet', 'members'],
+      },
+    },
+    {
+      name: 'annotate_sheet',
+      description: 'Attach a note to a sheet, optionally pinned to a specific element (file/system/infra ref). Agent notes render amber on the canvas so the user sees who wrote what. Use for explanations, warnings ("this path bypasses validation"), and decisions.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sheet: { type: 'string', description: 'Sheet ID or name (omit for a workspace-global note)' },
+          target: { type: 'string', description: 'Optional element ref to pin to (file path / system name / infra name)' },
+          body: { type: 'string', description: 'Markdown note body' },
+        },
+        required: ['body'],
+      },
+    },
+    {
+      name: 'plan_element',
+      description: 'Add a PLANNED element to a sheet — a UML box for code that does not exist yet (visual spec-driven development). Declare the path where it should live and its member function signatures; Axiom reconciles automatically as the code gets built and the user watches members turn green on the canvas.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sheet: { type: 'string', description: 'Sheet ID or name' },
+          name: { type: 'string', description: 'Element name, e.g. "AuthService"' },
+          kind: { type: 'string', enum: ['class', 'file', 'system'], default: 'class' },
+          declaredPath: { type: 'string', description: 'Relative path where this should be created, e.g. "src/services/auth.ts"' },
+          members: { type: 'array', items: { type: 'object', properties: { signature: { type: 'string' }, intent: { type: 'string' } }, required: ['signature'] }, description: 'Declared functions/methods' },
+          notes: { type: 'string', description: 'One-line intent for the element' },
+          shape: { type: 'string', enum: ['box', 'folder', 'cylinder', 'hexagon'], description: 'Semantic shape: box=class/file, folder=system/package, cylinder=data store, hexagon=service/API. Defaults by kind.' },
+          color: { type: 'string', description: 'Accent hex from the drafting palette, e.g. "#5B8A9A"' },
+        },
+        required: ['sheet', 'name'],
+      },
+    },
+    {
+      name: 'get_build_spec',
+      description: 'Render a sheet\'s planned (not yet built) elements as a build specification: target paths, member signature checklists ([x] = already realized), structural intent edges. Use this as your work order when the user asks you to BUILD what they designed on the canvas.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          sheet: { type: 'string', description: 'Sheet ID or name' },
+        },
+        required: ['sheet'],
+      },
+    },
+    {
+      name: 'get_canvas_updates',
+      description: 'Drain unread canvas messages from the user: notes composed on the Axiom canvas, with their selection refs and a semantic summary of canvas changes the user staged (moves, groupings, drawn edges). CALL THIS whenever a tool response carries the ⚑ unread-canvas-message trailer, and reply with reply_to_canvas.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'await_canvas',
+      description: 'Canvas collaboration mode: block until the user sends a message from the canvas (or the window times out). Returns {messages} or {timedOut: true, keep_waiting: true} — when keep_waiting is true and you are still collaborating, call await_canvas again. Use when the user says they will drive from the canvas.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          timeoutSeconds: { type: 'number', description: 'Max wait, 5–45s', default: 40 },
+        },
+      },
+    },
+    {
+      name: 'reply_to_canvas',
+      description: 'Answer a canvas message. The reply renders on the canvas as an agent note threaded to the user\'s message (their note chip flips to "answered"). Always reply — the user is waiting on the canvas, not reading this chat.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          msgId: { type: 'string', description: 'Canvas message ID (from get_canvas_updates / await_canvas)' },
+          body: { type: 'string', description: 'Markdown reply' },
+        },
+        required: ['msgId', 'body'],
+      },
+    },
+    {
+      name: 'get_infra_for_files',
+      description: 'For a set of files, list which infra nodes they touch and via which edge kinds — e.g. "which files write to the production DB?" in reverse.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          fileIds: { type: 'array', items: { type: 'string' }, description: 'File IDs (UUIDs) or relative paths' },
+        },
+        required: ['fileIds'],
       },
     },
   ],
@@ -1477,12 +1773,342 @@ Steps to execute:
         break
       }
 
+      // ── Infra layer (INFRA_LAYER_PLAN.md Phase I1) ─────────────────────────
+      case 'list_infra_services': {
+        const res = await fetch('http://localhost:7743/api/registry/services')
+        if (!res.ok) throw new Error(`registry fetch failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'list_infra': {
+        await postAgentActivity(project.workspaceId, 'Agent listed infra nodes', 'info')
+        const res = await fetch(`http://localhost:7743/api/infra?workspace=${encodeURIComponent(project.workspaceId)}`)
+        if (!res.ok) throw new Error(`infra list failed: ${await res.text()}`)
+        const data = await res.json() as { nodes: any[]; edges: any[] }
+        if (args.status) {
+          data.nodes = (data.nodes ?? []).filter((n) => n.status === args.status)
+        }
+        result = data
+        break
+      }
+
+      case 'create_infra_node': {
+        const label = (args.name as string) || (args.service as string) || (args.category as string) || 'infra node'
+        await postAgentActivity(project.workspaceId, `Agent creating infra node "${label}"`, 'info')
+        const res = await fetch('http://localhost:7743/api/infra', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            name: args.name ?? '',
+            service: args.service ?? '',
+            category: args.category ?? '',
+            subtype: args.subtype ?? '',
+            config: args.config, // raw object — archd stores it as a JSON blob
+            createdBy: 'agent',
+          }),
+        })
+        if (!res.ok) {
+          const errMsg = await res.text()
+          await postAgentActivity(project.workspaceId, `Error creating infra node "${label}": ${errMsg}`, 'error')
+          throw new Error(`create infra failed: ${errMsg}`)
+        }
+        await postAgentActivity(project.workspaceId, `Infra node "${label}" created`, 'success')
+        result = await res.json()
+        break
+      }
+
+      case 'update_infra_node': {
+        const res = await fetch(`http://localhost:7743/api/infra/${encodeURIComponent(args.id as string)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            name: args.name,
+            service: args.service,
+            status: args.status,
+            config: args.config, // raw object — archd stores it as a JSON blob
+          }),
+        })
+        if (!res.ok) throw new Error(`update infra failed: ${await res.text()}`)
+        result = await res.json()
+        await postAgentActivity(project.workspaceId, `Agent updated infra node ${args.id}`, 'success')
+        break
+      }
+
+      case 'delete_infra_node': {
+        const res = await fetch(
+          `http://localhost:7743/api/infra/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`,
+          { method: 'DELETE' }
+        )
+        if (!res.ok) throw new Error(`delete infra failed: ${await res.text()}`)
+        result = await res.json()
+        await postAgentActivity(project.workspaceId, `Agent deleted infra node ${args.id}`, 'info')
+        break
+      }
+
+      case 'connect_infra': {
+        const srcType = (args.srcType as string) || 'file'
+        let srcId = args.src as string
+        // Resolve file relative paths to IDs (systems must be passed by ID).
+        if (srcType === 'file' && !/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(srcId)) {
+          const rows = await queryDb(project.workspaceId, `
+            SELECT f.id FROM files f
+            JOIN roots r ON f.root_id = r.id
+            WHERE r.workspace_id = ? AND (f.rel_path = ? OR f.path = ? OR f.rel_path LIKE ?)
+            LIMIT 1
+          `, [project.workspaceId, srcId, srcId, `%${srcId}`])
+          if (rows.length === 0) throw new Error(`File not found: ${srcId}`)
+          srcId = rows[0].id
+        }
+        await postAgentActivity(project.workspaceId, `Agent connecting ${args.src} → infra (${args.kind})`, 'info')
+        const res = await fetch('http://localhost:7743/api/infra/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            srcId,
+            srcType,
+            infraId: args.infraId,
+            kind: args.kind,
+            evidence: args.evidence,
+            createdBy: 'agent',
+          }),
+        })
+        if (!res.ok) throw new Error(`connect infra failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'get_activity_hotspots': {
+        const limit = args.limit ?? 20
+        const res = await fetch(
+          `http://localhost:7743/api/activity/hotspots?workspace=${encodeURIComponent(project.workspaceId)}&limit=${limit}`
+        )
+        if (!res.ok) throw new Error(`hotspots failed: ${await res.text()}`)
+        const hots = await res.json() as any[]
+        result = {
+          hotspots: hots,
+          note: hots.length > 0
+            ? 'Scores decay with a 24h half-life; normalized is the 0-1 percentile within this workspace.'
+            : 'No recent edit activity recorded. Activity tracking starts when files are saved while archd is running.',
+        }
+        break
+      }
+
+      case 'get_infra_for_files': {
+        const refs = (args.fileIds as string[]) ?? []
+        if (refs.length === 0) throw new Error('fileIds must not be empty')
+        const ids: string[] = []
+        for (const ref of refs) {
+          if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(ref)) {
+            ids.push(ref)
+          } else {
+            const rows = await queryDb(project.workspaceId, `
+              SELECT f.id FROM files f
+              JOIN roots r ON f.root_id = r.id
+              WHERE r.workspace_id = ? AND (f.rel_path = ? OR f.rel_path LIKE ?)
+              LIMIT 1
+            `, [project.workspaceId, ref, `%${ref}`])
+            if (rows.length > 0) ids.push(rows[0].id)
+          }
+        }
+        const placeholders = ids.map(() => '?').join(',')
+        result = await queryDb(project.workspaceId, `
+          SELECT f.rel_path AS file, d.dependency_type AS kind, d.evidence,
+                 i.id AS infraId, i.name AS infraName, i.category, i.provider, i.service
+          FROM dependencies d
+          JOIN files f ON f.id = d.src
+          JOIN infra_nodes i ON i.id = d.dst
+          WHERE d.src_type = 'file' AND d.dst_type = 'infra' AND d.src IN (${placeholders})
+          ORDER BY f.rel_path, i.name
+        `, ids)
+        break
+      }
+
+      // ── Sheets (UML experience layer — UML_UX_PLAN.md U1) ─────────────────
+      case 'list_sheets': {
+        const res = await fetch(`http://localhost:7743/api/sheets?workspace=${encodeURIComponent(project.workspaceId)}`)
+        if (!res.ok) throw new Error(`sheets list failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'get_sheet': {
+        const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
+        const res = await fetch(
+          `http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/asm?workspace=${encodeURIComponent(project.workspaceId)}`
+        )
+        if (!res.ok) throw new Error(`get sheet failed: ${await res.text()}`)
+        const data = await res.json() as { asm: string }
+        result = data.asm
+        break
+      }
+
+      case 'create_sheet': {
+        const members = (args.members as string[]) ?? []
+        const elements = []
+        for (const ref of members) {
+          elements.push(await resolveModelRef(project.workspaceId, ref))
+        }
+        await postAgentActivity(project.workspaceId, `Agent creating sheet "${args.name}"`, 'info')
+        const res = await fetch('http://localhost:7743/api/sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            name: args.name,
+            purpose: args.purpose,
+            createdBy: 'agent',
+            elements,
+          }),
+        })
+        if (!res.ok) throw new Error(`create sheet failed: ${await res.text()}`)
+        const sheet = await res.json() as { id: string }
+        await postAgentActivity(project.workspaceId, `Sheet "${args.name}" created`, 'success')
+        result = { created: sheet, note: `Sheet created with ${elements.length} elements. The user can open it from the sheet rail.` }
+        break
+      }
+
+      case 'add_to_sheet': {
+        const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
+        const elements = []
+        for (const ref of (args.members as string[]) ?? []) {
+          elements.push(await resolveModelRef(project.workspaceId, ref))
+        }
+        const res = await fetch(`http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/elements`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, elements: elements.map(e => ({ ...e, addedBy: 'agent' })) }),
+        })
+        if (!res.ok) throw new Error(`add to sheet failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'annotate_sheet': {
+        let sheetId: string | undefined
+        if (args.sheet) sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
+        let targetType: string | undefined
+        let targetId: string | undefined
+        if (args.target) {
+          const ref = await resolveModelRef(project.workspaceId, args.target as string)
+          if (ref.fileId) { targetType = 'file'; targetId = ref.fileId }
+          else if (ref.systemId) { targetType = 'system'; targetId = ref.systemId }
+          else if (ref.infraId) { targetType = 'infra'; targetId = ref.infraId }
+        }
+        const res = await fetch('http://localhost:7743/api/annotations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            sheetId,
+            targetType, targetId,
+            body: args.body,
+            author: 'agent',
+          }),
+        })
+        if (!res.ok) throw new Error(`annotate failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
+      case 'plan_element': {
+        const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
+        const res = await fetch(`http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/planned`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            name: args.name,
+            kind: args.kind ?? 'class',
+            declaredPath: args.declaredPath ?? '',
+            members: (args.members as any[] ?? []).map(m => ({ ...m, realized: false })),
+            notes: args.notes ?? '',
+            shape: args.shape ?? '',
+            color: args.color ?? '',
+            createdBy: 'agent',
+          }),
+        })
+        if (!res.ok) throw new Error(`plan element failed: ${await res.text()}`)
+        result = await res.json()
+        await postAgentActivity(project.workspaceId, `Agent planned element "${args.name}"`, 'success')
+        break
+      }
+
+      case 'get_build_spec': {
+        const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
+        const res = await fetch(
+          `http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/buildspec?workspace=${encodeURIComponent(project.workspaceId)}`
+        )
+        if (!res.ok) throw new Error(`build spec failed: ${await res.text()}`)
+        const data = await res.json() as { buildSpec: string }
+        result = data.buildSpec
+        break
+      }
+
+      // ── Canvas → agent channel (UML_UX_PLAN.md U-C) ────────────────────────
+      case 'get_canvas_updates': {
+        const res = await fetch(
+          `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
+        )
+        if (!res.ok) throw new Error(`canvas outbox failed: ${await res.text()}`)
+        const msgs = await res.json() as any[]
+        result = {
+          messages: msgs ?? [],
+          note: (msgs ?? []).length > 0
+            ? 'Reply to each with reply_to_canvas(msgId, body) — the user is waiting on the canvas.'
+            : 'No unread canvas messages.',
+        }
+        break
+      }
+
+      case 'await_canvas': {
+        const timeoutS = Math.min(Math.max((args.timeoutSeconds as number) ?? 40, 5), 45)
+        const deadline = Date.now() + timeoutS * 1000
+        let messages: any[] = []
+        while (Date.now() < deadline) {
+          const res = await fetch(
+            `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
+          )
+          if (res.ok) {
+            messages = await res.json() as any[] ?? []
+            if (messages.length > 0) break
+          }
+          await new Promise(r => setTimeout(r, 2000))
+        }
+        result = messages.length > 0
+          ? { messages, note: 'Reply with reply_to_canvas(msgId, body), then call await_canvas again if still collaborating.' }
+          : { timedOut: true, keep_waiting: true, note: 'No canvas message in the window. Call await_canvas again to keep collaborating, or stop if the session is over.' }
+        break
+      }
+
+      case 'reply_to_canvas': {
+        const res = await fetch('http://localhost:7743/api/canvas/reply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            msgId: args.msgId,
+            body: args.body,
+          }),
+        })
+        if (!res.ok) throw new Error(`reply failed: ${await res.text()}`)
+        result = await res.json()
+        break
+      }
+
       default:
         throw new Error(`Unknown tool: ${name}`)
     }
 
+    const trailer = await canvasTrailer(project.workspaceId, name)
     return {
-      content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }],
+      content: [{
+        type: 'text',
+        text: (typeof result === 'string' ? result : JSON.stringify(result, null, 2)) + trailer,
+      }],
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
