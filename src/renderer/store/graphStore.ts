@@ -9,6 +9,8 @@ import type {
   DbGraphPatch,
 } from '../../shared/types'
 
+import { handleSheetPatch } from './sheetStore'
+
 export interface CallTraceStep {
   callerFile: string
   callerSymbol: string
@@ -365,54 +367,81 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     expandedSystemIds: new Set(),
   }),
 
-  applyDbPatch: (patch) => set((state) => {
-    switch (patch.type) {
-      case 'system:upserted': {
-        const sys = patch.payload as DbSystem
-        const exists = state.systems.some(s => s.id === sys.id)
-        return {
-          systems: exists
-            ? state.systems.map(s => s.id === sys.id ? sys : s)
-            : [...state.systems, sys],
+  applyDbPatch: (patch) => {
+    // Sheet/annotation/canvas patches live in the sheet store (one-way dep).
+    handleSheetPatch(patch as { type: string; payload: unknown })
+    set((state) => {
+      switch (patch.type) {
+        case 'system:upserted': {
+          const sys = patch.payload as DbSystem
+          const exists = state.systems.some(s => s.id === sys.id)
+          return {
+            systems: exists
+              ? state.systems.map(s => s.id === sys.id ? sys : s)
+              : [...state.systems, sys],
+          }
         }
-      }
-      case 'system:deleted': {
-        const { id } = patch.payload as { id: string }
-        const next = new Set(state.expandedSystemIds)
-        next.delete(id)
-        return {
-          systems: state.systems.filter(s => s.id !== id),
-          expandedSystemIds: next,
+        case 'system:deleted': {
+          const { id } = patch.payload as { id: string }
+          const next = new Set(state.expandedSystemIds)
+          next.delete(id)
+          return {
+            systems: state.systems.filter(s => s.id !== id),
+            expandedSystemIds: next,
+          }
         }
-      }
-      case 'file:updated': {
-        const file = patch.payload as DbFile
-        const exists = state.files.some(f => f.id === file.id)
-        return {
-          files: exists
-            ? state.files.map(f => f.id === file.id ? file : f)
-            : [...state.files, file],
+        case 'file:updated': {
+          const file = patch.payload as DbFile
+          const exists = state.files.some(f => f.id === file.id)
+          return {
+            files: exists
+              ? state.files.map(f => f.id === file.id ? file : f)
+              : [...state.files, file],
+          }
         }
-      }
-      case 'file:assigned': {
-        const { fileId, systemId } = patch.payload as { fileId: string; systemId: string }
-        return {
-          files: state.files.map(f => f.id === fileId ? { ...f, systemId } : f),
+        case 'file:assigned': {
+          const { fileId, systemId } = patch.payload as { fileId: string; systemId: string }
+          return {
+            files: state.files.map(f => f.id === fileId ? { ...f, systemId } : f),
+          }
         }
-      }
-      case 'infra:upserted': {
-        const node = patch.payload as DbInfraNode
-        const exists = state.infraNodes.some(n => n.id === node.id)
-        return {
-          infraNodes: exists
-            ? state.infraNodes.map(n => n.id === node.id ? node : n)
-            : [...state.infraNodes, node],
+        case 'infra:upserted': {
+          const node = patch.payload as DbInfraNode
+          const exists = state.infraNodes.some(n => n.id === node.id)
+          return {
+            infraNodes: exists
+              ? state.infraNodes.map(n => n.id === node.id ? node : n)
+              : [...state.infraNodes, node],
+          }
         }
+        case 'infra:deleted': {
+          const { id } = patch.payload as { id: string }
+          return {
+            infraNodes: state.infraNodes.filter(n => n.id !== id),
+            // the daemon's trigger removed the edges; mirror that locally
+            dependencies: state.dependencies.filter(d => d.src !== id && d.dst !== id),
+          }
+        }
+        case 'infra:connected': {
+          const dep = patch.payload as DbDependency
+          const exists = state.dependencies.some(d => d.id === dep.id ||
+            (d.src === dep.src && d.dst === dep.dst && d.dependencyType === dep.dependencyType))
+          return {
+            dependencies: exists
+              ? state.dependencies.map(d =>
+                  (d.id === dep.id || (d.src === dep.src && d.dst === dep.dst && d.dependencyType === dep.dependencyType)) ? dep : d)
+              : [...state.dependencies, dep],
+          }
+        }
+        case 'infra:disconnected': {
+          const { id } = patch.payload as { id: string }
+          return { dependencies: state.dependencies.filter(d => d.id !== id) }
+        }
+        default:
+          return state
       }
-      default:
-        return state
-    }
-  }),
+    })
+  },
 
   toggleSystemExpanded: (id) => set((state) => {
     const next = new Set(state.expandedSystemIds)

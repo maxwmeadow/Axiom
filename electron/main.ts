@@ -160,8 +160,29 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow!.show()
+  // Show as soon as the renderer is usable. ready-to-show alone is NOT
+  // reliable on Windows (it can simply never fire for initially-hidden
+  // windows on some GPU/driver combos — the app stays invisible while
+  // everything else runs). did-finish-load always fires, so show on
+  // whichever comes first, with a timed fallback as the last resort.
+  const showOnce = (source: string) => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      console.log(`[main] showing window (${source})`)
+      mainWindow.show()
+    }
+  }
+  mainWindow.once('ready-to-show', () => showOnce('ready-to-show'))
+  mainWindow.webContents.once('did-finish-load', () => showOnce('did-finish-load'))
+  setTimeout(() => showOnce('fallback-timer'), 5000)
+
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error(`[main] renderer failed to load: ${code} ${desc} url=${url}`)
+  })
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[main] renderer process gone:', details.reason, details.exitCode)
+  })
+  mainWindow.on('unresponsive', () => {
+    console.error('[main] renderer is unresponsive')
   })
 
   mainWindow.on('closed', () => {

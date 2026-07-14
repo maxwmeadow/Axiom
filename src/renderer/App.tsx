@@ -15,6 +15,8 @@ import { ProjectSetupScreen } from './screens/ProjectSetupScreen'
 import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
 
 import { useGraphStore, connectToArchd } from './store/graphStore'
+import { useRegistryStore } from './store/registryStore'
+import { SheetRail } from './components/SheetRail'
 import type { ProjectConfig } from '../shared/types'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -41,6 +43,8 @@ export default function App() {
     if (!window.axiom) {
       connectToArchd()
     }
+    // Infra service registry — one fetch, shared by canvas nodes and dialogs
+    void useRegistryStore.getState().fetchRegistry()
   }, [])
 
   // Keyboard shortcuts
@@ -79,6 +83,26 @@ export default function App() {
           rootPath: config.rootPath,
           ignoredPaths: config.ignoredPaths,
         }),
+      }).then(() => {
+        // Snapshot is pushed over WS on open, but if the socket connects a
+        // beat late the broadcast is missed and the canvas stays empty — pull
+        // it explicitly, retrying while indexing warms up.
+        let tries = 0
+        const pull = async () => {
+          tries++
+          try {
+            const res = await fetch(`http://127.0.0.1:7743/api/snapshot/${config.id}`)
+            if (res.ok) {
+              const snap = await res.json()
+              if ((snap.systems?.length ?? 0) > 0 || (snap.files?.length ?? 0) > 0 || tries >= 10) {
+                applySnapshot(snap)
+                if ((snap.systems?.length ?? 0) > 0) return
+              }
+            }
+          } catch { /* archd still starting */ }
+          if (tries < 10) setTimeout(pull, 1500)
+        }
+        void pull()
       }).catch(err => console.error('[openProject] archd workspace error:', err))
     } else {
       // Browser demo: load fake data
@@ -165,8 +189,12 @@ export default function App() {
           projectName={currentProject.name}
         />
 
-        {/* Canvas area */}
-        <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        {/* Sheet rail + canvas area */}
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+          <SheetRail />
+          <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          {/* REVISION 2: sheets are layers over the live canvas, not separate
+              views — AxiomCanvas renders the base layer + active sheet overlay. */}
           <ErrorBoundary>
             <AxiomCanvas />
           </ErrorBoundary>
@@ -196,6 +224,7 @@ export default function App() {
 
           {/* Investigation Capture replay controls */}
           <ReplayBar />
+          </div>
         </div>
 
         {/* Status bar */}

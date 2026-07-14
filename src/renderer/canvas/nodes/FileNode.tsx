@@ -3,6 +3,8 @@ import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react'
 import type { FileNodeData } from '../AxiomCanvas'
 import type { RuntimeNodeState } from '../../store/graphStore'
 import { useGraphStore } from '../../store/graphStore'
+import { ShapeBackdrop } from './NodeShell'
+import { siPython } from 'simple-icons'
 
 function getLangIconContent(lang: string): React.ReactNode {
   switch (lang.toLowerCase()) {
@@ -15,7 +17,8 @@ function getLangIconContent(lang: string): React.ReactNode {
     case 'jsx':
       return <><rect width="24" height="24" rx="2" fill="#e8b84b" /><text x="20" y="19" fill="#303030" fontSize="8" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="end">JSX</text></>
     case 'python':
-      return <><rect width="24" height="24" rx="2" fill="#3572a5" opacity="0.9" /><text x="12" y="15.5" fill="#ffd343" fontSize="9" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="middle">PY</text></>
+      // The actual Python mark (two-snake plus), not a lettered chip.
+      return <path d={siPython.path} fill="#4B8BBE" />
     case 'go':
       return <><rect width="24" height="24" rx="2" fill="#00add8" /><text x="12" y="15.5" fill="#fff" fontSize="9" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="middle">GO</text></>
     case 'rust':
@@ -123,6 +126,27 @@ export function FileNode({ data, selected }: NodeProps) {
   // looks like a depth-0 node at zoom 0.5. Detail states gate on this.
   const effZoom = d.currentZoom * s
   const churnColor = churn > 0.7 ? '#ef4444' : churn > 0.4 ? '#f59e0b' : 'transparent'
+  // Unified shape vocabulary (Rev 2b): class-first header when the file IS its
+  // class; cylinder/hexagon files get a shape backdrop over the same card.
+  // Class-first only fires when it ADDS information: in class-per-file
+  // languages (C#, Java) className === filename for nearly every file, and a
+  // chip on 90% of nodes is noise, not signal.
+  const stem = (d.label.split('.')[0] ?? '').toLowerCase().replace(/[_-]/g, '')
+  const classFirst = d.shape === 'class' && !!d.displayName &&
+    d.displayName.toLowerCase().replace(/[_-]/g, '') !== stem
+  // Shape = structure: classes wear the chamfered classbox; cylinder/hexagon
+  // only via explicit override (never guessed). Plain files are 'box' — every
+  // card renders through the SAME ShapeBackdrop so chrome cannot fork.
+  const shellShape = d.shape === 'class' ? 'classbox' as const
+    : d.shape === 'cylinder' || d.shape === 'hexagon' ? d.shape : 'box' as const
+  // Perimeter stroke = accent + heat in one channel (design spec): quiet
+  // hairline by default, activity heat and states shift the whole silhouette.
+  const perimeter = selected ? 'var(--accent)'
+    : d.agentTouched ? 'var(--agent-color)'
+    : churn > 0.7 ? '#ff453a'
+    : churn > 0.4 ? '#ff9f0a'
+    : 'var(--border)'
+  const perimeterW = selected || churn > 0.4 ? 1.6 : 1
 
   const previewOffset = (d as any).previewOffset as { x: number; y: number } | null | undefined
   const translateX = previewOffset?.x ?? 0
@@ -225,32 +249,39 @@ export function FileNode({ data, selected }: NodeProps) {
       {/* Content plane: laid out at base (depth-0) size, uniformly scaled to fit
           the node box so every file node looks identical in its own frame. */}
       <div
-        className={`glass-node ${selected ? 'glass-node-selected' : ''}`}
+        // ONE chrome system: the ShapeBackdrop draws surface, silhouette,
+        // shadow, and state for every shape — no CSS-class fork, ever.
         style={{
           width: `${100 / s}%`,
           height: `${100 / s}%`,
           transform: `scale(${s})`,
           transformOrigin: 'top left',
-          padding: '6px 10px 6px 12px',
+          position: 'relative',
+          padding: shellShape === 'hexagon' ? '6px 16px 6px 18px'
+            : shellShape === 'cylinder' ? '13px 10px 12px 12px'
+            : '6px 10px 6px 12px',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'flex-start',
           gap: 4,
-          border: `1px solid ${d.agentTouched ? 'var(--agent-color)' : selected ? 'var(--accent)' : 'var(--border)'}`,
-          borderLeft: `3px solid ${churnColor !== 'transparent' ? churnColor : 'var(--file-accent)'}`,
+          background: 'transparent',
         }}
       >
-      {/* Name compartment: icon + filename left, line count right, full-bleed rule below */}
+      <ShapeBackdrop shape={shellShape} stroke={perimeter} strokeWidth={perimeterW} />
+      {/* Name compartment: icon + filename left, line count right. Rule is
+          INSET (not full-bleed) so it never collides with shaped silhouettes. */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
         gap: 7,
         minWidth: 0,
         flexShrink: 0,
-        margin: '0 -10px 0 -12px',
-        padding: '0 10px 5px 12px',
+        paddingBottom: 5,
+        paddingRight: 20,   // clears the corner line-count figure
         borderBottom: '1px solid var(--border-dim)',
       }}>
+        {/* Language icon ALWAYS — class-ness is expressed by the node SHAPE
+            (chamfered classbox), never by hijacking the icon slot. */}
         <svg viewBox="0 0 24 24" width={14} height={14} style={{ flexShrink: 0 }}>
           {getLangIconContent(d.language ?? 'unknown')}
         </svg>
@@ -266,17 +297,25 @@ export function FileNode({ data, selected }: NodeProps) {
           minWidth: 0,
           fontFamily: 'var(--font-mono)',
         }} title={d.relPath}>
-          {d.label}
+          {/* class-first: the file IS its class — class name leads; the real
+              filename lives in the hover tooltip, never cramped inline. */}
+          {classFirst ? d.displayName : d.label}
         </span>
-        {d.lineCount > 0 && (
-          <span style={{
-            fontSize: 9,
-            color: 'var(--text-secondary)',
-            fontFamily: 'var(--font-mono)',
-            flexShrink: 0,
-          }}>{d.lineCount}L</span>
-        )}
       </div>
+      {/* Line count — a quiet figure tucked under the corner cut, not a badge
+          shouting from the header. */}
+      {d.lineCount > 0 && (
+        <span style={{
+          position: 'absolute',
+          top: shellShape === 'classbox' ? 13 : 4,
+          right: 6,
+          fontSize: 7.5,
+          color: 'var(--text-dim)',
+          fontFamily: 'var(--font-mono)',
+          letterSpacing: '0.04em',
+          pointerEvents: 'none',
+        }}>{d.lineCount}</span>
+      )}
 
       {effZoom < 1.2 ? (
         /* State 1: Compact — line count lives in the header, only churn here */

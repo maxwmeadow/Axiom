@@ -1,0 +1,180 @@
+// NodeShell — the unified shape shell every canvas node converges on
+// (UML_UX_PLAN.md Revision 2b: node = Shell × Body × Status).
+//
+// Geometry is drawn as an inline SVG path INSIDE the node's bounding box:
+// - never CSS clip-path: it clips badges/tooltips (overflow) and hijacks
+//   clicks in the transparent corners
+// - never chrome outside the bbox: grid-drop offsets and resize math assume
+//   the DOM rect IS the node
+// The body renders above the SVG with shape-aware padding so content clears
+// the cylinder caps / hexagon points / folder tab.
+import React, { useLayoutEffect, useRef, useState } from 'react'
+
+export type ShellShape = 'box' | 'classbox' | 'folder' | 'cylinder' | 'hexagon' | 'note'
+
+export interface NodeShellProps {
+  shape: ShellShape
+  accent: string          // stroke/accent color
+  dashed?: boolean        // planned/proposed vs real
+  selected?: boolean
+  fill?: string           // defaults to the raised surface
+  children: React.ReactNode
+  minWidth?: number
+  maxWidth?: number
+}
+
+// Shape metrics: how much the body must inset so content clears the geometry.
+const INSETS: Record<ShellShape, { top: number; right: number; bottom: number; left: number }> = {
+  box:      { top: 0,  right: 0,  bottom: 0,  left: 0 },
+  classbox: { top: 0,  right: 0,  bottom: 0,  left: 0 },
+  folder:   { top: 13, right: 0,  bottom: 0,  left: 0 },   // tab band inside the bbox
+  cylinder: { top: 12, right: 0,  bottom: 10, left: 0 },   // ellipse caps
+  hexagon:  { top: 0,  right: 14, bottom: 0,  left: 14 },  // side points
+  note:     { top: 0,  right: 0,  bottom: 0,  left: 0 },   // dog-ear lives in a corner
+}
+
+function shellPath(shape: ShellShape, w: number, h: number): string {
+  switch (shape) {
+    case 'classbox': {
+      // The class silhouette: chamfered top corners — the compartment box
+      // with its "corners cut", distinct at a glance from a plain file card.
+      const c = 11
+      return `M ${c} 1 L ${w - c} 1 L ${w - 1} ${c} L ${w - 1} ${h - 1} L 1 ${h - 1} L 1 ${c} Z`
+    }
+    case 'folder': {
+      const tabW = Math.min(86, w * 0.42)
+      const tabH = 13
+      return `M 1 ${tabH} L 1 1.5 L ${tabW} 1.5 L ${tabW + 8} ${tabH} L ${w - 1} ${tabH} L ${w - 1} ${h - 1} L 1 ${h - 1} Z`
+    }
+    case 'cylinder': {
+      const ry = 10
+      return `M 1 ${ry + 1} A ${w / 2 - 1} ${ry} 0 0 1 ${w - 1} ${ry + 1} ` +
+             `L ${w - 1} ${h - ry - 1} A ${w / 2 - 1} ${ry} 0 0 1 1 ${h - ry - 1} Z ` +
+             `M 1 ${ry + 1} A ${w / 2 - 1} ${ry} 0 0 0 ${w - 1} ${ry + 1}`
+    }
+    case 'hexagon': {
+      const p = 14
+      return `M ${p} 1 L ${w - p} 1 L ${w - 1} ${h / 2} L ${w - p} ${h - 1} L ${p} ${h - 1} L 1 ${h / 2} Z`
+    }
+    case 'note': {
+      const ear = 14
+      return `M 1 1 L ${w - ear} 1 L ${w - 1} ${ear} L ${w - 1} ${h - 1} L 1 ${h - 1} Z ` +
+             `M ${w - ear} 1 L ${w - ear} ${ear} L ${w - 1} ${ear}`
+    }
+    default:
+      return `M 1 1 L ${w - 1} 1 L ${w - 1} ${h - 1} L 1 ${h - 1} Z`
+  }
+}
+
+// ShapeBackdrop — the fluid variant for nodes whose size is owned by the
+// layout engine (file cards in the grid): absolutely fills the parent and
+// draws the shell path behind existing content. Parent must be
+// position:relative with its own background suppressed.
+// Chrome spec (design consult, 2026-07): one drop-shadow for every card
+// shape; accent/heat expressed as a PERIMETER stroke color shift (quiet =
+// hairline, hot/selected = full accent), never an asymmetric bar glued to
+// one edge — the silhouette IS the highlight surface.
+export const CARD_SHADOW = 'drop-shadow(0px 3px 6px rgba(0,0,0,0.45))'
+
+export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed }: {
+  shape: ShellShape
+  stroke: string
+  strokeWidth?: number
+  dashed?: boolean
+}) {
+  const ref = useRef<SVGSVGElement>(null)
+  const [size, setSize] = useState({ w: 180, h: 72 })
+  useLayoutEffect(() => {
+    const el = ref.current?.parentElement
+    if (!el) return
+    const ro = new ResizeObserver(() => setSize({ w: el.offsetWidth, h: el.offsetHeight }))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const { w, h } = size
+  return (
+    <svg
+      ref={ref}
+      width={w} height={h}
+      // zIndex -1: the parent's transform creates a stacking context, so this
+      // sits behind the card's static content but still inside the node.
+      // zIndex 0 painted the filled path OVER the content (empty-card bug).
+      style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'visible', zIndex: -1 }}
+    >
+      <path
+        d={shellPath(shape, w, h)}
+        fill="var(--bg-surface)"
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        strokeDasharray={dashed ? '6 4' : undefined}
+        style={{ filter: CARD_SHADOW, transition: 'stroke 0.2s ease' }}
+      />
+    </svg>
+  )
+}
+
+export function NodeShell({
+  shape, accent, dashed, selected, fill = 'var(--bg-raised)',
+  children, minWidth = 190, maxWidth = 300,
+}: NodeShellProps) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ w: minWidth, h: 60 })
+
+  // Track content size so the SVG shell always matches the DOM rect.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect()
+      // getBoundingClientRect is zoom-scaled inside ReactFlow — use offset* instead
+      setSize({ w: el.offsetWidth || r.width, h: el.offsetHeight || r.height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const inset = INSETS[shape]
+  const { w, h } = size
+
+  return (
+    <div
+      ref={ref}
+      style={{
+        position: 'relative',
+        minWidth,
+        maxWidth,
+        overflow: 'visible',   // badges/tooltips/handles must escape the shell
+        fontFamily: 'var(--font-mono)',
+      }}
+    >
+      <svg
+        width={w} height={h}
+        style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'visible' }}
+      >
+        <path
+          d={shellPath(shape, w, h)}
+          fill={fill}
+          stroke={accent}
+          strokeOpacity={selected ? 1 : 0.55}
+          strokeWidth={selected ? 1.8 : 1.2}
+          strokeDasharray={dashed ? '6 4' : undefined}
+          style={{ filter: CARD_SHADOW, transition: 'stroke-opacity 0.2s ease' }}
+        />
+        {shape === 'folder' && (
+          <text x={8} y={10.5} style={{ fontSize: 6.5, letterSpacing: '0.1em', fill: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
+            SYSTEM
+          </text>
+        )}
+      </svg>
+      <div style={{
+        position: 'relative',
+        paddingTop: inset.top,
+        paddingRight: inset.right,
+        paddingBottom: inset.bottom,
+        paddingLeft: inset.left,
+      }}>
+        {children}
+      </div>
+    </div>
+  )
+}

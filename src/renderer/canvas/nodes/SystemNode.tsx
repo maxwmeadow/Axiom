@@ -98,6 +98,9 @@ export function SystemNode({ data, selected }: NodeProps) {
   const { color, colorRgb, name, source, fileCount, childSystemCount, agentTouched, isChild,
     childrenVisible, selfScale, selfBlur, isDropTarget, onResizeStart, onResizeEnd, depth } = d
 
+  // 0..1 reveal of inner contents (zoom-gated). Drives the title crossfade:
+  // big centered title while contents are hidden ↔ small tab-band title once
+  // they reveal. The folder silhouette itself renders at all zooms.
   const containerAlpha = typeof childrenVisible === 'number' ? childrenVisible : (childrenVisible ? 1 : 0)
   const scale = typeof selfScale === 'number' ? selfScale : 1
   const blur  = typeof selfBlur === 'number' ? selfBlur : 0
@@ -114,7 +117,6 @@ export function SystemNode({ data, selected }: NodeProps) {
   const depthIdx = Math.min(depth ?? 0, DEPTH_TITLE_PX.length - 1)
   const titlePx  = DEPTH_TITLE_PX[depthIdx]
   const dotPx    = titlePx * 0.55
-  const badgePx  = titlePx * 0.80
   const padX     = Math.round(titlePx * 0.75)
   const padY     = Math.round(titlePx * 0.55)
   const radius   = Math.round(titlePx * 0.55)
@@ -123,7 +125,6 @@ export function SystemNode({ data, selected }: NodeProps) {
   // row. Draw the rule at 80% of that so there's clear space between the rule
   // and the cell tops; the title centers vertically inside the shorter band.
   const reservedGap = d.gridGap ?? Math.round(padY * 2 + titlePx * 1.25)
-  const headerH = Math.round(reservedGap * 0.8)
 
   const handles = (
     <>
@@ -134,19 +135,89 @@ export function SystemNode({ data, selected }: NodeProps) {
     </>
   )
 
+  // Folder silhouette (Rev 2b): the node outline IS the UML package shape —
+  // tab across the top-left holding the title, body below. Proportional to
+  // the node so it reads at every zoom, unlike a fixed-px decoration.
+  const shellRef = React.useRef<HTMLDivElement>(null)
+  const [shellSize, setShellSize] = React.useState({ w: 200, h: 120 })
+  React.useLayoutEffect(() => {
+    const el = shellRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setShellSize({ w: el.offsetWidth, h: el.offsetHeight }))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  // Mirror NodeShell's folder proportions (the sheet-layer look): slim tab
+  // with the tiny SYSTEM label, title full-width below. CONSTRAINT: the whole
+  // chrome (tab + title band) must fit inside the grid's reserved gap — the
+  // layout gives exactly one gridGap of headroom and eight drag/snap sites
+  // assume it, so the chrome scales to the budget, never the other way.
+  const tabH = Math.round(reservedGap * 0.38)
+  const titleBandH = reservedGap - tabH
+  const titleFont = Math.min(titlePx, Math.round(titleBandH * 0.72))
+  const badgeFont = Math.round(titleFont * 0.8)
+  const tabW = Math.min(Math.max(shellSize.w * 0.3, titleFont * 6), shellSize.w * 0.5)
+  const tabSlant = tabH * 0.65
+
+  // Big centered title — the collapsed identity. Fades out as contents reveal.
+  const bigTitleFont = Math.max(14, Math.min(shellSize.w * 0.11, shellSize.h * 0.2, 72))
+  const bigTitle = (
+    <div style={{
+      position: 'absolute',
+      inset: 0,
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: bigTitleFont * 0.25,
+      zIndex: 15,
+      pointerEvents: 'none',
+      opacity: 1 - containerAlpha,
+      transition: 'opacity 0.25s ease',
+      padding: `0 ${padX}px`,
+    }}>
+      <span style={{
+        fontSize: bigTitleFont,
+        fontWeight: 700,
+        fontFamily: 'var(--font-mono)',
+        color: 'var(--text-primary)',
+        letterSpacing: '-0.02em',
+        maxWidth: '100%',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        textAlign: 'center',
+      }}>{name}</span>
+      {totalCount > 0 && (
+        <span style={{
+          fontSize: Math.max(9, bigTitleFont * 0.3),
+          fontFamily: 'var(--font-mono)',
+          fontWeight: 700,
+          color,
+          border: '1px solid var(--border-dim)',
+          background: 'var(--bg-raised)',
+          padding: `${bigTitleFont * 0.08}px ${bigTitleFont * 0.25}px`,
+        }}>{totalCount}</span>
+      )}
+    </div>
+  )
+
   const header = (
     <div style={{
       position: 'absolute',
-      top: 0, left: padX, right: padX,
-      height: headerH,
+      top: tabH, left: padX, right: padX,
+      height: titleBandH,
       display: 'flex',
       alignItems: 'center',
       gap: dotPx * 0.75,
       zIndex: 20,
-      overflow: 'visible',
+      overflow: 'hidden',
+      // crossfade partner of the big centered title
+      opacity: containerAlpha,
+      transition: 'opacity 0.25s ease',
     }}>
       <span style={{
-        fontSize: titlePx,
+        fontSize: titleFont,
         fontWeight: 600,
         fontFamily: 'var(--font-mono)',
         color: 'var(--text-primary)',
@@ -160,31 +231,14 @@ export function SystemNode({ data, selected }: NodeProps) {
       }}>
         {name}
       </span>
-      {totalCount > 0 && (
-        <span style={{
-          fontSize: badgePx,
-          color,
-          background: 'var(--bg-raised)',
-          border: '1px solid var(--border-dim)',
-          fontFamily: 'var(--font-mono)',
-          padding: `${badgePx * 0.2}px ${badgePx * 0.65}px`,
-          fontWeight: 700,
-          flexShrink: 0,
-          whiteSpace: 'nowrap',
-          pointerEvents: 'none',
-          marginTop: (titlePx - badgePx) * 0.15,
-        }}>
-          {totalCount}
-        </span>
-      )}
       {source === 'agent' && (
         <span style={{
-          fontSize: badgePx * 0.85,
+          fontSize: badgeFont * 0.85,
           color: 'var(--agent-color)',
           background: 'var(--bg-raised)',
           border: '1px solid var(--agent-color)',
           fontFamily: 'var(--font-mono)',
-          padding: `${badgePx * 0.12}px ${badgePx * 0.5}px`,
+          padding: `${badgeFont * 0.12}px ${badgeFont * 0.5}px`,
           flexShrink: 0,
           pointerEvents: 'none',
         }}>
@@ -199,37 +253,84 @@ export function SystemNode({ data, selected }: NodeProps) {
 
   const dimmed = !!(d as any).dimmed
 
+  const strokeColor = isDropTarget || selected ? color : 'var(--border)'
+  const strokeW = isDropTarget ? 2.5 : selected ? 2 : 1
+
   return (
-    <div style={{
+    <div ref={shellRef} style={{
       width: '100%', height: '100%',
-      border: `1px solid ${isDropTarget || selected ? color : 'var(--border)'}`,
-      borderLeft: `3px solid ${color}`,
-      background: panelBg,
-      boxShadow: isDropTarget || selected ? `0 0 0 ${isDropTarget ? 2 : 1}px ${color}` : 'none',
+      // The folder SVG owns ALL chrome — a rect background/border here would
+      // fill the tab notch and fight the silhouette (the "two systems" bug).
+      background: 'transparent',
       transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
       filter: blur > 0.1 ? `blur(${blur}px)` : undefined,
       opacity: dimmed ? 0.3 : 1,
       transformOrigin: 'center center',
-      transition: 'border 0.12s, box-shadow 0.15s, transform 0.22s cubic-bezier(0.25,1,0.5,1), filter 0.18s ease-out, opacity 0.3s ease',
+      transition: 'transform 0.22s cubic-bezier(0.25,1,0.5,1), filter 0.18s ease-out, opacity 0.3s ease',
       position: 'relative',
       overflow: 'hidden',
     }}>
       <NodeResizer isVisible={selected} minWidth={60} minHeight={40} color={color}
         onResizeStart={(_e, p) => onResizeStart?.(p.width, p.height)}
         onResizeEnd={(_e, p) => onResizeEnd?.(p.width, p.height)} />
-      {/* Header compartment rule — UML-style name box across the full width */}
-      <div style={{
-        position: 'absolute',
-        top: 0, left: 0, right: 0,
-        height: headerH,
-        borderBottom: `1px solid var(--border-dim)`,
-        pointerEvents: 'none',
-        opacity: containerAlpha,
-        transition: 'opacity 0.15s ease',
-        zIndex: 1,
-      }} />
+      {/* Folder silhouette — outline + fill in one path, tab top-left. */}
+      <svg
+        width={shellSize.w} height={shellSize.h}
+        style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+      >
+        <path
+          d={`M 1 ${shellSize.h - 1} L 1 1 L ${tabW} 1 L ${tabW + tabSlant} ${tabH} ` +
+             `L ${shellSize.w - 1} ${tabH} L ${shellSize.w - 1} ${shellSize.h - 1} Z`}
+          fill={panelBg}
+          stroke={strokeColor}
+          strokeWidth={strokeW}
+        />
+        {/* drafting-table left accent rule */}
+        <line x1={2} y1={2} x2={2} y2={shellSize.h - 2} stroke={color} strokeWidth={3} />
+        {/* tiny legend in the tab, same as the sheet-layer folder */}
+        <text x={padX * 0.8} y={tabH * 0.72} style={{
+          fontSize: tabH * 0.5, letterSpacing: '0.12em',
+          fill: 'var(--text-dim)', fontFamily: 'var(--font-mono)',
+        }}>SYSTEM</text>
+        {/* item count — a small bordered chip nested INSIDE the tab at its
+            right end, right edge slanted to echo the tab's cut. */}
+        {totalCount > 0 && (() => {
+          const legendFont = tabH * 0.5
+          const yT = 3.5                    // chip inset from the tab's top edge
+          const yB = tabH - 1               // sits low, riding the tab line
+          const gapR = 2.5                  // horizontal clearance to the tab slant
+          // Right edge runs EXACTLY parallel to the tab's slant at gapR.
+          const slope = tabSlant / Math.max(tabH - 1, 1)
+          const chipSlant = slope * (yB - yT)
+          const chipW = legendFont * 0.62 * String(totalCount).length + tabH * 0.55
+          // Anchored at the slant: more digits → chipW grows → x0 moves LEFT;
+          // the right edge never moves.
+          const x1 = tabW + slope * (yT - 1) - gapR  // top-right corner
+          const x0 = x1 - chipW                      // left edge
+          return (
+            <g opacity={containerAlpha} style={{ transition: 'opacity 0.25s ease' }}>
+              <path
+                d={`M ${x0} ${yB} L ${x0} ${yT} L ${x1} ${yT} L ${x1 + chipSlant} ${yB} Z`}
+                fill="var(--bg-raised)"
+                stroke={strokeColor}
+                strokeWidth={1}
+              />
+              <text
+                x={x0 + (chipW + chipSlant * 0.35) / 2} y={tabH * 0.72}
+                textAnchor="middle"
+                style={{
+                  fontSize: legendFont, fontWeight: 700,
+                  fill: color, fontFamily: 'var(--font-mono)',
+                  letterSpacing: '0.05em',
+                }}
+              >{totalCount}</text>
+            </g>
+          )
+        })()}
+      </svg>
       <GridOverlay d={d} />
       {header}
+      {bigTitle}
       {agentTouched && (
         <div style={{
           position: 'absolute', inset: -3,

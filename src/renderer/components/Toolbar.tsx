@@ -1,6 +1,9 @@
 import React, { useState } from 'react'
 import { useReactFlow } from '@xyflow/react'
 import { useGraphStore } from '../store/graphStore'
+import { InfraDialog } from './InfraDialog'
+import { SendToAgentDialog } from './SendToAgentDialog'
+import { useSheetStore } from '../store/sheetStore'
 
 interface ToolbarProps {
   onSearch: () => void
@@ -14,6 +17,9 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
   const selectionMode = useGraphStore(s => s.selectionMode)
   const setSelectionMode = useGraphStore(s => s.setSelectionMode)
   const workspaceId = useGraphStore(s => s.currentProject?.id ?? '')
+  const [infraOpen, setInfraOpen] = useState(false)
+  const [agentMsgOpen, setAgentMsgOpen] = useState(false)
+  const queuedMsgs = useSheetStore(s => s.messages.filter(m => m.status === 'queued').length)
 
   return (
     <div style={{
@@ -64,6 +70,24 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
           </svg>
         )}
       </ToolbarBtn>
+
+      {/* Message the agent from the canvas (canvas→agent channel) */}
+      <ToolbarBtn onClick={() => setAgentMsgOpen(true)} label={queuedMsgs > 0 ? `Message agent (${queuedMsgs} queued)` : 'Message agent'} active={queuedMsgs > 0}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+        </svg>
+      </ToolbarBtn>
+      <SendToAgentDialog isOpen={agentMsgOpen} onClose={() => setAgentMsgOpen(false)} />
+
+      {/* Add infrastructure node */}
+      <ToolbarBtn onClick={() => setInfraOpen(true)} label="Add infra">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <ellipse cx="12" cy="6" rx="8" ry="3"/>
+          <path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/>
+          <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>
+        </svg>
+      </ToolbarBtn>
+      <InfraDialog isOpen={infraOpen} onClose={() => setInfraOpen(false)} />
 
       {/* Investigations (capture replay) */}
       <InvestigationsMenu workspaceId={workspaceId} />

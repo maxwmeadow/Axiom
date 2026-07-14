@@ -133,8 +133,8 @@ export const demoSnapshot: CanvasSnapshot = {
   ],
 
   infraNodes: [
-    { id: 'infra_sqlite', workspaceId: DEMO_WORKSPACE_ID, name: 'SQLite DB', infraType: 'sqlite', positionX: 0, positionY: 0 },
-    { id: 'infra_mcp_proto', workspaceId: DEMO_WORKSPACE_ID, name: 'MCP Protocol', infraType: 'custom', positionX: 0, positionY: 0 },
+    { id: 'infra_sqlite', workspaceId: DEMO_WORKSPACE_ID, name: 'SQLite DB', infraType: 'sqlite', category: 'database', provider: 'sqlite', service: 'sqlite/sqlite', subtype: 'sql', status: 'confirmed', positionX: 0, positionY: 0 },
+    { id: 'infra_mcp_proto', workspaceId: DEMO_WORKSPACE_ID, name: 'MCP Protocol', infraType: 'custom', category: 'api', provider: 'generic', service: '', subtype: '', status: 'confirmed', positionX: 0, positionY: 0 },
   ],
 
   dependencies: [

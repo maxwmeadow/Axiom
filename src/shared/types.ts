@@ -223,7 +223,16 @@ export interface DbFile {
   language: string
   systemId: string | null
   lineCount: number
+  /** 0–1 display heat: percentile rank of decayed live-edit activity within the workspace. */
   churnScore: number
+  /** Raw decayed activity score + its decay anchor (activity engine). */
+  activityScore?: number
+  activityAt?: number
+  /** Inferred semantic shape ('' | 'class' | 'cylinder' | 'hexagon'); override wins. */
+  shape?: string
+  shapeOverride?: string
+  /** Class-first title when the file IS its class. */
+  displayName?: string
   positionX: number
   positionY: number
   width?: number | null
@@ -247,30 +256,52 @@ export interface DbDependency {
   dst: string
   srcType: 'file' | 'system' | 'infra'
   dstType: 'file' | 'system' | 'infra'
-  dependencyType: 'IMPORTS' | 'CALLS' | 'DEPENDS_ON' | 'READS_DB' | 'CONTAINS'
+  /** Structural kinds plus category-typed infra kinds (READS, WRITES, PUBLISHES, ...). */
+  dependencyType: string
   weight: number
   createdBy: 'parser' | 'agent' | 'user'
+  /** file:line justifying an infra edge. */
+  evidence?: string | null
 }
+
+/** Infra category — the semantic role that defines edge kinds and silhouette. */
+export type InfraCategory =
+  | 'database' | 'cache' | 'queue' | 'storage' | 'search' | 'llm'
+  | 'api' | 'auth' | 'platform' | 'cdn' | 'observability' | 'email'
 
 export interface DbInfraNode {
   id: string
   workspaceId: string
   name: string
+  /** @deprecated superseded by category/provider/service */
   infraType: string
+  category: InfraCategory
+  provider: string
+  /** Registry service id ('aws/rds'); '' = unassigned generic node. */
+  service: string
+  subtype: string
+  status: 'proposed' | 'confirmed' | 'dismissed'
+  detectedBy?: unknown
   config?: Record<string, unknown>
   positionX: number
   positionY: number
 }
 
-export interface DbClassificationJob {
+/** One entry of the infra service registry (GET /api/registry/services). */
+export interface InfraService {
   id: string
-  workspaceId: string
-  status: 'pending' | 'running' | 'paused' | 'complete'
-  totalFiles: number
-  classifiedFiles: number
-  strategy: string
-  createdAt: number
-  completedAt: number | null
+  name: string
+  category: InfraCategory
+  subtype?: string
+  provider: string
+  brand: { icon: string; color: string; darkColor?: string }
+  configFields?: string[]
+  layer?: 'embedded' | 'user' | 'workspace'
+}
+
+export interface InfraRegistry {
+  categories: { id: InfraCategory; edgeKinds: string[] }[]
+  services: InfraService[]
 }
 
 /** Full graph snapshot sent by Go archd over WebSocket on connect or full refresh. */
@@ -287,23 +318,7 @@ export interface DbGraphPatch {
   type:
     | 'system:upserted' | 'system:deleted'
     | 'file:updated'    | 'file:assigned'
-    | 'infra:upserted'
-  payload: DbSystem | DbFile | DbInfraNode | { id: string } | { fileId: string; systemId: string }
-}
-
-/** Classification batch item (file + import context) sent to the agent. */
-export interface ClassificationBatchFile extends DbFile {
-  imports: string[]
-  importedBy: string[]
-  preview: string
-}
-
-export interface ClassificationAssignment {
-  jobId?: string
-  fileId: string
-  proposedSystem: string
-  parentSystem?: string | null
-  confidence: number
-  agentReasoning?: string | null
-  status?: 'pending' | 'accepted' | 'rejected' | 'modified'
+    | 'infra:upserted'  | 'infra:deleted'
+    | 'infra:connected' | 'infra:disconnected'
+  payload: DbSystem | DbFile | DbInfraNode | DbDependency | { id: string } | { fileId: string; systemId: string }
 }

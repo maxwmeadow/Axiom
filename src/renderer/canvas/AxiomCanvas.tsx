@@ -33,6 +33,7 @@ import {
   type OnEdgesChange,
   type OnNodeDrag,
   type OnMove,
+  type Connection,
   applyNodeChanges,
   applyEdgeChanges,
   SelectionMode,
@@ -50,14 +51,19 @@ import { useGraphStore } from '../store/graphStore'
 import { useShallow } from 'zustand/react/shallow'
 import type { DbSystem, DbFile, DbInfraNode, DbDependency } from '../../shared/types'
 import { GroupDialog } from '../components/GroupDialog'
+import { NewSheetDialog } from '../components/NewSheetDialog'
+import { PlannedUmlNode } from './nodes/PlannedNode'
+import { SheetPalette, type StencilDef } from '../components/SheetPalette'
+import { useSheetStore } from '../store/sheetStore'
 import { apiAssignFile, apiUpdateFileSize, apiUpdateSystem, apiSaveNodePosition } from './arcdApi'
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
 const NODE_TYPES: NodeTypes = {
-  system: SystemNode as any,
-  file:   FileNode   as any,
-  infra:  InfraNode  as any,
+  system:  SystemNode     as any,
+  file:    FileNode       as any,
+  infra:   InfraNode      as any,
+  planned: PlannedUmlNode as any,
 }
 
 const EDGE_TYPES = {
@@ -719,6 +725,10 @@ export interface FileNodeData {
   language: string
   lineCount: number
   churnScore: number
+  /** Semantic role: '' plain | 'class' (class-first header) | 'cylinder' | 'hexagon'. */
+  shape: '' | 'class' | 'cylinder' | 'hexagon'
+  /** Class-first title when shape==='class'. */
+  displayName: string
   agentTouched: boolean
   depth: number
   currentZoom: number
@@ -731,7 +741,13 @@ export interface InfraNodeData {
   id: string
   label: string
   name: string
+  /** @deprecated superseded by category/provider/service */
   infraType: string
+  category: string
+  provider: string
+  service: string
+  subtype: string
+  status: string
   agentTouched: boolean
 }
 
@@ -915,6 +931,9 @@ function buildLayout(
         language: file.language,
         lineCount: file.lineCount,
         churnScore: file.churnScore,
+        // unified shape vocabulary: override wins over inference
+        shape: (file.shapeOverride || file.shape || '') as FileNodeData['shape'],
+        displayName: file.displayName ?? '',
         agentTouched: agentTouchedIds.has(file.id),
         depth,
         currentZoom,
@@ -1028,6 +1047,11 @@ function buildLayout(
         label: infra.name,
         name: infra.name,
         infraType: infra.infraType,
+        category: infra.category ?? 'api',
+        provider: infra.provider ?? 'generic',
+        service: infra.service ?? '',
+        subtype: infra.subtype ?? '',
+        status: infra.status ?? 'confirmed',
         agentTouched: agentTouchedIds.has(infra.id),
       } satisfies InfraNodeData as unknown as Record<string, unknown>,
       draggable: true,
@@ -1098,6 +1122,99 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const [rfNodes, setRfNodes] = useState<Node[]>([])
   const [rfEdges, setRfEdges] = useState<Edge[]>([])
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
+  const [sheetDialogOpen, setSheetDialogOpen] = useState(false)
+  // ── Sheet overlay (REVISION 2: sheets are layers over the Floor) ─────────
+  // The live canvas is the base layer. When a sheet is active: dim non-member
+  // live nodes in place (stencil highlight), draw planned UML elements and
+  // planned edges on top. Live members keep their Floor positions.
+  const overlaySheetId = useSheetStore(s => s.activeSheetId)
+  const overlayElements = useSheetStore(s => s.elements)
+  const overlayPlanned = useSheetStore(s => s.planned)
+  const overlayPlannedEdges = useSheetStore(s => s.plannedEdges)
+  const workspaceIdForOverlay = useGraphStore(s => s.currentProject?.id ?? '')
+
+  const overlayMemberIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const e of overlayElements) {
+      if (e.systemId) ids.add(e.systemId)
+      if (e.fileId) ids.add(e.fileId)
+      if (e.infraId) ids.add(e.infraId)
+    }
+    return ids
+  }, [overlayElements])
+
+  const displayNodes = useMemo(() => {
+    if (!overlaySheetId) return rfNodes
+    const dimmed = rfNodes.map(n => {
+      const isMember = overlayMemberIds.has(n.id) ||
+        (n.parentId ? overlayMemberIds.has(n.parentId) : false)
+      if (isMember) return n
+      const prevOpacity = typeof n.style?.opacity === 'number' ? n.style.opacity : 1
+      return { ...n, style: { ...n.style, opacity: Math.min(prevOpacity, 0.18) }, selectable: false }
+    })
+    const plannedNodes: Node[] = overlayPlanned
+      .filter(p => p.status !== 'flattened')
+      .map(p => ({
+        id: `planned:${p.id}`,
+        type: 'planned',
+        position: { x: p.positionX, y: p.positionY },
+        data: { planned: p } as unknown as Record<string, unknown>,
+        draggable: true,
+        zIndex: 10000,
+      }))
+    return [...dimmed, ...plannedNodes]
+  }, [rfNodes, overlaySheetId, overlayMemberIds, overlayPlanned])
+
+  const displayEdges = useMemo(() => {
+    if (!overlaySheetId) return rfEdges
+    const plannedRf: Edge[] = overlayPlannedEdges.map(e => ({
+      id: `pedge:${e.id}`,
+      source: e.srcPlanned ? `planned:${e.srcPlanned}` : (e.srcLive ?? ''),
+      target: e.dstPlanned ? `planned:${e.dstPlanned}` : (e.dstLive ?? ''),
+      label: e.kind,
+      animated: true,
+      style: { strokeDasharray: '6 4', stroke: 'var(--accent)' },
+      labelStyle: { fontSize: 8, fontFamily: 'var(--font-mono)', fill: 'var(--text-secondary)' },
+      zIndex: 10000,
+    }))
+    return [...rfEdges, ...plannedRf]
+  }, [rfEdges, overlaySheetId, overlayPlannedEdges])
+
+  // Stencil drop: palette → canvas → planned element born in name-edit mode.
+  const onOverlayDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes('application/axiom-stencil')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }, [])
+  const onOverlayDrop = useCallback((e: React.DragEvent) => {
+    const raw = e.dataTransfer.getData('application/axiom-stencil')
+    if (!raw || !overlaySheetId) return
+    e.preventDefault()
+    const stencil = JSON.parse(raw) as StencilDef
+    const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    const store = useSheetStore.getState()
+    if (stencil.shape === 'note') {
+      void store.createFloatingNote(workspaceIdForOverlay, overlaySheetId, 'New note — double-click to edit', pos.x, pos.y)
+      return
+    }
+    void store.createPlanned(workspaceIdForOverlay, overlaySheetId, {
+      name: `New${stencil.label.replace(/\s/g, '')}`,
+      kind: stencil.kind,
+      shape: stencil.shape as 'box' | 'folder' | 'cylinder' | 'hexagon',
+      positionX: pos.x, positionY: pos.y,
+    })
+  }, [overlaySheetId, workspaceIdForOverlay, screenToFlowPosition])
+
+  const onConnectPlanned = useCallback((conn: Connection) => {
+    if (!overlaySheetId || !conn.source || !conn.target) return
+    const src = conn.source.startsWith('planned:') ? { srcPlanned: conn.source.slice(8) } : { srcLive: conn.source }
+    const dst = conn.target.startsWith('planned:') ? { dstPlanned: conn.target.slice(8) } : { dstLive: conn.target }
+    if (!conn.source.startsWith('planned:') && !conn.target.startsWith('planned:')) return
+    void useSheetStore.getState().createPlannedEdge(workspaceIdForOverlay, overlaySheetId, {
+      kind: 'DEPENDS_ON', ...src, ...dst,
+    })
+  }, [overlaySheetId, workspaceIdForOverlay])
   const [isTidying, setIsTidying] = useState(false)
   const [debugState, setDebugState] = useState<any>(null)
   // Focused-subgraph mode: when a trace or runtime session is active, dim the
@@ -1618,7 +1735,27 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [])
 
   const onNodesChange: OnNodesChange = useCallback(
-    (changes) => setRfNodes(ns => applyNodeChanges(changes, ns)), []
+    (changes) => {
+      // Planned overlay nodes live in the sheet store, not rfNodes — route
+      // their drags there and keep the rest on the normal path.
+      const plannedChanges = changes.filter(c => 'id' in c && typeof (c as any).id === 'string' && (c as any).id.startsWith('planned:'))
+      for (const ch of plannedChanges) {
+        if (ch.type === 'position' && ch.position && ch.dragging === false) {
+          useSheetStore.getState().movePlanned(
+            useGraphStore.getState().currentProject?.id ?? '',
+            (ch as any).id.slice(8), ch.position.x, ch.position.y)
+        }
+        if (ch.type === 'position' && ch.position) {
+          // live-update during drag so the box follows the cursor
+          useSheetStore.setState(s => ({
+            planned: s.planned.map(p => `planned:${p.id}` === (ch as any).id
+              ? { ...p, positionX: ch.position!.x, positionY: ch.position!.y } : p),
+          }))
+        }
+      }
+      const rest = changes.filter(c => !plannedChanges.includes(c))
+      if (rest.length > 0) setRfNodes(ns => applyNodeChanges(rest, ns))
+    }, []
   )
   const onEdgesChange: OnEdgesChange = useCallback(
     (changes) => setRfEdges(es => applyEdgeChanges(changes, es)), []
@@ -2561,17 +2698,20 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   return (
     <div
       onWheel={handleWheel}
+      onDragOver={onOverlayDragOver}
+      onDrop={onOverlayDrop}
       style={{ width: '100%', height: '100%', position: 'relative' }}
     >
       <ReactFlow
         zoomOnScroll={false}
-        nodes={rfNodes}
-        edges={rfEdges}
+        nodes={displayNodes}
+        edges={displayEdges}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         defaultEdgeOptions={{ type: 'orthogonal' }}
         onNodesChange={readOnly ? undefined : onNodesChange}
         onEdgesChange={readOnly ? undefined : onEdgesChange}
+        onConnect={readOnly ? undefined : onConnectPlanned}
         onNodeClick={onNodeClick}
         onPaneClick={onPaneClick}
         onNodeDragStart={readOnly ? undefined : onNodeDragStart}
@@ -2716,6 +2856,17 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             Group into System
           </button>
           <button
+            onClick={() => setSheetDialogOpen(true)}
+            title="Curate the selection onto a named sheet — a live diagram telling one story"
+            style={{
+              background: 'var(--bg-raised)', color: 'var(--text-primary)',
+              border: '1px solid var(--border)', borderRadius: 0,
+              padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            New Sheet
+          </button>
+          <button
             onClick={() => setSelectionMode(false)}
             style={{
               background: 'transparent', color: 'var(--text-secondary)',
@@ -2731,6 +2882,32 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       <GroupDialog
         isOpen={groupDialogOpen}
         onClose={() => setGroupDialogOpen(false)}
+        selectedFileIds={selectedFileIds}
+        onSuccess={() => {
+          setRfNodes(nodes => nodes.map(n => ({ ...n, selected: false })))
+          useGraphStore.getState().setSelectionMode(false)
+        }}
+      />
+
+      {/* Sheet layer active: stencil palette + slim indicator */}
+      {overlaySheetId && (
+        <>
+          <SheetPalette />
+          <div style={{
+            position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 1000, background: 'var(--bg-surface)', border: '1px solid var(--border)',
+            padding: '5px 12px', boxShadow: 'var(--shadow-card)',
+            fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 700,
+            letterSpacing: '0.08em', color: 'var(--accent)',
+          }}>
+            SHEET LAYER ACTIVE
+          </div>
+        </>
+      )}
+
+      <NewSheetDialog
+        isOpen={sheetDialogOpen}
+        onClose={() => setSheetDialogOpen(false)}
         selectedFileIds={selectedFileIds}
         onSuccess={() => {
           setRfNodes(nodes => nodes.map(n => ({ ...n, selected: false })))
