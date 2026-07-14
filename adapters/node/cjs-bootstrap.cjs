@@ -19,7 +19,10 @@ Module.prototype._compile = function (content, filename) {
   try {
     if (
       typeof content === 'string' &&
-      (filename.endsWith('.js') || filename.endsWith('.cjs')) &&
+      // .ts/.cts reach _compile as transpiled JS when a CJS transpiler
+      // (ts-node) is registered; raw TS fails acorn parse and falls through.
+      (filename.endsWith('.js') || filename.endsWith('.cjs') ||
+       filename.endsWith('.ts') || filename.endsWith('.cts')) &&
       runtime.pathInWorkspace(filename, root)
     ) {
       const result = transform(content, { filename, sourceType: 'script' })

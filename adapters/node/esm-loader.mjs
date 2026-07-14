@@ -36,7 +36,12 @@ export async function load(url, context, nextLoad) {
       transform &&
       (context.format === 'module' || context.format === 'commonjs') &&
       url.startsWith('file:') &&
-      (url.endsWith('.js') || url.endsWith('.mjs'))
+      // .ts/.mts arrive as transpiled JS when a transpiler loader (tsx,
+      // ts-node/esm) sits earlier in the nextLoad chain; raw TS fails acorn
+      // parse and falls through. Node's native type stripping reports format
+      // 'module-typescript', which the format check above already excludes.
+      (url.endsWith('.js') || url.endsWith('.mjs') ||
+       url.endsWith('.ts') || url.endsWith('.mts'))
     ) {
       const filePath = fileURLToPath(url)
       if (inWorkspace(filePath) && result.source != null) {
