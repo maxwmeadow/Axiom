@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"axiom.local/archd/internal/activity"
 )
 
 // ─── Models ───────────────────────────────────────────────────────────────────
@@ -46,19 +48,34 @@ type System struct {
 }
 
 type File struct {
-	ID         string   `json:"id"`
-	RootID     string   `json:"rootId"`
-	Path       string   `json:"path"`
-	RelPath    string   `json:"relPath"`
-	Language   string   `json:"language"`
-	SystemID   *string  `json:"systemId"`
-	LineCount  int      `json:"lineCount"`
-	ChurnScore float64  `json:"churnScore"`
-	PositionX  float64  `json:"positionX"`
-	PositionY  float64  `json:"positionY"`
-	Width      *float64 `json:"width"`
-	Height     *float64 `json:"height"`
-	IndexedAt  int64    `json:"indexedAt"`
+	ID       string  `json:"id"`
+	RootID   string  `json:"rootId"`
+	Path     string  `json:"path"`
+	RelPath  string  `json:"relPath"`
+	Language string  `json:"language"`
+	SystemID *string `json:"systemId"`
+	// ChurnScore is the DISPLAY value: the 0..1 percentile rank of this file's
+	// decayed activity within the workspace, computed on read (snapshot) or on
+	// burst (live patch). Not persisted as-is.
+	ChurnScore float64 `json:"churnScore"`
+	// ActivityScore/ActivityAt are the raw decayed-score anchor pair persisted
+	// by the activity engine (internal/activity). ContentHash detects
+	// no-op saves so formatters never register as activity.
+	ActivityScore float64  `json:"activityScore"`
+	ActivityAt    int64    `json:"activityAt"`
+	ContentHash   string   `json:"-"`
+	// Shape is the inferred semantic role (''=plain box | 'class' | 'cylinder'
+	// data store | 'hexagon' service); ShapeOverride wins when set;
+	// DisplayName is the class-first title for shape='class'.
+	Shape         string   `json:"shape"`
+	ShapeOverride string   `json:"shapeOverride"`
+	DisplayName   string   `json:"displayName"`
+	LineCount     int      `json:"lineCount"`
+	PositionX     float64  `json:"positionX"`
+	PositionY     float64  `json:"positionY"`
+	Width         *float64 `json:"width"`
+	Height        *float64 `json:"height"`
+	IndexedAt     int64    `json:"indexedAt"`
 }
 
 type Symbol struct {
@@ -71,55 +88,32 @@ type Symbol struct {
 }
 
 type Dependency struct {
-	ID             string `json:"id"`
-	WorkspaceID    string `json:"workspaceId"`
-	Src            string `json:"src"`
-	Dst            string `json:"dst"`
-	SrcType        string `json:"srcType"` // 'file'|'system'|'infra'
-	DstType        string `json:"dstType"`
-	DependencyType string `json:"dependencyType"` // 'IMPORTS'|'CALLS'|'DEPENDS_ON'|'READS_DB'|'CONTAINS'
-	Weight         int    `json:"weight"`
-	CreatedBy      string `json:"createdBy"`
+	ID             string  `json:"id"`
+	WorkspaceID    string  `json:"workspaceId"`
+	Src            string  `json:"src"`
+	Dst            string  `json:"dst"`
+	SrcType        string  `json:"srcType"` // 'file'|'system'|'infra'
+	DstType        string  `json:"dstType"`
+	DependencyType string  `json:"dependencyType"` // 'IMPORTS'|'CALLS'|'DEPENDS_ON'|... + infra kinds ('READS'|'WRITES'|'PUBLISHES'|...)
+	Weight         int     `json:"weight"`
+	CreatedBy      string  `json:"createdBy"`
+	Evidence       *string `json:"evidence,omitempty"` // file:line justifying the edge (infra edges)
 }
 
 type InfraNode struct {
 	ID          string          `json:"id"`
 	WorkspaceID string          `json:"workspaceId"`
 	Name        string          `json:"name"`
-	InfraType   string          `json:"infraType"`
+	InfraType   string          `json:"infraType"` // DEPRECATED — superseded by Category/Provider/Service
+	Category    string          `json:"category"`  // 'database'|'cache'|'queue'|... (registry.Categories)
+	Provider    string          `json:"provider"`  // 'aws'|'openai'|'generic'|...
+	Service     string          `json:"service"`   // registry id 'aws/rds'; '' = unassigned generic
+	Subtype     string          `json:"subtype"`   // category-specific ('sql'|'document'|'kv'|...)
+	Status      string          `json:"status"`    // 'proposed'|'confirmed'|'dismissed'
+	DetectedBy  json.RawMessage `json:"detectedBy,omitempty"`
 	Config      json.RawMessage `json:"config,omitempty"`
 	PositionX   float64         `json:"positionX"`
 	PositionY   float64         `json:"positionY"`
-}
-
-type ClassificationJob struct {
-	ID              string `json:"id"`
-	WorkspaceID     string `json:"workspaceId"`
-	Status          string `json:"status"`
-	TotalFiles      int    `json:"totalFiles"`
-	ClassifiedFiles int    `json:"classifiedFiles"`
-	Strategy        string `json:"strategy"`
-	CreatedAt       int64  `json:"createdAt"`
-	CompletedAt     *int64 `json:"completedAt"`
-}
-
-type ClassificationAssignment struct {
-	ID             int64   `json:"id"`
-	JobID          string  `json:"jobId"`
-	FileID         string  `json:"fileId"`
-	ProposedSystem string  `json:"proposedSystem"`
-	ParentSystem   *string `json:"parentSystem"`
-	Confidence     float64 `json:"confidence"`
-	AgentReasoning *string `json:"agentReasoning"`
-	Status         string  `json:"status"`
-}
-
-// BatchFile is the agent-facing view of a file used in classification batches.
-type BatchFile struct {
-	File
-	Imports    []string `json:"imports"`
-	ImportedBy []string `json:"importedBy"`
-	Preview    string   `json:"preview"`
 }
 
 type CanvasSnapshot struct {
@@ -282,55 +276,6 @@ func UpdateSystemPosition(db *sql.DB, id string, x, y float64) error {
 	return err
 }
 
-// GetOrCreateSystemByName returns an existing system with the given name and parent in the workspace,
-// or creates a new one. Uses INSERT OR IGNORE + SELECT so it is safe under concurrent callers.
-func GetOrCreateSystemByName(db *sql.DB, workspaceID, name, source string, parentID *string) (System, error) {
-	depth := 0
-	if parentID != nil {
-		parent, perr := GetSystem(db, *parentID)
-		if perr == nil && parent != nil {
-			depth = parent.Depth + 1
-		}
-	}
-	now := time.Now().UnixMilli()
-	newID := uuid.New().String()
-
-	// Attempt insert; the unique index on (workspace_id, COALESCE(parent_id,''), name)
-	// silently ignores the insert if a row already exists — no race condition.
-	_, err := db.Exec(`
-		INSERT OR IGNORE INTO systems
-			(id, workspace_id, name, parent_id, source, depth, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		newID, workspaceID, name, parentID, source, depth, now, now)
-	if err != nil {
-		return System{}, err
-	}
-
-	// Always SELECT the canonical row (could be the one we just inserted or a pre-existing one).
-	var s System
-	var selectErr error
-	if parentID == nil {
-		selectErr = db.QueryRow(`
-			SELECT id, workspace_id, name, parent_id, source, color, description, agent_notes,
-			       depth, position_x, position_y, created_at, updated_at
-			FROM systems WHERE workspace_id=? AND name=? AND parent_id IS NULL
-			LIMIT 1`, workspaceID, name).Scan(
-			&s.ID, &s.WorkspaceID, &s.Name, &s.ParentID, &s.Source, &s.Color,
-			&s.Description, &s.AgentNotes, &s.Depth,
-			&s.PositionX, &s.PositionY, &s.CreatedAt, &s.UpdatedAt)
-	} else {
-		selectErr = db.QueryRow(`
-			SELECT id, workspace_id, name, parent_id, source, color, description, agent_notes,
-			       depth, position_x, position_y, created_at, updated_at
-			FROM systems WHERE workspace_id=? AND name=? AND parent_id=?
-			LIMIT 1`, workspaceID, name, *parentID).Scan(
-			&s.ID, &s.WorkspaceID, &s.Name, &s.ParentID, &s.Source, &s.Color,
-			&s.Description, &s.AgentNotes, &s.Depth,
-			&s.PositionX, &s.PositionY, &s.CreatedAt, &s.UpdatedAt)
-	}
-	return s, selectErr
-}
-
 // ─── Files ────────────────────────────────────────────────────────────────────
 
 func UpsertFile(db *sql.DB, f File) error {
@@ -343,22 +288,37 @@ func UpsertFile(db *sql.DB, f File) error {
 	_, err := db.Exec(`
 		INSERT INTO files
 			(id, root_id, path, rel_path, language, system_id, line_count,
-			 churn_score, position_x, position_y, indexed_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)
+			 churn_score, shape, display_name, position_x, position_y, indexed_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(root_id, rel_path) DO UPDATE SET
-			path=excluded.path, language=excluded.language, system_id=excluded.system_id,
-			line_count=excluded.line_count, churn_score=excluded.churn_score,
+			path=excluded.path, language=excluded.language,
+			system_id=COALESCE(excluded.system_id, files.system_id),
+			line_count=excluded.line_count,
+			shape=excluded.shape, display_name=excluded.display_name,
 			indexed_at=excluded.indexed_at
-		-- width and height are intentionally NOT updated here so user resizes survive re-indexing`,
+		-- width/height are NOT updated so user resizes survive re-indexing.
+		-- system_id COALESCEs so a watcher re-parse (which passes nil) never
+		-- unassigns a file from its system.
+		-- churn_score/activity_* are owned by the activity engine and never
+		-- touched here.`,
 		f.ID, f.RootID, f.Path, f.RelPath, f.Language, f.SystemID, f.LineCount,
-		f.ChurnScore, f.PositionX, f.PositionY, f.IndexedAt)
+		f.ChurnScore, f.Shape, f.DisplayName, f.PositionX, f.PositionY, f.IndexedAt)
+	return err
+}
+
+// UpdateFileActivity persists the raw decayed-score anchor + content hash.
+func UpdateFileActivity(db *sql.DB, fileID string, score float64, atMs int64, contentHash string) error {
+	_, err := db.Exec(`UPDATE files SET activity_score=?, activity_at=?, content_hash=? WHERE id=?`,
+		score, atMs, contentHash, fileID)
 	return err
 }
 
 func GetFiles(db *sql.DB, workspaceID string) ([]File, error) {
 	rows, err := db.Query(`
 		SELECT f.id, f.root_id, f.path, f.rel_path, f.language, f.system_id,
-		       f.line_count, f.churn_score, f.position_x, f.position_y, f.width, f.height, f.indexed_at
+		       f.line_count, f.churn_score, f.activity_score, f.activity_at, f.content_hash,
+		       f.shape, f.shape_override, f.display_name,
+		       f.position_x, f.position_y, f.width, f.height, f.indexed_at
 		FROM files f
 		JOIN roots r ON r.id = f.root_id
 		WHERE r.workspace_id = ?
@@ -373,7 +333,9 @@ func GetFiles(db *sql.DB, workspaceID string) ([]File, error) {
 func GetFilesByRoot(db *sql.DB, rootID string) ([]File, error) {
 	rows, err := db.Query(`
 		SELECT id, root_id, path, rel_path, language, system_id,
-		       line_count, churn_score, position_x, position_y, width, height, indexed_at
+		       line_count, churn_score, activity_score, activity_at, content_hash,
+		       shape, shape_override, display_name,
+		       position_x, position_y, width, height, indexed_at
 		FROM files WHERE root_id = ? ORDER BY rel_path`, rootID)
 	if err != nil {
 		return nil, err
@@ -382,10 +344,30 @@ func GetFilesByRoot(db *sql.DB, rootID string) ([]File, error) {
 	return scanFiles(rows)
 }
 
+func GetFileByID(db *sql.DB, id string) (*File, error) {
+	rows, err := db.Query(`
+		SELECT id, root_id, path, rel_path, language, system_id,
+		       line_count, churn_score, activity_score, activity_at, content_hash,
+		       shape, shape_override, display_name,
+		       position_x, position_y, width, height, indexed_at
+		FROM files WHERE id=?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	files, err := scanFiles(rows)
+	if err != nil || len(files) == 0 {
+		return nil, err
+	}
+	return &files[0], nil
+}
+
 func GetFileByRelPath(db *sql.DB, rootID, relPath string) (*File, error) {
 	rows, err := db.Query(`
 		SELECT id, root_id, path, rel_path, language, system_id,
-		       line_count, churn_score, position_x, position_y, width, height, indexed_at
+		       line_count, churn_score, activity_score, activity_at, content_hash,
+		       shape, shape_override, display_name,
+		       position_x, position_y, width, height, indexed_at
 		FROM files WHERE root_id=? AND rel_path=?`, rootID, relPath)
 	if err != nil {
 		return nil, err
@@ -405,7 +387,9 @@ func GetFileByRelPath(db *sql.DB, rootID, relPath string) (*File, error) {
 func FindFileByIDOrPath(db *sql.DB, workspaceID, ref string) (*File, error) {
 	const selectCols = `
 		SELECT f.id, f.root_id, f.path, f.rel_path, f.language, f.system_id,
-		       f.line_count, f.churn_score, f.position_x, f.position_y, f.width, f.height, f.indexed_at
+		       f.line_count, f.churn_score, f.activity_score, f.activity_at, f.content_hash,
+		       f.shape, f.shape_override, f.display_name,
+		       f.position_x, f.position_y, f.width, f.height, f.indexed_at
 		FROM files f
 		JOIN roots r ON r.id = f.root_id
 		WHERE r.workspace_id = ?`
@@ -483,7 +467,9 @@ func scanFiles(rows *sql.Rows) ([]File, error) {
 		var f File
 		if err := rows.Scan(
 			&f.ID, &f.RootID, &f.Path, &f.RelPath, &f.Language, &f.SystemID,
-			&f.LineCount, &f.ChurnScore, &f.PositionX, &f.PositionY, &f.Width, &f.Height, &f.IndexedAt,
+			&f.LineCount, &f.ChurnScore, &f.ActivityScore, &f.ActivityAt, &f.ContentHash,
+			&f.Shape, &f.ShapeOverride, &f.DisplayName,
+			&f.PositionX, &f.PositionY, &f.Width, &f.Height, &f.IndexedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -718,16 +704,17 @@ func UpsertDependency(db *sql.DB, d Dependency) error {
 		d.CreatedBy = "parser"
 	}
 	_, err := db.Exec(`
-		INSERT INTO dependencies (id, workspace_id, src, dst, src_type, dst_type, dependency_type, weight, created_by)
-		VALUES (?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(src, dst, dependency_type) DO UPDATE SET weight=weight+1`,
-		d.ID, d.WorkspaceID, d.Src, d.Dst, d.SrcType, d.DstType, d.DependencyType, d.Weight, d.CreatedBy)
+		INSERT INTO dependencies (id, workspace_id, src, dst, src_type, dst_type, dependency_type, weight, created_by, evidence)
+		VALUES (?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(src, dst, dependency_type) DO UPDATE SET
+			weight=weight+1, evidence=COALESCE(excluded.evidence, evidence)`,
+		d.ID, d.WorkspaceID, d.Src, d.Dst, d.SrcType, d.DstType, d.DependencyType, d.Weight, d.CreatedBy, d.Evidence)
 	return err
 }
 
 func GetDependencies(db *sql.DB, workspaceID string) ([]Dependency, error) {
 	rows, err := db.Query(`
-		SELECT id, workspace_id, src, dst, src_type, dst_type, dependency_type, weight, created_by
+		SELECT id, workspace_id, src, dst, src_type, dst_type, dependency_type, weight, created_by, evidence
 		FROM dependencies WHERE workspace_id=?`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -738,13 +725,19 @@ func GetDependencies(db *sql.DB, workspaceID string) ([]Dependency, error) {
 		var d Dependency
 		if err := rows.Scan(
 			&d.ID, &d.WorkspaceID, &d.Src, &d.Dst,
-			&d.SrcType, &d.DstType, &d.DependencyType, &d.Weight, &d.CreatedBy,
+			&d.SrcType, &d.DstType, &d.DependencyType, &d.Weight, &d.CreatedBy, &d.Evidence,
 		); err != nil {
 			return nil, err
 		}
 		deps = append(deps, d)
 	}
 	return deps, rows.Err()
+}
+
+// DeleteDependency removes a single edge by id.
+func DeleteDependency(db *sql.DB, id string) error {
+	_, err := db.Exec(`DELETE FROM dependencies WHERE id=?`, id)
+	return err
 }
 
 func DeleteDependenciesByFile(db *sql.DB, fileID string) error {
@@ -754,39 +747,131 @@ func DeleteDependenciesByFile(db *sql.DB, fileID string) error {
 
 // ─── Infra ────────────────────────────────────────────────────────────────────
 
-func UpsertInfraNode(db *sql.DB, n InfraNode) error {
+const infraCols = `id, workspace_id, name, infra_type, category, provider, service,
+       subtype, status, detected_by, config, position_x, position_y`
+
+func scanInfraNode(row interface{ Scan(...any) error }) (InfraNode, error) {
+	var n InfraNode
+	var detected, config sql.NullString
+	err := row.Scan(
+		&n.ID, &n.WorkspaceID, &n.Name, &n.InfraType, &n.Category, &n.Provider,
+		&n.Service, &n.Subtype, &n.Status, &detected, &config, &n.PositionX, &n.PositionY)
+	if detected.Valid {
+		n.DetectedBy = json.RawMessage(detected.String)
+	}
+	if config.Valid {
+		n.Config = json.RawMessage(config.String)
+	}
+	return n, err
+}
+
+// UpsertInfraNode normalizes defaults on the caller's struct (pointer) so API
+// responses and WebSocket broadcasts carry exactly what was persisted.
+func UpsertInfraNode(db *sql.DB, n *InfraNode) error {
 	if n.ID == "" {
 		n.ID = uuid.New().String()
 	}
+	if n.Category == "" {
+		n.Category = "api"
+	}
+	if n.Provider == "" {
+		n.Provider = "generic"
+	}
+	if n.Status == "" {
+		n.Status = "confirmed"
+	}
 	_, err := db.Exec(`
-		INSERT INTO infra_nodes (id, workspace_id, name, infra_type, config, position_x, position_y)
-		VALUES (?,?,?,?,?,?,?)
+		INSERT INTO infra_nodes
+			(id, workspace_id, name, infra_type, category, provider, service,
+			 subtype, status, detected_by, config, position_x, position_y)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			name=excluded.name, infra_type=excluded.infra_type,
+			category=excluded.category, provider=excluded.provider,
+			service=excluded.service, subtype=excluded.subtype,
+			status=excluded.status, detected_by=excluded.detected_by,
 			config=excluded.config, position_x=excluded.position_x, position_y=excluded.position_y`,
-		n.ID, n.WorkspaceID, n.Name, n.InfraType, n.Config, n.PositionX, n.PositionY)
+		n.ID, n.WorkspaceID, n.Name, n.InfraType, n.Category, n.Provider, n.Service,
+		n.Subtype, n.Status, nullableJSON(n.DetectedBy), nullableJSON(n.Config), n.PositionX, n.PositionY)
 	return err
 }
 
+// nullableJSON stores empty RawMessage as NULL instead of "".
+func nullableJSON(m json.RawMessage) any {
+	if len(m) == 0 {
+		return nil
+	}
+	return string(m)
+}
+
 func GetInfraNodes(db *sql.DB, workspaceID string) ([]InfraNode, error) {
-	rows, err := db.Query(`
-		SELECT id, workspace_id, name, infra_type, config, position_x, position_y
-		FROM infra_nodes WHERE workspace_id=?`, workspaceID)
+	rows, err := db.Query(`SELECT `+infraCols+` FROM infra_nodes WHERE workspace_id=?`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var nodes []InfraNode
 	for rows.Next() {
-		var n InfraNode
-		if err := rows.Scan(
-			&n.ID, &n.WorkspaceID, &n.Name, &n.InfraType, &n.Config, &n.PositionX, &n.PositionY,
-		); err != nil {
+		n, err := scanInfraNode(rows)
+		if err != nil {
 			return nil, err
 		}
 		nodes = append(nodes, n)
 	}
 	return nodes, rows.Err()
+}
+
+func GetInfraNode(db *sql.DB, id string) (*InfraNode, error) {
+	n, err := scanInfraNode(db.QueryRow(`SELECT `+infraCols+` FROM infra_nodes WHERE id=?`, id))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+// DeleteInfraNode removes the node; its edges are cleaned by the
+// deps_cleanup_on_infra_delete trigger.
+func DeleteInfraNode(db *sql.DB, id string) error {
+	_, err := db.Exec(`DELETE FROM infra_nodes WHERE id=?`, id)
+	return err
+}
+
+func UpdateInfraPosition(db *sql.DB, id string, x, y float64) error {
+	_, err := db.Exec(`UPDATE infra_nodes SET position_x=?, position_y=? WHERE id=?`, x, y, id)
+	return err
+}
+
+// UpdateInfraStatus resolves a proposal ('confirmed' | 'dismissed').
+func UpdateInfraStatus(db *sql.DB, id, status string) error {
+	_, err := db.Exec(`UPDATE infra_nodes SET status=? WHERE id=?`, status, id)
+	return err
+}
+
+// GetInfraEdges returns all dependencies touching infra nodes in a workspace.
+func GetInfraEdges(db *sql.DB, workspaceID string) ([]Dependency, error) {
+	rows, err := db.Query(`
+		SELECT id, workspace_id, src, dst, src_type, dst_type, dependency_type, weight, created_by, evidence
+		FROM dependencies
+		WHERE workspace_id=? AND (src_type='infra' OR dst_type='infra')`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var deps []Dependency
+	for rows.Next() {
+		var d Dependency
+		if err := rows.Scan(
+			&d.ID, &d.WorkspaceID, &d.Src, &d.Dst,
+			&d.SrcType, &d.DstType, &d.DependencyType, &d.Weight, &d.CreatedBy, &d.Evidence,
+		); err != nil {
+			return nil, err
+		}
+		deps = append(deps, d)
+	}
+	return deps, rows.Err()
 }
 
 // ─── Canvas snapshot ──────────────────────────────────────────────────────────
@@ -799,6 +884,16 @@ func GetCanvasSnapshot(db *sql.DB, workspaceID string) (*CanvasSnapshot, error) 
 	files, err := GetFiles(db, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("get files: %w", err)
+	}
+	// churn_score display value = percentile rank of the decayed live-activity
+	// score within this workspace (activity engine), computed at read time.
+	entries := make([]activity.ScoreEntry, len(files))
+	for i, f := range files {
+		entries[i] = activity.ScoreEntry{ID: f.ID, Score: f.ActivityScore, AtMs: f.ActivityAt}
+	}
+	norm := activity.Normalize(entries, time.Now().UnixMilli())
+	for i := range files {
+		files[i].ChurnScore = norm[files[i].ID]
 	}
 	infra, err := GetInfraNodes(db, workspaceID)
 	if err != nil {
@@ -815,178 +910,6 @@ func GetCanvasSnapshot(db *sql.DB, workspaceID string) (*CanvasSnapshot, error) 
 		InfraNodes:   infra,
 		Dependencies: dependencies,
 	}, nil
-}
-
-// ─── Classification ───────────────────────────────────────────────────────────
-
-func CreateClassificationJob(db *sql.DB, workspaceID, strategy string) (ClassificationJob, error) {
-	var count int
-	if err := db.QueryRow(`
-		SELECT COUNT(*) FROM files f
-		JOIN roots r ON r.id = f.root_id
-		WHERE r.workspace_id=?`, workspaceID).Scan(&count); err != nil {
-		return ClassificationJob{}, err
-	}
-	job := ClassificationJob{
-		ID:          uuid.New().String(),
-		WorkspaceID: workspaceID,
-		Status:      "pending",
-		TotalFiles:  count,
-		Strategy:    strategy,
-		CreatedAt:   time.Now().UnixMilli(),
-	}
-	_, err := db.Exec(`
-		INSERT INTO classification_jobs
-			(id, workspace_id, status, total_files, classified_files, strategy, created_at)
-		VALUES (?,?,?,?,0,?,?)`,
-		job.ID, job.WorkspaceID, job.Status, job.TotalFiles, job.Strategy, job.CreatedAt)
-	return job, err
-}
-
-func GetClassificationJob(db *sql.DB, jobID string) (*ClassificationJob, error) {
-	job := &ClassificationJob{}
-	err := db.QueryRow(`
-		SELECT id, workspace_id, status, total_files, classified_files, strategy, created_at, completed_at
-		FROM classification_jobs WHERE id=?`, jobID).Scan(
-		&job.ID, &job.WorkspaceID, &job.Status, &job.TotalFiles, &job.ClassifiedFiles,
-		&job.Strategy, &job.CreatedAt, &job.CompletedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return job, err
-}
-
-// GetNextClassificationBatch returns files that have not yet been proposed in this job,
-// ordered by import cluster connectivity (files with most dependencies first).
-func GetNextClassificationBatch(db *sql.DB, jobID, workspaceID string, batchSize int) ([]BatchFile, error) {
-	if batchSize <= 0 {
-		batchSize = 15
-	}
-	rows, err := db.Query(`
-		SELECT f.id, f.root_id, f.path, f.rel_path, f.language, f.system_id,
-		       f.line_count, f.churn_score, f.position_x, f.position_y, f.indexed_at
-		FROM files f
-		JOIN roots r ON r.id = f.root_id
-		WHERE r.workspace_id = ?
-		  AND f.id NOT IN (
-			  SELECT file_id FROM classification_assignments WHERE job_id = ?
-			)
-		ORDER BY (
-			SELECT COUNT(*) FROM dependencies d WHERE d.src = f.id OR d.dst = f.id
-		) DESC
-		LIMIT ?`, workspaceID, jobID, batchSize)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	files, err := scanFiles(rows)
-	if err != nil {
-		return nil, err
-	}
-	batch := make([]BatchFile, 0, len(files))
-	for _, f := range files {
-		bf := BatchFile{File: f}
-		// gather immediate import dependencies for context
-		bf.Imports, _ = getImportTargets(db, f.ID)
-		bf.ImportedBy, _ = getImportSources(db, f.ID)
-		batch = append(batch, bf)
-	}
-	return batch, nil
-}
-
-func getImportTargets(db *sql.DB, fileID string) ([]string, error) {
-	rows, err := db.Query(`
-		SELECT f.rel_path FROM dependencies d
-		JOIN files f ON f.id = d.dst
-		WHERE d.src=? AND d.dependency_type='IMPORTS'`, fileID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanStringColumn(rows)
-}
-
-func getImportSources(db *sql.DB, fileID string) ([]string, error) {
-	rows, err := db.Query(`
-		SELECT f.rel_path FROM dependencies d
-		JOIN files f ON f.id = d.src
-		WHERE d.dst=? AND d.dependency_type='IMPORTS'`, fileID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanStringColumn(rows)
-}
-
-func scanStringColumn(rows *sql.Rows) ([]string, error) {
-	var out []string
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
-}
-
-// SubmitClassificationAssignments persists agent proposals for a batch.
-// For each assignment, it finds or creates the proposed system and updates the file.
-func SubmitClassificationAssignments(db *sql.DB, jobID string, assignments []ClassificationAssignment) error {
-	job, err := GetClassificationJob(db, jobID)
-	if err != nil || job == nil {
-		return fmt.Errorf("job not found: %s", jobID)
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	for _, a := range assignments {
-		if a.JobID == "" {
-			a.JobID = jobID
-		}
-		// Resolve or create the target system
-		sys, serr := GetOrCreateSystemByName(db, job.WorkspaceID, a.ProposedSystem, "agent", a.ParentSystem)
-		if serr != nil {
-			return fmt.Errorf("resolve system %q: %w", a.ProposedSystem, serr)
-		}
-		// Assign the file to the system
-		if _, err := tx.Exec(`UPDATE files SET system_id=? WHERE id=?`, sys.ID, a.FileID); err != nil {
-			return err
-		}
-		// Record the proposal
-		if _, err := tx.Exec(`
-			INSERT INTO classification_assignments
-				(job_id, file_id, proposed_system, parent_system, confidence, agent_reasoning, status)
-			VALUES (?,?,?,?,?,?,?)`,
-			a.JobID, a.FileID, a.ProposedSystem, a.ParentSystem,
-			a.Confidence, a.AgentReasoning, "accepted"); err != nil {
-			return err
-		}
-	}
-	// Update classified_files count
-	if _, err := tx.Exec(`
-		UPDATE classification_jobs
-		SET classified_files = (
-			SELECT COUNT(*) FROM classification_assignments WHERE job_id=? AND status='accepted'
-		),
-		status = CASE
-			WHEN (SELECT COUNT(*) FROM classification_assignments WHERE job_id=? AND status='accepted')
-			     >= total_files THEN 'complete'
-			ELSE 'running'
-		END,
-		completed_at = CASE
-			WHEN (SELECT COUNT(*) FROM classification_assignments WHERE job_id=? AND status='accepted')
-			     >= total_files THEN ?
-			ELSE completed_at
-		END
-		WHERE id=?`,
-		jobID, jobID, jobID, time.Now().UnixMilli(), jobID); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // ─── Call graph ───────────────────────────────────────────────────────────────

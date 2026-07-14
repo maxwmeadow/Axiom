@@ -1,5 +1,5 @@
 // Package db manages the SQLite database that is archd's single source of truth.
-// Every system assignment, file record, edge, and classification job lives here.
+// Every system assignment, file record, edge, and infra node lives here.
 // The canvas and MCP layer are purely read/write clients of this store.
 package db
 
@@ -192,40 +192,153 @@ func migrate(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS investigations_ws ON investigations(workspace_id);
 
+	-- ─── File activity (live edit tracking) ──────────────────────────────────
+	-- One row per edit BURST (saves within 5 min collapse). Powers the live
+	-- churn/heat display and future time-lapse views. The current score is
+	-- cached on files.activity_score with files.activity_at as decay anchor.
+	CREATE TABLE IF NOT EXISTS file_activity (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		workspace_id  TEXT NOT NULL,
+		file_id       TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+		ts            INTEGER NOT NULL,               -- burst end, ms epoch
+		actor         TEXT NOT NULL DEFAULT 'human',  -- 'human'|'agent'
+		weight        REAL NOT NULL DEFAULT 0,        -- log10(1+dLines)+dSymbols, actor-scaled
+		lines_delta   INTEGER NOT NULL DEFAULT 0,
+		symbols_delta INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS file_activity_file ON file_activity(file_id, ts);
+	CREATE INDEX IF NOT EXISTS file_activity_ws   ON file_activity(workspace_id, ts);
+
+	-- ─── Sheets (UML experience layer — UML_UX_PLAN.md Phase U1) ─────────────
+	-- A sheet is a named, curated diagram: a subset of live model elements,
+	-- arranged by hand, annotated. Elements are REFERENCES, never copies.
+	CREATE TABLE IF NOT EXISTS sheets (
+		id            TEXT PRIMARY KEY,
+		workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+		name          TEXT NOT NULL,
+		purpose       TEXT,
+		kind          TEXT NOT NULL DEFAULT 'structure',  -- 'structure'|'class'|'sequence'|'intent'
+		folder        TEXT NOT NULL DEFAULT '',
+		created_by    TEXT NOT NULL DEFAULT 'user',       -- 'user'|'agent'
+		revision      INTEGER NOT NULL DEFAULT 1,
+		viewport      TEXT,                               -- json {x,y,zoom}
+		created_at    INTEGER NOT NULL,
+		updated_at    INTEGER NOT NULL
+	);
+
+	-- Membership: concrete nullable FKs (exactly one set) instead of a
+	-- polymorphic (type,id) pair — native integrity, no trigger web.
+	-- ON DELETE SET NULL + the cached label IS the tombstone mechanism: ref
+	-- gone but label present renders "payments/handler.go — deleted".
+	CREATE TABLE IF NOT EXISTS sheet_elements (
+		id            TEXT PRIMARY KEY,
+		sheet_id      TEXT NOT NULL REFERENCES sheets(id) ON DELETE CASCADE,
+		system_id     TEXT REFERENCES systems(id)     ON DELETE SET NULL,
+		file_id       TEXT REFERENCES files(id)       ON DELETE SET NULL,
+		infra_id      TEXT REFERENCES infra_nodes(id) ON DELETE SET NULL,
+		symbol_ref    TEXT,             -- 'fileId::kind::name' (symbols lack stable ids)
+		label         TEXT NOT NULL,    -- display snapshot cached at add time
+		position_x    REAL NOT NULL DEFAULT 0,
+		position_y    REAL NOT NULL DEFAULT 0,
+		width REAL, height REAL,
+		emphasis      TEXT,             -- json {dim, accent, expandedToSymbols}
+		tombstone_ack INTEGER NOT NULL DEFAULT 0,
+		ghost         INTEGER NOT NULL DEFAULT 0,
+		added_by      TEXT NOT NULL DEFAULT 'user',
+		CHECK ((system_id IS NOT NULL) + (file_id IS NOT NULL) +
+		       (infra_id IS NOT NULL) + (symbol_ref IS NOT NULL) = 1)
+	);
+	CREATE INDEX IF NOT EXISTS sheet_elements_sheet ON sheet_elements(sheet_id);
+
+	-- Notes/flags: attachable to a sheet element or floating on a sheet;
+	-- sheet_id NULL = model-global note. Agent replies to canvas messages
+	-- land here too (threaded via canvas_outbox.answer_annotation_id).
+	CREATE TABLE IF NOT EXISTS annotations (
+		id            TEXT PRIMARY KEY,
+		workspace_id  TEXT NOT NULL,
+		sheet_id      TEXT REFERENCES sheets(id) ON DELETE CASCADE,
+		target_type   TEXT,             -- 'system'|'file'|'infra'|NULL floating
+		target_id     TEXT,
+		body          TEXT NOT NULL,    -- markdown
+		kind          TEXT NOT NULL DEFAULT 'note',  -- 'note'|'flag'|'decision'|'reply'
+		author        TEXT NOT NULL DEFAULT 'user',  -- 'user'|'agent'
+		position_x REAL, position_y REAL,
+		created_at    INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS annotations_sheet ON annotations(sheet_id);
+
+	-- Planned elements (UML_UX_PLAN.md REVISION 2): authored UML for code
+	-- that does not exist yet. Lifecycle planned → partial → realized →
+	-- flattened; the watcher reconciles declared paths/members against
+	-- reality as the agent builds. Isolated from live tables by design.
+	CREATE TABLE IF NOT EXISTS planned_nodes (
+		id            TEXT PRIMARY KEY,
+		sheet_id      TEXT NOT NULL REFERENCES sheets(id) ON DELETE CASCADE,
+		workspace_id  TEXT NOT NULL,
+		kind          TEXT NOT NULL DEFAULT 'class',   -- 'system'|'class'|'file'
+		name          TEXT NOT NULL,
+		declared_path TEXT NOT NULL DEFAULT '',        -- reconciliation hint (rel path)
+		members       TEXT NOT NULL DEFAULT '[]',      -- json [{signature, intent, realized}]
+		status        TEXT NOT NULL DEFAULT 'planned', -- 'planned'|'partial'|'realized'|'flattened'
+		realized_file_id TEXT REFERENCES files(id) ON DELETE SET NULL,
+		notes         TEXT NOT NULL DEFAULT '',
+		position_x    REAL NOT NULL DEFAULT 0,
+		position_y    REAL NOT NULL DEFAULT 0,
+		created_by    TEXT NOT NULL DEFAULT 'user',
+		created_at    INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS planned_nodes_sheet ON planned_nodes(sheet_id);
+	CREATE INDEX IF NOT EXISTS planned_nodes_ws    ON planned_nodes(workspace_id, status);
+
+	CREATE TABLE IF NOT EXISTS planned_edges (
+		id           TEXT PRIMARY KEY,
+		sheet_id     TEXT NOT NULL REFERENCES sheets(id) ON DELETE CASCADE,
+		workspace_id TEXT NOT NULL,
+		kind         TEXT NOT NULL DEFAULT 'DEPENDS_ON', -- 'CALLS'|'DEPENDS_ON'|'CONTAINS'
+		src_planned  TEXT REFERENCES planned_nodes(id) ON DELETE CASCADE,
+		src_live     TEXT,   -- live node id (file/system/infra) when src is real
+		dst_planned  TEXT REFERENCES planned_nodes(id) ON DELETE CASCADE,
+		dst_live     TEXT,
+		note         TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS planned_edges_sheet ON planned_edges(sheet_id);
+
+	-- Canvas→agent outbox (UML_UX_PLAN.md Phase U-C). The user composes a
+	-- note on the canvas; MCP tools drain it; every axiom tool response
+	-- carries an unread-count trailer so any active agent sees it fast.
+	CREATE TABLE IF NOT EXISTS canvas_outbox (
+		id             TEXT PRIMARY KEY,
+		workspace_id   TEXT NOT NULL,
+		sheet_id       TEXT,
+		note           TEXT NOT NULL,
+		selection      TEXT NOT NULL DEFAULT '[]',  -- json durable refs
+		change_summary TEXT NOT NULL DEFAULT '',    -- 12-verb semantic summary
+		status         TEXT NOT NULL DEFAULT 'queued', -- 'queued'|'delivered'|'answered'
+		delivered_to   TEXT,
+		answer_annotation_id TEXT,
+		created_at INTEGER NOT NULL, delivered_at INTEGER, answered_at INTEGER
+	);
+	CREATE INDEX IF NOT EXISTS canvas_outbox_ws ON canvas_outbox(workspace_id, status);
+
 	-- ─── Infra nodes ──────────────────────────────────────────────────────────
+	-- External dependencies (databases, queues, APIs, platforms) as first-class
+	-- canvas nodes. See INFRA_LAYER_PLAN.md. Identity is Category x Provider x
+	-- Service: category drives edge semantics + node silhouette, provider drives
+	-- the brand skin, service is the registry id ('aws/rds', 'openai/api', ...).
 	CREATE TABLE IF NOT EXISTS infra_nodes (
 		id            TEXT PRIMARY KEY,
 		workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
 		name          TEXT NOT NULL,
-		infra_type    TEXT NOT NULL DEFAULT 'custom',  -- 'postgres'|'redis'|'vercel'|'railway'|...
-		config        TEXT,                             -- json blob
+		infra_type    TEXT NOT NULL DEFAULT 'custom',  -- DEPRECATED: superseded by category/provider/service
+		category      TEXT NOT NULL DEFAULT 'api',     -- 'database'|'cache'|'queue'|'storage'|'search'|'llm'|'api'|'auth'|'platform'|'cdn'|'observability'|'email'
+		provider      TEXT NOT NULL DEFAULT 'generic', -- 'aws'|'openai'|'stripe'|'generic'|...
+		service       TEXT NOT NULL DEFAULT '',        -- registry id, e.g. 'aws/rds'; '' = unassigned generic
+		subtype       TEXT NOT NULL DEFAULT '',        -- category-specific ('sql'|'document'|'kv'|'vector'|...)
+		status        TEXT NOT NULL DEFAULT 'confirmed', -- 'proposed'|'confirmed'|'dismissed'
+		detected_by   TEXT,                            -- json evidence [{signal, file, evidence, confidence}]
+		config        TEXT,                             -- json blob (registry configFields values)
 		position_x    REAL NOT NULL DEFAULT 0,
 		position_y    REAL NOT NULL DEFAULT 0
-	);
-
-	-- ─── Classification jobs ──────────────────────────────────────────────────
-	-- Tracks agent-driven system organization runs.
-	CREATE TABLE IF NOT EXISTS classification_jobs (
-		id                  TEXT PRIMARY KEY,
-		workspace_id        TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-		status              TEXT NOT NULL DEFAULT 'pending',  -- 'pending'|'running'|'paused'|'complete'
-		total_files         INTEGER NOT NULL DEFAULT 0,
-		classified_files    INTEGER NOT NULL DEFAULT 0,
-		strategy            TEXT NOT NULL DEFAULT 'by_import_cluster',
-		created_at          INTEGER NOT NULL,
-		completed_at        INTEGER
-	);
-
-	-- Per-file proposals from the agent during a classification job
-	CREATE TABLE IF NOT EXISTS classification_assignments (
-		id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-		job_id              TEXT NOT NULL REFERENCES classification_jobs(id) ON DELETE CASCADE,
-		file_id             TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-		proposed_system     TEXT NOT NULL,
-		parent_system       TEXT,
-		confidence          REAL NOT NULL DEFAULT 0,
-		agent_reasoning     TEXT,
-		status              TEXT NOT NULL DEFAULT 'pending'  -- 'pending'|'accepted'|'rejected'|'modified'
 	);
 	`
 
@@ -240,6 +353,28 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE systems ADD COLUMN height REAL`,
 		`ALTER TABLE files   ADD COLUMN width  REAL`,
 		`ALTER TABLE files   ADD COLUMN height REAL`,
+		// Unified shape vocabulary (UML_UX_PLAN.md Rev 2b): shape is a SEMANTIC
+		// role inferred at index time ('', 'class', 'cylinder', 'hexagon');
+		// display_name is the class-first title (dominant class ≈ filename);
+		// shape_override wins over inference when the user/agent sets it.
+		`ALTER TABLE files ADD COLUMN shape          TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE files ADD COLUMN shape_override TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE files ADD COLUMN display_name   TEXT NOT NULL DEFAULT ''`,
+		// Live activity tracking (edit bursts, decayed scores)
+		`ALTER TABLE files ADD COLUMN activity_score REAL    NOT NULL DEFAULT 0`,
+		`ALTER TABLE files ADD COLUMN activity_at    INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE files ADD COLUMN content_hash   TEXT    NOT NULL DEFAULT ''`,
+		// Planned UML authoring: semantic shape + user color (REVISION 2 UX)
+		`ALTER TABLE planned_nodes ADD COLUMN shape TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE planned_nodes ADD COLUMN color TEXT NOT NULL DEFAULT ''`,
+		// Infra layer (INFRA_LAYER_PLAN.md Phase I1)
+		`ALTER TABLE infra_nodes  ADD COLUMN category    TEXT NOT NULL DEFAULT 'api'`,
+		`ALTER TABLE infra_nodes  ADD COLUMN provider    TEXT NOT NULL DEFAULT 'generic'`,
+		`ALTER TABLE infra_nodes  ADD COLUMN service     TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE infra_nodes  ADD COLUMN subtype     TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE infra_nodes  ADD COLUMN status      TEXT NOT NULL DEFAULT 'confirmed'`,
+		`ALTER TABLE infra_nodes  ADD COLUMN detected_by TEXT`,
+		`ALTER TABLE dependencies ADD COLUMN evidence    TEXT`,
 	} {
 		if _, err := db.Exec(col); err != nil {
 			// "duplicate column name" means the column already exists — safe to ignore
@@ -249,17 +384,53 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
-	// Disable FK enforcement while wiping systems so that the ON DELETE SET NULL
-	// cascade on systems.parent_id doesn't fire and violate the unique index on rows
-	// that are about to be deleted anyway.
-	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
-		return err
+	// 2026-07: filename-based cylinder/hexagon shape guessing was removed
+	// (shape now derives only from proven structure). Purge stale guesses;
+	// explicit user/agent choices live in shape_override and are untouched.
+	if _, err := db.Exec(`UPDATE files SET shape='' WHERE shape IN ('cylinder','hexagon')`); err != nil {
+		return fmt.Errorf("purge guessed shapes: %w", err)
 	}
-	if _, err := db.Exec(`DELETE FROM systems`); err != nil {
-		return err
+
+	// The classification job workflow was removed 2026-07 (superseded by the
+	// indexer's clustering + the start_review agent flow). Drop its tables.
+	if _, err := db.Exec(`
+		DROP TABLE IF EXISTS classification_assignments;
+		DROP TABLE IF EXISTS classification_jobs`); err != nil {
+		return fmt.Errorf("drop classification tables: %w", err)
 	}
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return err
+
+	// Referential-integrity triggers: `dependencies` is polymorphic (src/dst +
+	// type columns), so SQLite cannot enforce foreign keys across it. Without
+	// these, deleting a file/system/infra node strands its edges forever.
+	if _, err := db.Exec(`
+		CREATE TRIGGER IF NOT EXISTS deps_cleanup_on_file_delete
+		AFTER DELETE ON files BEGIN
+			DELETE FROM dependencies
+			WHERE (src = OLD.id AND src_type = 'file') OR (dst = OLD.id AND dst_type = 'file');
+		END;
+		CREATE TRIGGER IF NOT EXISTS deps_cleanup_on_system_delete
+		AFTER DELETE ON systems BEGIN
+			DELETE FROM dependencies
+			WHERE (src = OLD.id AND src_type = 'system') OR (dst = OLD.id AND dst_type = 'system');
+		END;
+		CREATE TRIGGER IF NOT EXISTS deps_cleanup_on_infra_delete
+		AFTER DELETE ON infra_nodes BEGIN
+			DELETE FROM dependencies
+			WHERE (src = OLD.id AND src_type = 'infra') OR (dst = OLD.id AND dst_type = 'infra');
+		END`); err != nil {
+		return fmt.Errorf("create integrity triggers: %w", err)
+	}
+
+	// One-time sweep of edges already orphaned before the triggers existed.
+	if _, err := db.Exec(`
+		DELETE FROM dependencies WHERE
+			(src_type='file'   AND src NOT IN (SELECT id FROM files))    OR
+			(dst_type='file'   AND dst NOT IN (SELECT id FROM files))    OR
+			(src_type='system' AND src NOT IN (SELECT id FROM systems))  OR
+			(dst_type='system' AND dst NOT IN (SELECT id FROM systems))  OR
+			(src_type='infra'  AND src NOT IN (SELECT id FROM infra_nodes)) OR
+			(dst_type='infra'  AND dst NOT IN (SELECT id FROM infra_nodes))`); err != nil {
+		return fmt.Errorf("orphaned dependency sweep: %w", err)
 	}
 
 	_, err = db.Exec(`

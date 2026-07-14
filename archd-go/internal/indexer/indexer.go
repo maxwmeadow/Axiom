@@ -4,19 +4,24 @@
 package indexer
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"log"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 
+	"axiom.local/archd/internal/activity"
 	"axiom.local/archd/internal/cluster"
 	"axiom.local/archd/internal/db"
 	"axiom.local/archd/internal/hub"
@@ -167,6 +172,15 @@ func ReindexFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error 
 	relPath, _ := filepath.Rel(root.Path, absPath)
 	relPath = filepath.ToSlash(relPath)
 	existing, _ := buildExistingMap(sqlDB, root.ID)
+
+	// Snapshot the pre-edit state for activity weighting (live edit tracking).
+	var prev *db.File
+	var prevSyms []db.Symbol
+	if p, ok := existing[relPath]; ok {
+		prev = &p
+		prevSyms, _ = db.GetSymbolsByFile(sqlDB, p.ID)
+	}
+
 	if err := indexOneFile(sqlDB, root, relPath, absPath, existing, nil); err != nil {
 		return err
 	}
@@ -174,15 +188,163 @@ func ReindexFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error 
 	if err := rebuildDependenciesForFile(sqlDB, root, relPath); err != nil {
 		log.Printf("indexer: rebuild dependencies for %s: %v", relPath, err)
 	}
-	// Broadcast a patch with the updated file
+
 	file, err := db.GetFileByRelPath(sqlDB, root.ID, relPath)
-	if err == nil && file != nil {
-		h.BroadcastPatch(map[string]any{
-			"type":    "file:updated",
-			"payload": file,
-		})
+	if err != nil || file == nil {
+		return err
 	}
+
+	recordActivity(sqlDB, root.WorkspaceID, prev, prevSyms, file, absPath)
+
+	// Reconcile planned UML elements against the new reality — this is how
+	// the user's drawn boxes turn green as the agent builds them.
+	if changed, err := db.ReconcilePlanned(sqlDB, root.WorkspaceID); err == nil {
+		for _, p := range changed {
+			log.Printf("[planned] %q → %s (%s)", p.Name, p.Status, p.DeclaredPath)
+			h.BroadcastPatch(map[string]any{"type": "planned:upserted", "payload": p})
+		}
+	}
+
+	// Broadcast with the churn display value freshly ranked against the
+	// workspace so the canvas heat border moves live.
+	if norm, err := normalizedChurn(sqlDB, root.WorkspaceID, file.ID); err == nil {
+		file.ChurnScore = norm
+	}
+	h.BroadcastPatch(map[string]any{
+		"type":    "file:updated",
+		"payload": file,
+	})
 	return nil
+}
+
+// recordActivity turns one watcher-detected save into a weighted edit burst
+// (see internal/activity). No-op saves (unchanged content hash) are dropped.
+func recordActivity(sqlDB *sql.DB, workspaceID string, prev *db.File, prevSyms []db.Symbol, file *db.File, absPath string) {
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
+		return
+	}
+	sum := sha256.Sum256(raw)
+	hash := hex.EncodeToString(sum[:])
+
+	prevHash, prevLines, prevScore := "", 0, 0.0
+	var prevAt int64
+	if prev != nil {
+		prevHash, prevLines = prev.ContentHash, prev.LineCount
+		prevScore, prevAt = prev.ActivityScore, prev.ActivityAt
+	}
+	if hash == prevHash {
+		return // formatter/editor no-op save — not activity
+	}
+
+	newSyms, _ := db.GetSymbolsByFile(sqlDB, file.ID)
+	symDelta := diffSymbols(prevSyms, newSyms)
+	linesDelta := file.LineCount - prevLines
+	if linesDelta < 0 {
+		linesDelta = -linesDelta
+	}
+	actor := activity.ActorFor(workspaceID)
+	weight := activity.Weight(linesDelta, symDelta, true, actor)
+
+	newScore, now, err := activity.RecordBurst(sqlDB, workspaceID, file.ID, actor, weight, linesDelta, symDelta, prevScore, prevAt)
+	if err != nil {
+		log.Printf("indexer: record activity for %s: %v", file.RelPath, err)
+		return
+	}
+	if err := db.UpdateFileActivity(sqlDB, file.ID, newScore, now, hash); err != nil {
+		log.Printf("indexer: persist activity for %s: %v", file.RelPath, err)
+		return
+	}
+	file.ActivityScore, file.ActivityAt, file.ContentHash = newScore, now, hash
+	log.Printf("[activity] %s burst: actor=%s weight=%.2f (Δlines=%d Δsymbols=%d) score=%.2f",
+		file.RelPath, actor, weight, linesDelta, symDelta, newScore)
+}
+
+// diffSymbols counts added, removed, and moved symbols between two parses.
+// Keyed by name+kind; a surviving symbol whose line span changed counts once.
+func diffSymbols(before, after []db.Symbol) int {
+	key := func(s db.Symbol) string { return s.Kind + "\x00" + s.Name }
+	old := make(map[string][2]int, len(before))
+	for _, s := range before {
+		old[key(s)] = [2]int{s.LineStart, s.LineEnd}
+	}
+	delta := 0
+	seen := make(map[string]bool, len(after))
+	for _, s := range after {
+		k := key(s)
+		seen[k] = true
+		if span, ok := old[k]; !ok {
+			delta++ // added
+		} else if span[0] != s.LineStart || span[1] != s.LineEnd {
+			delta++ // moved/resized — its body changed or code shifted through it
+		}
+	}
+	for k := range old {
+		if !seen[k] {
+			delta++ // removed
+		}
+	}
+	return delta
+}
+
+// normalizedChurn ranks one file's decayed activity against the workspace.
+func normalizedChurn(sqlDB *sql.DB, workspaceID, fileID string) (float64, error) {
+	files, err := db.GetFiles(sqlDB, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	entries := make([]activity.ScoreEntry, len(files))
+	for i, f := range files {
+		entries[i] = activity.ScoreEntry{ID: f.ID, Score: f.ActivityScore, AtMs: f.ActivityAt}
+	}
+	return activity.Normalize(entries, time.Now().UnixMilli())[fileID], nil
+}
+
+// ─── Shape inference (UML_UX_PLAN.md Rev 2b: shape = semantic role) ────────────
+//
+// Shape is what a node IS, not where it came from. Inferred each parse;
+// files.shape_override (user/agent) always wins at display time. Guardrail:
+// when unsure, it's a plain box — a wrong box is invisible, a wrong cylinder
+// is a lie.
+
+// Shape is only inferred from STRUCTURE the parser proved (the symbol table)
+// — never from filename/path heuristics; guessing "cylinder" off a directory
+// name is exactly the dumb-tool behavior Axiom exists to replace. Cylinder/
+// hexagon exist on live files only via explicit shape_override (user/agent),
+// where they are declared, not guessed.
+func inferShape(relPath string, symbols []db.Symbol) (shape, displayName string) {
+	base := strings.ToLower(relPath)
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	if i := strings.Index(base, "."); i > 0 {
+		base = base[:i]
+	}
+	baseNorm := strings.NewReplacer("_", "", "-", "").Replace(base)
+
+	// class-first: exactly one class, or a class whose name ≈ filename.
+	var classes []db.Symbol
+	for _, s := range symbols {
+		if strings.EqualFold(s.Kind, "class") {
+			classes = append(classes, s)
+		}
+	}
+	classFirst := ""
+	if len(classes) == 1 {
+		classFirst = classes[0].Name
+	} else {
+		for _, c := range classes {
+			if strings.EqualFold(strings.NewReplacer("_", "", "-", "").Replace(c.Name), baseNorm) {
+				classFirst = c.Name
+				break
+			}
+		}
+	}
+
+	if classFirst != "" {
+		return "class", classFirst
+	}
+	return "", ""
 }
 
 // ─── Internals ────────────────────────────────────────────────────────────────
@@ -200,14 +362,17 @@ func indexOneFile(sqlDB *sql.DB, root db.Root, relPath, absPath string, existing
 		fileID = uuid.New().String()
 	}
 
+	shape, displayName := inferShape(relPath, result.Symbols)
 	f := db.File{
-		ID:        fileID,
-		RootID:    root.ID,
-		Path:      absPath,
-		RelPath:   relPath,
-		Language:  result.Language,
-		SystemID:  nil, // assigned after clustering
-		LineCount: result.LineCount,
+		ID:          fileID,
+		RootID:      root.ID,
+		Path:        absPath,
+		RelPath:     relPath,
+		Language:    result.Language,
+		SystemID:    nil, // assigned after clustering
+		LineCount:   result.LineCount,
+		Shape:       shape,
+		DisplayName: displayName,
 	}
 	if err := db.UpsertFile(sqlDB, f); err != nil {
 		return err

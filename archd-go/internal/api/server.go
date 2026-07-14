@@ -15,10 +15,6 @@
 //	PUT  /api/files/:id/size           — update file canvas size  {w, h, workspaceId}
 //	GET  /api/files/:id/symbols?workspace= — get symbols for a file
 //	POST /api/infra                    — create infra node
-//	POST /api/classification/start     — start a classification job
-//	GET  /api/classification/:jobId?workspace=    — get job status
-//	GET  /api/classification/:jobId/batch?workspace= — get next batch for agent
-//	POST /api/classification/:jobId/submit?workspace= — submit agent assignments
 //	GET  /api/call-path?from=&to=&workspace= — trace call path between two files
 package api
 
@@ -31,6 +27,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -38,10 +35,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
+	"axiom.local/archd/internal/activity"
 	"axiom.local/archd/internal/db"
 	"axiom.local/archd/internal/hub"
 	"axiom.local/archd/internal/indexer"
+	"axiom.local/archd/internal/registry"
 	"axiom.local/archd/internal/runtime"
+	"axiom.local/archd/internal/watcher"
 )
 
 var upgrader = websocket.Upgrader{
@@ -54,21 +54,28 @@ var upgrader = websocket.Upgrader{
 // stored in dbs keyed by workspace ID. This guarantees complete data isolation
 // between projects and makes project removal (delete the directory) work correctly.
 type Server struct {
-	dataDir string
-	dbs     map[string]*sql.DB
-	mu      sync.RWMutex
-	hub     *hub.Hub
-	roots   map[string]db.Root // rootID → Root; populated on workspace open
-	runtime *runtime.Manager
+	dataDir  string
+	dbs      map[string]*sql.DB
+	mu       sync.RWMutex
+	hub      *hub.Hub
+	roots    map[string]db.Root // rootID → Root; populated on workspace open
+	runtime  *runtime.Manager
+	registry *registry.Registry // infra service registry (layered; reloaded on workspace open)
+	// watchers holds one running fsnotify watcher per root so live edits
+	// re-index and feed the activity engine. Keyed by root ID; closed on
+	// workspace close.
+	watchers map[string]*watcher.Watcher
 }
 
 func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
 	s := &Server{
-		dataDir: dataDir,
-		dbs:     make(map[string]*sql.DB),
-		hub:     h,
-		roots:   make(map[string]db.Root),
-		runtime: rt,
+		dataDir:  dataDir,
+		dbs:      make(map[string]*sql.DB),
+		hub:      h,
+		roots:    make(map[string]db.Root),
+		runtime:  rt,
+		registry: registry.Load(nil),
+		watchers: make(map[string]*watcher.Watcher),
 	}
 	// Adapters started outside the launcher (PYTHONPATH opt-in) have no
 	// AXIOM_WORKSPACE_ID; map them to a workspace by their working directory.
@@ -136,10 +143,38 @@ func (s *Server) dbFor(workspaceID string) (*sql.DB, error) {
 func (s *Server) closeDB(workspaceID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for rootID, r := range s.roots {
+		if r.WorkspaceID == workspaceID {
+			if w, ok := s.watchers[rootID]; ok {
+				w.Close()
+				delete(s.watchers, rootID)
+			}
+			delete(s.roots, rootID)
+		}
+	}
 	if d, ok := s.dbs[workspaceID]; ok {
 		d.Close()
 		delete(s.dbs, workspaceID)
 	}
+}
+
+// startWatcher attaches a live fsnotify watcher to a root so saves re-index
+// the file, feed the activity engine, and patch the canvas in real time.
+// Idempotent per root — re-opening a workspace reuses the running watcher.
+func (s *Server) startWatcher(sqlDB *sql.DB, root db.Root) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.watchers[root.ID]; ok {
+		return
+	}
+	w, err := watcher.New(sqlDB, s.hub, []db.Root{root})
+	if err != nil {
+		log.Printf("api: start watcher for %s: %v", root.Path, err)
+		return
+	}
+	s.watchers[root.ID] = w
+	go w.Run()
+	log.Printf("api: watcher attached to %s", root.Path)
 }
 
 // RegisterRoutes wires all API endpoints onto mux.
@@ -152,14 +187,18 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/systems/", s.handleSystemByID)
 	mux.HandleFunc("/api/files/", s.handleFileByID)
 	mux.HandleFunc("/api/infra", s.handleInfra)
-	mux.HandleFunc("/api/classification/start", s.handleClassificationStart)
-	mux.HandleFunc("/api/classification/", s.handleClassification)
+	mux.HandleFunc("/api/infra/connect", s.handleInfraConnect)
+	mux.HandleFunc("/api/infra/edge/", s.handleInfraEdge)
+	mux.HandleFunc("/api/infra/", s.handleInfraByID)
+	mux.HandleFunc("/api/registry/services", s.handleRegistryServices)
+	s.registerSheetRoutes(mux)
 	mux.HandleFunc("/api/call-path", s.handleCallPath)
 	mux.HandleFunc("/api/function-body", s.handleFunctionBody)
 	mux.HandleFunc("/api/data-flow", s.handleDataFlow)
 	s.registerRuntimeRoutes(mux)
 	s.registerInvestigationRoutes(mux)
 	mux.HandleFunc("/api/agent/activity", s.handleAgentActivity)
+	mux.HandleFunc("/api/activity/hotspots", s.handleActivityHotspots)
 	mux.HandleFunc("/api/query", s.handleQuery)
 }
 
@@ -261,6 +300,8 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.roots[root.ID] = root
+	s.reloadRegistry() // pick up the workspace's .axiom/services/ layer
+	s.startWatcher(sqlDB, root)
 
 	// Kick off indexing in the background.
 	// On first open: full index + cluster. On re-open: skip re-indexing to preserve
@@ -502,140 +543,6 @@ func (s *Server) handleFileByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ─── Infra ────────────────────────────────────────────────────────────────────
-
-func (s *Server) handleInfra(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
-		return
-	}
-	var n db.InfraNode
-	if err := json.NewDecoder(r.Body).Decode(&n); err != nil {
-		jsonError(w, "bad request", 400)
-		return
-	}
-	sqlDB, err := s.dbFor(n.WorkspaceID)
-	if err != nil {
-		jsonError(w, err.Error(), 404)
-		return
-	}
-	if err := db.UpsertInfraNode(sqlDB, n); err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	s.broadcastPatch("infra:upserted", n)
-	jsonOK(w, n)
-}
-
-// ─── Classification ───────────────────────────────────────────────────────────
-
-func (s *Server) handleClassificationStart(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.NotFound(w, r)
-		return
-	}
-	var body struct {
-		WorkspaceID string `json:"workspaceId"`
-		Strategy    string `json:"strategy"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonError(w, "bad request", 400)
-		return
-	}
-	if body.Strategy == "" {
-		body.Strategy = "by_import_cluster"
-	}
-	sqlDB, err := s.dbFor(body.WorkspaceID)
-	if err != nil {
-		jsonError(w, err.Error(), 404)
-		return
-	}
-	job, err := db.CreateClassificationJob(sqlDB, body.WorkspaceID, body.Strategy)
-	if err != nil {
-		jsonError(w, err.Error(), 500)
-		return
-	}
-	jsonOK(w, job)
-}
-
-func (s *Server) handleClassification(w http.ResponseWriter, r *http.Request) {
-	// /api/classification/<jobId>[/batch|/submit]
-	rest := strings.TrimPrefix(r.URL.Path, "/api/classification/")
-	parts := strings.SplitN(rest, "/", 2)
-	jobID := parts[0]
-	sub := ""
-	if len(parts) > 1 {
-		sub = parts[1]
-	}
-
-	workspaceID := r.URL.Query().Get("workspace")
-	sqlDB, err := s.dbFor(workspaceID)
-	if err != nil {
-		jsonError(w, err.Error(), 404)
-		return
-	}
-
-	switch {
-	case r.Method == http.MethodGet && sub == "":
-		job, err := db.GetClassificationJob(sqlDB, jobID)
-		if err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		if job == nil {
-			jsonError(w, "not found", 404)
-			return
-		}
-		jsonOK(w, job)
-
-	case r.Method == http.MethodGet && sub == "batch":
-		job, err := db.GetClassificationJob(sqlDB, jobID)
-		if err != nil || job == nil {
-			jsonError(w, "job not found", 404)
-			return
-		}
-		batch, err := db.GetNextClassificationBatch(sqlDB, jobID, job.WorkspaceID, 15)
-		if err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		systems, _ := db.GetSystems(sqlDB, job.WorkspaceID)
-		names := make([]string, 0, len(systems))
-		for _, sys := range systems {
-			names = append(names, sys.Name)
-		}
-		jsonOK(w, map[string]any{
-			"files":           batch,
-			"existingSystems": names,
-			"progress":        map[string]any{"classified": job.ClassifiedFiles, "total": job.TotalFiles},
-			"instructions":    "Group files by feature domain, not directory. Create new system names that reflect what the code does.",
-		})
-
-	case r.Method == http.MethodPost && sub == "submit":
-		var assignments []db.ClassificationAssignment
-		if err := json.NewDecoder(r.Body).Decode(&assignments); err != nil {
-			jsonError(w, "bad request", 400)
-			return
-		}
-		if err := db.SubmitClassificationAssignments(sqlDB, jobID, assignments); err != nil {
-			jsonError(w, err.Error(), 500)
-			return
-		}
-		// Broadcast the graph update
-		job, _ := db.GetClassificationJob(sqlDB, jobID)
-		if job != nil {
-			snap, _ := db.GetCanvasSnapshot(sqlDB, job.WorkspaceID)
-			if snap != nil {
-				s.hub.BroadcastSnapshot(snap)
-			}
-		}
-		jsonOK(w, map[string]any{"accepted": len(assignments)})
-
-	default:
-		http.NotFound(w, r)
-	}
-}
-
 // ─── Call path ────────────────────────────────────────────────────────────────
 
 func (s *Server) handleCallPath(w http.ResponseWriter, r *http.Request) {
@@ -757,8 +664,61 @@ func (s *Server) handleAgentActivity(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "bad request", 400)
 		return
 	}
+	// Every MCP tool call posts here — that signal attributes watcher-detected
+	// file edits in the next ~90s to the agent (activity engine).
+	activity.MarkAgent(body.WorkspaceID)
 	s.hub.Broadcast("agent:activity", body)
 	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// handleActivityHotspots returns files ranked by decayed live-edit activity —
+// "where is the code changing right now". GET /api/activity/hotspots?workspace=&limit=
+func (s *Server) handleActivityHotspots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+	workspaceID := r.URL.Query().Get("workspace")
+	sqlDB, err := s.dbFor(workspaceID)
+	if err != nil {
+		jsonError(w, err.Error(), 404)
+		return
+	}
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		fmt.Sscanf(l, "%d", &limit)
+	}
+	files, err := db.GetFiles(sqlDB, workspaceID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	now := time.Now().UnixMilli()
+	type hotspot struct {
+		FileID     string  `json:"fileId"`
+		RelPath    string  `json:"relPath"`
+		Score      float64 `json:"score"`      // decayed raw score
+		Normalized float64 `json:"normalized"` // 0..1 workspace percentile
+		LastEdit   int64   `json:"lastEditAt"` // ms epoch of last burst
+	}
+	entries := make([]activity.ScoreEntry, len(files))
+	for i, f := range files {
+		entries[i] = activity.ScoreEntry{ID: f.ID, Score: f.ActivityScore, AtMs: f.ActivityAt}
+	}
+	norm := activity.Normalize(entries, now)
+	var hots []hotspot
+	for _, f := range files {
+		d := activity.Decayed(f.ActivityScore, f.ActivityAt, now)
+		if d <= 0 {
+			continue
+		}
+		hots = append(hots, hotspot{f.ID, f.RelPath, d, norm[f.ID], f.ActivityAt})
+	}
+	sort.Slice(hots, func(i, j int) bool { return hots[i].Score > hots[j].Score })
+	if len(hots) > limit {
+		hots = hots[:limit]
+	}
+	jsonOK(w, hots)
 }
 
 func jsonOK(w http.ResponseWriter, v any) {

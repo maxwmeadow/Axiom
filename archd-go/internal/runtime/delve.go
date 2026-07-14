@@ -15,6 +15,7 @@
 package runtime
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -105,7 +106,7 @@ func (m *Manager) LaunchGoTarget(workspaceID, program string, args []string) (*D
 	funcToID := make(map[string]string)
 	fileBySym := make(map[string]string)
 	for _, w := range watches {
-		funcToID[qualifyGoFunc(w.Symbol)] = w.ID
+		funcToID[qualifyGoFunc(w.Symbol, w.AbsPath)] = w.ID
 		fileBySym[w.Symbol] = w.RelPath
 	}
 
@@ -313,7 +314,7 @@ func (s *DelveSession) handleStopped(body json.RawMessage) {
 
 	goroutineID := st.ThreadID
 	symbol, relPath, args := s.inspect(st.ThreadID)
-	watchID := s.funcToID[symbol]
+	watchID := s.watchIDForGoFrame(symbol)
 
 	// Resume immediately after inspection — minimize the stop-the-world window.
 	roundTrip := float64(time.Since(start).Microseconds()) / 1000.0
@@ -486,14 +487,59 @@ func (s *DelveSession) dto() map[string]any {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-// qualifyGoFunc turns a bare symbol into a delve breakpoint name. Unqualified
-// names are assumed to be in package main (the spike demo); already-qualified
-// names (containing a dot) pass through.
-func qualifyGoFunc(symbol string) string {
+// qualifyGoFunc turns a bare symbol into a delve breakpoint name. The package
+// is read from the watched file's `package` clause; already-qualified names
+// (containing a dot) pass through. Falls back to main when the file cannot be
+// read (e.g. the watch predates a file move).
+func qualifyGoFunc(symbol, absPath string) string {
 	if strings.Contains(symbol, ".") {
 		return symbol
 	}
+	if pkg := goPackageName(absPath); pkg != "" {
+		return pkg + "." + symbol
+	}
 	return "main." + symbol
+}
+
+// goPackageName reads the package clause from a Go source file. Returns ""
+// when the file cannot be read or no clause is found before EOF.
+func goPackageName(absPath string) string {
+	if absPath == "" {
+		return ""
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if rest, ok := strings.CutPrefix(line, "package "); ok {
+			// Strip trailing comments: `package foo // doc`
+			if i := strings.IndexAny(rest, " \t/"); i >= 0 {
+				rest = rest[:i]
+			}
+			return rest
+		}
+	}
+	return ""
+}
+
+// watchIDForGoFrame resolves a normalized delve frame name against the
+// breakpoint map. Frame names carry the full import path
+// ("github.com/x/repo/pkg.Func") while breakpoints are keyed by package name
+// ("pkg.Func"), so an exact match is tried first, then the segment after the
+// last "/". No bare-name fuzzy matching — with two watched same-named
+// functions in different packages that would resolve non-deterministically.
+func (s *DelveSession) watchIDForGoFrame(symbol string) string {
+	if id, ok := s.funcToID[symbol]; ok {
+		return id
+	}
+	if i := strings.LastIndex(symbol, "/"); i >= 0 {
+		return s.funcToID[symbol[i+1:]]
+	}
+	return ""
 }
 
 // normalizeGoFrameName reduces a delve frame name to the qualified func name.
