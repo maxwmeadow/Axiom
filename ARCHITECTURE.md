@@ -171,102 +171,32 @@ When a workspace is first indexed, Axiom has no system assignments. The default 
 2. All files are assigned to their nearest directory-based system
 3. These systems have `source = 'directory'`
 4. The canvas renders them immediately — the user sees a real structure, not a blank canvas
-5. The classification status shows: "229 files in 12 auto-systems. Run agent classification to organize by feature."
+5. The status shows: "229 files in 12 auto-systems. Run agent review to organize by feature."
 
 Directory-based systems are the starting point, not the destination. They exist so the canvas is immediately useful before any agent work is done.
 
 ---
 
-## Classification Loop (Agent-Driven System Organization)
+## System Organization (Clustering + Agent Review)
 
-The agent cannot receive 229 files at once. Axiom orchestrates the classification as a **stateful workflow** where Axiom is the orchestrator and the agent is the worker. The agent answers one question at a time; Axiom maintains all state.
+> The original design here was a stateful "classification job" pipeline (batch
+> tables, `/api/classification/*` endpoints) where the agent classified every
+> file from scratch. It was superseded before ever being wired to MCP or the UI
+> and was removed in July 2026. The actual flow:
 
-### Batching Strategy
+1. **Indexing clusters automatically (~85%)** — `clusterAndAssign` in the
+   indexer runs hierarchical multi-signal clustering (TF-IDF over symbols +
+   git co-change + import connectivity), creating nested systems with
+   `source='cluster'` up to 4 levels deep. No LLM involved.
+2. **Agent review finishes the rest** — the `start_review` MCP tool hands the
+   agent audit instructions; it inspects the clustered systems and reorganizes
+   using the ad-hoc tools (`get_unclassified_files`, `create_system`,
+   `assign_files_to_system`, `update_systems_bulk`, `merge_systems`, …).
+3. Every change broadcasts over WebSocket and the canvas re-renders live.
 
-Files are batched by **import cluster** (connectivity), not by directory. Files that import each other belong in the same batch — this gives the agent the context it needs to make a coherent grouping decision. A batch is typically 10–20 files.
-
-### Classification Job Schema
-
-```sql
-classification_jobs (
-  id                  TEXT PRIMARY KEY,
-  workspace_id        TEXT,
-  status              TEXT,  -- 'pending' | 'running' | 'paused' | 'complete'
-  total_files         INTEGER,
-  classified_files    INTEGER DEFAULT 0,
-  strategy            TEXT DEFAULT 'by_import_cluster',
-  created_at          INTEGER,
-  completed_at        INTEGER
-)
-
-classification_assignments (
-  job_id              TEXT REFERENCES classification_jobs(id),
-  file_id             TEXT REFERENCES files(id),
-  proposed_system     TEXT,   -- system name (may be new or existing)
-  parent_system       TEXT,   -- optional: proposed parent system name
-  confidence          REAL,
-  agent_reasoning     TEXT,
-  status              TEXT    -- 'pending' | 'accepted' | 'rejected' | 'modified'
-)
-```
-
-### MCP Tools for Classification
-
-```
-get_classification_batch(job_id, batch_size?)
-→ Returns:
-  {
-    files: [{
-      id, path, language, line_count,
-      imports: string[],         // what this file imports
-      imported_by: string[],     // what imports this file
-      preview: string            // first 30 lines of the file
-    }],
-    existing_systems: string[],  // system names already created
-    instructions: string,        // "Group by feature, not by folder. ..."
-    progress: "45/229 files classified"
-  }
-
-submit_classifications(job_id, assignments: [{
-  file_id: string,
-  system: string,              // existing system name or new name
-  parent_system?: string,      // optional: nest under this system
-  confidence: number,
-  reasoning?: string
-}])
-→ Returns:
-  {
-    accepted: string[],
-    next_batch: { files: [...] } | { status: 'complete' }
-    feedback: string            // e.g., "Created 3 new systems. 184 files remain."
-  }
-
-get_classification_status(job_id)
-→ Returns progress, current systems created, unclassified file count
-
-request_reclassification(system_id, reason)
-→ Marks a system's files for re-review in a new batch
-```
-
-### The Loop
-
-```
-[User clicks "Organize with Agent" in UI]
-         ↓
-Axiom creates ClassificationJob
-         ↓
-Agent calls get_classification_batch()
-Axiom returns: 15 most-connected unclassified files + context
-         ↓
-Agent calls submit_classifications() with grouping decisions
-Axiom: saves assignments, computes next batch
-         ↓
-Axiom returns: next batch (or "complete")
-         ↓
-[repeat until complete]
-         ↓
-Axiom broadcasts graph update via WebSocket → canvas re-renders
-```
+The proposal pattern from the original design (pending assignments with
+confidence + accept/reject) lives on in the infra layer's detection tray —
+see INFRA_LAYER_PLAN.md.
 
 ---
 
@@ -336,7 +266,7 @@ Every action has two entry points — one for the user and one for the agent. Th
 | Rename system | Double-click system label | `rename_system(system_id, new_name)` |
 | Nest system | Drag system onto another system | `set_system_parent(child_id, parent_id)` |
 | Connect to infra | Draw edge to infra node | `create_infra_connection(file_id, infra_id, edge_type)` |
-| Trigger classification | "Organize" button | `start_classification_job(workspace_id)` |
+| Trigger reorganization | "Organize" button | `start_review()` |
 | View call trace | Click file → expand in panel | `trace_call_path(from_symbol, to_symbol)` |
 
 ---
@@ -359,9 +289,7 @@ On file change: re-parses the changed file, updates its edges, broadcasts a grap
 
 The MCP server (`axiom-mcp.ts`) wraps the agent-api endpoints and exposes them as MCP tools. The agent never talks directly to the database or to archd — it always goes through MCP.
 
-Current tools: `create_system`, `assign_file_to_system`, `create_connection`, `get_cluster`
-
-Planned tools (from classification loop): `get_classification_batch`, `submit_classifications`, `get_classification_status`, `request_reclassification`, `trace_call_path`, `get_file_context`
+The tool surface has grown well beyond this list — see `mcp/axiom-mcp.ts` for the current set (system CRUD, graph queries, runtime tracing, investigations, data flow, infra).
 
 ---
 
