@@ -240,8 +240,11 @@ func migrate(db *sql.DB) error {
 		label         TEXT NOT NULL,    -- display snapshot cached at add time
 		position_x    REAL NOT NULL DEFAULT 0,
 		position_y    REAL NOT NULL DEFAULT 0,
-		width REAL, height REAL,
+		width         REAL,
+		height        REAL,
+		parent_system_id TEXT,
 		emphasis      TEXT,             -- json {dim, accent, expandedToSymbols}
+		design_metadata TEXT NOT NULL DEFAULT '{}', -- sheet-local authored design overlay for live entities
 		tombstone_ack INTEGER NOT NULL DEFAULT 0,
 		ghost         INTEGER NOT NULL DEFAULT 0,
 		added_by      TEXT NOT NULL DEFAULT 'user',
@@ -279,11 +282,15 @@ func migrate(db *sql.DB) error {
 		name          TEXT NOT NULL,
 		declared_path TEXT NOT NULL DEFAULT '',        -- reconciliation hint (rel path)
 		members       TEXT NOT NULL DEFAULT '[]',      -- json [{signature, intent, realized}]
+		metadata      TEXT NOT NULL DEFAULT '{}',      -- versioned, kind-specific UML authoring metadata
 		status        TEXT NOT NULL DEFAULT 'planned', -- 'planned'|'partial'|'realized'|'flattened'
 		realized_file_id TEXT REFERENCES files(id) ON DELETE SET NULL,
 		notes         TEXT NOT NULL DEFAULT '',
 		position_x    REAL NOT NULL DEFAULT 0,
 		position_y    REAL NOT NULL DEFAULT 0,
+		width         REAL,
+		height        REAL,
+		parent_system_id TEXT,
 		created_by    TEXT NOT NULL DEFAULT 'user',
 		created_at    INTEGER NOT NULL
 	);
@@ -313,6 +320,7 @@ func migrate(db *sql.DB) error {
 		note           TEXT NOT NULL,
 		selection      TEXT NOT NULL DEFAULT '[]',  -- json durable refs
 		change_summary TEXT NOT NULL DEFAULT '',    -- 12-verb semantic summary
+		sheet_context  TEXT NOT NULL DEFAULT '',    -- immutable JSON snapshot resolved against the live Floor
 		status         TEXT NOT NULL DEFAULT 'queued', -- 'queued'|'delivered'|'answered'
 		delivered_to   TEXT,
 		answer_annotation_id TEXT,
@@ -340,10 +348,65 @@ func migrate(db *sql.DB) error {
 		position_x    REAL NOT NULL DEFAULT 0,
 		position_y    REAL NOT NULL DEFAULT 0
 	);
+
+	-- Floor geometry is deliberately separate from semantic ownership. A file's
+	-- system_id and a system's parent_id describe the live codebase; layout_parent
+	-- describes the coordinate frame it is visually placed in (including hosting).
+	CREATE TABLE IF NOT EXISTS floor_layouts (
+		workspace_id      TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+		node_id           TEXT NOT NULL,
+		node_type         TEXT NOT NULL CHECK(node_type IN ('system','file','infra')),
+		parent_node_id    TEXT,
+		parent_node_type  TEXT CHECK(parent_node_type IS NULL OR parent_node_type IN ('system','infra')),
+		containment_kind  TEXT NOT NULL DEFAULT 'root' CHECK(containment_kind IN ('root','part_of','hosted_by')),
+		position_x        REAL NOT NULL DEFAULT 0,
+		position_y        REAL NOT NULL DEFAULT 0,
+		width             REAL NOT NULL,
+		height            REAL NOT NULL,
+		scale             REAL NOT NULL DEFAULT 1 CHECK(scale > 0),
+		updated_at        INTEGER NOT NULL,
+		PRIMARY KEY(workspace_id, node_type, node_id)
+	);
+	CREATE INDEX IF NOT EXISTS floor_layouts_parent
+		ON floor_layouts(workspace_id, parent_node_type, parent_node_id);
+	CREATE TABLE IF NOT EXISTS floor_layout_revisions (
+		workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+		revision INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TRIGGER IF NOT EXISTS floor_layout_cleanup_system AFTER DELETE ON systems BEGIN
+		DELETE FROM floor_layouts WHERE node_type='system' AND node_id=OLD.id;
+		UPDATE floor_layouts SET parent_node_id=NULL, parent_node_type=NULL, containment_kind='root'
+			WHERE parent_node_type='system' AND parent_node_id=OLD.id;
+	END;
+	CREATE TRIGGER IF NOT EXISTS floor_layout_cleanup_file AFTER DELETE ON files BEGIN
+		DELETE FROM floor_layouts WHERE node_type='file' AND node_id=OLD.id;
+	END;
+	CREATE TRIGGER IF NOT EXISTS floor_layout_cleanup_infra AFTER DELETE ON infra_nodes BEGIN
+		DELETE FROM floor_layouts WHERE node_type='infra' AND node_id=OLD.id;
+		UPDATE floor_layouts SET parent_node_id=NULL, parent_node_type=NULL, containment_kind='root'
+			WHERE parent_node_type='infra' AND parent_node_id=OLD.id;
+	END;
 	`
 
 	if _, err := db.Exec(schema); err != nil {
 		return err
+	}
+
+	// Preserve Floor containment when the sheet override column is first added
+	// to an existing database. On later starts the duplicate-column result skips
+	// this backfill, so an intentional NULL (sheet-root placement) stays NULL.
+	if _, err := db.Exec(`ALTER TABLE sheet_elements ADD COLUMN parent_system_id TEXT`); err == nil {
+		if _, err := db.Exec(`
+			UPDATE sheet_elements
+			SET parent_system_id = CASE
+				WHEN file_id IS NOT NULL THEN (SELECT system_id FROM files WHERE files.id = sheet_elements.file_id)
+				WHEN system_id IS NOT NULL THEN (SELECT parent_id FROM systems WHERE systems.id = sheet_elements.system_id)
+				ELSE NULL
+			END`); err != nil {
+			return fmt.Errorf("backfill sheet containment: %w", err)
+		}
+	} else if !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("migration: sheet parent override: %w", err)
 	}
 
 	// Additive column migrations — SQLite has no IF NOT EXISTS for columns;
@@ -367,6 +430,18 @@ func migrate(db *sql.DB) error {
 		// Planned UML authoring: semantic shape + user color (REVISION 2 UX)
 		`ALTER TABLE planned_nodes ADD COLUMN shape TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE planned_nodes ADD COLUMN color TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE planned_nodes ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`,
+		// Sheet-local containment for planned elements.
+		`ALTER TABLE planned_nodes ADD COLUMN parent_system_id TEXT`,
+		`ALTER TABLE planned_nodes ADD COLUMN width REAL`,
+		`ALTER TABLE planned_nodes ADD COLUMN height REAL`,
+		`ALTER TABLE planned_nodes ADD COLUMN scale REAL NOT NULL DEFAULT 1`,
+		`ALTER TABLE canvas_outbox ADD COLUMN sheet_context TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sheet_elements ADD COLUMN design_metadata TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE sheet_elements ADD COLUMN scale REAL NOT NULL DEFAULT 1`,
+		// Migrate the original shape-overloaded stencil kinds to explicit semantics.
+		`UPDATE planned_nodes SET kind='data_store' WHERE kind='class' AND shape='cylinder'`,
+		`UPDATE planned_nodes SET kind='service' WHERE kind='class' AND shape='hexagon'`,
 		// Infra layer (INFRA_LAYER_PLAN.md Phase I1)
 		`ALTER TABLE infra_nodes  ADD COLUMN category    TEXT NOT NULL DEFAULT 'api'`,
 		`ALTER TABLE infra_nodes  ADD COLUMN provider    TEXT NOT NULL DEFAULT 'generic'`,

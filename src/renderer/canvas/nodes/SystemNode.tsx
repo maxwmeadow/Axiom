@@ -1,6 +1,12 @@
 import React from 'react'
-import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react'
+import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { SystemNodeData } from '../AxiomCanvas'
+import { EditableNodeTitle } from './EditableNodeTitle'
+import { useInfraService } from '../../store/registryStore'
+import { brandIcon, CATEGORY_GLYPHS, officialServiceIcon } from './infraIcons'
+import { fitPresentationScale } from '../resizeGeometry'
+import { connectionHandleProps } from './connectionChrome'
+import { AxiomNodeResizer } from './AxiomNodeResizer'
 
 // World-space font sizes per depth — fixed, no counter-scaling.
 const DEPTH_TITLE_PX = [24, 14, 10, 8]
@@ -8,18 +14,24 @@ const DEPTH_TITLE_PX = [24, 14, 10, 8]
 // Drop-target feedback: renders the cell grid only while a node is being
 // dragged over this container (green = free, amber = displaced, red = occupied).
 function GridOverlay({ d }: { d: SystemNodeData }) {
-  if (!d.isDropTarget || !d.nodeW || !d.nodeH || !d.gridCellW || !d.gridGap) return null
+  if (!d.isDropTarget || !d.nodeW || !d.nodeH || !d.gridCellW || !d.gridCellH || !d.gridGap) return null
 
   const w = d.nodeW, h = d.nodeH
-  const cw = d.gridCellW, ch = d.gridCellH!, gap = d.gridGap
+  const cw = d.gridCellW, ch = d.gridCellH, gap = d.gridGap
+  if (![w, h, cw, ch, gap].every(value => Number.isFinite(value) && value > 0)) return null
+  const columnCount = Math.min(512, Math.max(0, Math.ceil((w - gap) / (cw + gap))))
+  const rowCount = Math.min(
+    Math.max(1, Math.floor(4096 / Math.max(1, columnCount))),
+    Math.max(0, Math.ceil((h - gap) / (ch + gap))),
+  )
 
   const els: React.ReactNode[] = []
 
   // Draw cells
-  for (let col = 0; ; col++) {
+  for (let col = 0; col < columnCount; col++) {
     const x = (col + 1) * gap + col * cw
     if (x >= w) break
-    for (let row = 0; ; row++) {
+    for (let row = 0; row < rowCount; row++) {
       const y = (row + 1) * gap + row * ch
       if (y >= h) break
 
@@ -93,10 +105,21 @@ function GridOverlay({ d }: { d: SystemNodeData }) {
   )
 }
 
-export function SystemNode({ data, selected }: NodeProps) {
+export function SystemNode({ data, selected, width, height, isConnectable }: NodeProps) {
   const d = data as unknown as SystemNodeData
-  const { color, colorRgb, name, source, fileCount, childSystemCount, agentTouched, isChild,
+  const infraCategory = d.umlMetadata?.category ?? 'platform'
+  const isDeploymentBoundary = d.umlKind === 'infra'
+  const infraService = useInfraService(d.umlKind === 'infra' ? (d.umlMetadata?.service ?? '') : '')
+  const officialInfraIcon = infraService ? officialServiceIcon(infraService.id) : undefined
+  const infraIcon = infraService ? brandIcon(infraService.brand.icon) : null
+  const legend = isDeploymentBoundary
+    ? ['HOSTING', infraService?.provider?.toUpperCase()].filter(Boolean).join(' · ')
+    : 'SYSTEM'
+  const { color: authoredColor, name, source, directChildCount, agentTouched, isChild,
     childrenVisible, selfScale, selfBlur, isDropTarget, onResizeStart, onResizeEnd, depth } = d
+  const color = isDeploymentBoundary
+    ? (infraService?.brand.darkColor ?? infraService?.brand.color ?? authoredColor)
+    : authoredColor
 
   // 0..1 reveal of inner contents (zoom-gated). Drives the title crossfade:
   // big centered title while contents are hidden ↔ small tab-band title once
@@ -104,7 +127,13 @@ export function SystemNode({ data, selected }: NodeProps) {
   const containerAlpha = typeof childrenVisible === 'number' ? childrenVisible : (childrenVisible ? 1 : 0)
   const scale = typeof selfScale === 'number' ? selfScale : 1
   const blur  = typeof selfBlur === 'number' ? selfBlur : 0
-  const totalCount = fileCount + childSystemCount
+  const totalCount = directChildCount
+  const presentationScale = fitPresentationScale(
+    width,
+    height,
+    d.presentationBaseWidth ?? width ?? 620,
+    d.presentationBaseHeight ?? height ?? 420,
+  )
 
   // Preview offset — applied as translate so the node visually floats to its predicted post-drop
   // position without moving the React Flow logical position (handles stay at original spot).
@@ -115,7 +144,7 @@ export function SystemNode({ data, selected }: NodeProps) {
   // All pixel values proportional to titlePx so every depth renders identically —
   // only world-space scale differs between depths.
   const depthIdx = Math.min(depth ?? 0, DEPTH_TITLE_PX.length - 1)
-  const titlePx  = DEPTH_TITLE_PX[depthIdx]
+  const titlePx  = DEPTH_TITLE_PX[depthIdx] * presentationScale
   const dotPx    = titlePx * 0.55
   const padX     = Math.round(titlePx * 0.75)
   const padY     = Math.round(titlePx * 0.55)
@@ -128,10 +157,10 @@ export function SystemNode({ data, selected }: NodeProps) {
 
   const handles = (
     <>
-      <Handle type="source" position={Position.Right}  style={{ opacity: 0, right: -6 }} />
-      <Handle type="target" position={Position.Left}   style={{ opacity: 0, left: -6 }} />
-      <Handle type="source" position={Position.Bottom} style={{ opacity: 0, bottom: -6 }} />
-      <Handle type="target" position={Position.Top}    style={{ opacity: 0, top: -6 }} />
+      <Handle type="source" position={Position.Right}  {...connectionHandleProps(isConnectable, presentationScale, { right: -6 })} />
+      <Handle type="target" position={Position.Left}   {...connectionHandleProps(isConnectable, presentationScale, { left: -6 })} />
+      <Handle type="source" position={Position.Bottom} {...connectionHandleProps(isConnectable, presentationScale, { bottom: -6 })} />
+      <Handle type="target" position={Position.Top}    {...connectionHandleProps(isConnectable, presentationScale, { top: -6 })} />
     </>
   )
 
@@ -159,8 +188,19 @@ export function SystemNode({ data, selected }: NodeProps) {
   const tabW = Math.min(Math.max(shellSize.w * 0.3, titleFont * 6), shellSize.w * 0.5)
   const tabSlant = tabH * 0.65
 
+  const infraIdentityIcon = (size: number) => {
+    if (!isDeploymentBoundary) return null
+    if (officialInfraIcon) return <img src={officialInfraIcon} alt="" width={size} height={size} style={{ flexShrink: 0, objectFit: 'contain', order: -1 }} />
+    if (infraIcon) return <svg viewBox="0 0 24 24" width={size} height={size} style={{ flexShrink: 0, order: -1 }}>
+      <path d={infraIcon.path} fill={color} />
+    </svg>
+    return <svg viewBox="0 0 24 24" width={size} height={size} style={{ flexShrink: 0, order: -1 }}>
+      <path d={CATEGORY_GLYPHS[infraCategory] ?? CATEGORY_GLYPHS.platform} fill={color} />
+    </svg>
+  }
+
   // Big centered title — the collapsed identity. Fades out as contents reveal.
-  const bigTitleFont = Math.max(14, Math.min(shellSize.w * 0.11, shellSize.h * 0.2, 72))
+  const bigTitleFont = Math.max(0.5, Math.min(shellSize.w * 0.11, shellSize.h * 0.2, 72 * presentationScale))
   const bigTitle = (
     <div style={{
       position: 'absolute',
@@ -176,7 +216,7 @@ export function SystemNode({ data, selected }: NodeProps) {
       transition: 'opacity 0.25s ease',
       padding: `0 ${padX}px`,
     }}>
-      <span style={{
+      <EditableNodeTitle value={name} onRename={d.onRename} style={{
         fontSize: bigTitleFont,
         fontWeight: 700,
         fontFamily: 'var(--font-mono)',
@@ -187,7 +227,9 @@ export function SystemNode({ data, selected }: NodeProps) {
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
         textAlign: 'center',
-      }}>{name}</span>
+        pointerEvents: d.onRename ? 'auto' : 'none',
+      }} />
+      {infraIdentityIcon(Math.max(16, bigTitleFont * 0.48))}
       {totalCount > 0 && (
         <span style={{
           fontSize: Math.max(9, bigTitleFont * 0.3),
@@ -216,7 +258,8 @@ export function SystemNode({ data, selected }: NodeProps) {
       opacity: containerAlpha,
       transition: 'opacity 0.25s ease',
     }}>
-      <span style={{
+      {infraIdentityIcon(Math.max(12, titleFont * 1.05))}
+      <EditableNodeTitle value={name} onRename={d.onRename} style={{
         fontSize: titleFont,
         fontWeight: 600,
         fontFamily: 'var(--font-mono)',
@@ -228,9 +271,7 @@ export function SystemNode({ data, selected }: NodeProps) {
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         pointerEvents: 'none',
-      }}>
-        {name}
-      </span>
+      }} />
       {source === 'agent' && (
         <span style={{
           fontSize: badgeFont * 0.85,
@@ -249,12 +290,25 @@ export function SystemNode({ data, selected }: NodeProps) {
   )
 
   // Opaque panel fill per depth — deeper nesting sits one step "higher" on the board.
-  const panelBg = `var(--panel-${Math.min(depth ?? 0, 3)})`
+  const basePanelBg = `var(--panel-${Math.min(depth ?? 0, 3)})`
+  const panelBg = isDeploymentBoundary
+    ? `color-mix(in srgb, ${color} 12%, ${basePanelBg})`
+    : basePanelBg
 
   const dimmed = !!(d as any).dimmed
 
   const strokeColor = isDropTarget || selected ? color : 'var(--border)'
   const strokeW = isDropTarget ? 2.5 : selected ? 2 : 1
+  const deploymentCorner = Math.max(7, Math.min(18, shellSize.w * 0.035, shellSize.h * 0.09))
+  const shellPath = isDeploymentBoundary
+    // Hosting is a deployment chassis, not a UML package. It deliberately
+    // shares containment mechanics without implying semantic system ownership.
+    ? `M ${deploymentCorner} 1 L ${shellSize.w - deploymentCorner} 1 ` +
+      `L ${shellSize.w - 1} ${deploymentCorner} L ${shellSize.w - 1} ${shellSize.h - deploymentCorner} ` +
+      `L ${shellSize.w - deploymentCorner} ${shellSize.h - 1} L ${deploymentCorner} ${shellSize.h - 1} ` +
+      `L 1 ${shellSize.h - deploymentCorner} L 1 ${deploymentCorner} Z`
+    : `M 1 ${shellSize.h - 1} L 1 1 L ${tabW} 1 L ${tabW + tabSlant} ${tabH} ` +
+      `L ${shellSize.w - 1} ${tabH} L ${shellSize.w - 1} ${shellSize.h - 1} Z`
 
   return (
     <div ref={shellRef} style={{
@@ -269,32 +323,37 @@ export function SystemNode({ data, selected }: NodeProps) {
       transition: 'transform 0.22s cubic-bezier(0.25,1,0.5,1), filter 0.18s ease-out, opacity 0.3s ease',
       position: 'relative',
       overflow: 'hidden',
+      userSelect: 'none',
+      cursor: 'grab',
     }}>
-      <NodeResizer isVisible={selected} minWidth={60} minHeight={40} color={color}
-        onResizeStart={(_e, p) => onResizeStart?.(p.width, p.height)}
-        onResizeEnd={(_e, p) => onResizeEnd?.(p.width, p.height)} />
-      {/* Folder silhouette — outline + fill in one path, tab top-left. */}
+      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} isVisible={selected}
+        minWidth={d.minResizeWidth ?? 1}
+        minHeight={d.minResizeHeight ?? 1} color={color}
+        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
+      {/* Semantic systems use a package outline; hosting uses a compute chassis. */}
       <svg
         width={shellSize.w} height={shellSize.h}
         style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
       >
         <path
-          d={`M 1 ${shellSize.h - 1} L 1 1 L ${tabW} 1 L ${tabW + tabSlant} ${tabH} ` +
-             `L ${shellSize.w - 1} ${tabH} L ${shellSize.w - 1} ${shellSize.h - 1} Z`}
+          d={shellPath}
           fill={panelBg}
           stroke={strokeColor}
           strokeWidth={strokeW}
         />
-        {/* drafting-table left accent rule */}
-        <line x1={2} y1={2} x2={2} y2={shellSize.h - 2} stroke={color} strokeWidth={3} />
-        {/* tiny legend in the tab, same as the sheet-layer folder */}
+        {isDeploymentBoundary ? <>
+          {/* Chassis rails remain legible even around a large hosted service. */}
+          <line x1={deploymentCorner * 0.46} y1={deploymentCorner + 3} x2={deploymentCorner * 0.46} y2={shellSize.h - deploymentCorner - 3} stroke={color} strokeWidth={2.5} />
+          <line x1={deploymentCorner * 0.78} y1={deploymentCorner + 3} x2={deploymentCorner * 0.78} y2={shellSize.h - deploymentCorner - 3} stroke={color} strokeWidth={1} opacity={0.45} />
+        </> : <line x1={2} y1={2} x2={2} y2={shellSize.h - 2} stroke={color} strokeWidth={3} />}
+        {/* tiny legend identifies the semantic or deployment role. */}
         <text x={padX * 0.8} y={tabH * 0.72} style={{
           fontSize: tabH * 0.5, letterSpacing: '0.12em',
-          fill: 'var(--text-dim)', fontFamily: 'var(--font-mono)',
-        }}>SYSTEM</text>
+          fill: isDeploymentBoundary ? color : 'var(--text-dim)', fontFamily: 'var(--font-mono)',
+        }}>{legend}</text>
         {/* item count — a small bordered chip nested INSIDE the tab at its
             right end, right edge slanted to echo the tab's cut. */}
-        {totalCount > 0 && (() => {
+        {!isDeploymentBoundary && totalCount > 0 && (() => {
           const legendFont = tabH * 0.5
           const yT = 3.5                    // chip inset from the tab's top edge
           const yB = tabH - 1               // sits low, riding the tab line

@@ -1,6 +1,31 @@
-import type { DbSystem } from '../../shared/types'
+import type { DbSystem, FloorLayout } from '../../shared/types'
 
 const BASE = 'http://127.0.0.1:7744'
+
+export interface FileSource {
+  fileId: string
+  relPath: string
+  language: string
+  lineCount: number
+  content: string
+}
+
+export async function apiGetFileSource(fileId: string, workspaceId: string, signal?: AbortSignal): Promise<FileSource> {
+  const res = await fetch(`${BASE}/api/files/${encodeURIComponent(fileId)}/source?workspace=${encodeURIComponent(workspaceId)}`, { signal })
+  if (!res.ok) throw new Error(await res.text() || `Unable to load source (${res.status})`)
+  return res.json() as Promise<FileSource>
+}
+
+export async function apiSaveFloorLayouts(workspaceId: string, layouts: Omit<FloorLayout, 'workspaceId' | 'updatedAt'>[]): Promise<FloorLayout[]> {
+  const res = await fetch(`${BASE}/api/layout/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspaceId, layouts }),
+  })
+  if (!res.ok) throw new Error(await res.text())
+  const result = await res.json() as { revision: number; layouts: FloorLayout[] }
+  return result.layouts
+}
 
 export async function apiAssignFile(fileId: string, systemId: string | null, workspaceId: string): Promise<void> {
   const res = await fetch(`${BASE}/api/files/${fileId}/assign`, {

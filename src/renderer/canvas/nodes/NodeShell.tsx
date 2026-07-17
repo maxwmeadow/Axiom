@@ -49,8 +49,7 @@ function shellPath(shape: ShellShape, w: number, h: number): string {
     case 'cylinder': {
       const ry = 10
       return `M 1 ${ry + 1} A ${w / 2 - 1} ${ry} 0 0 1 ${w - 1} ${ry + 1} ` +
-             `L ${w - 1} ${h - ry - 1} A ${w / 2 - 1} ${ry} 0 0 1 1 ${h - ry - 1} Z ` +
-             `M 1 ${ry + 1} A ${w / 2 - 1} ${ry} 0 0 0 ${w - 1} ${ry + 1}`
+             `L ${w - 1} ${h - ry - 1} A ${w / 2 - 1} ${ry} 0 0 1 1 ${h - ry - 1} Z`
     }
     case 'hexagon': {
       const p = 14
@@ -64,6 +63,13 @@ function shellPath(shape: ShellShape, w: number, h: number): string {
     default:
       return `M 1 1 L ${w - 1} 1 L ${w - 1} ${h - 1} L 1 ${h - 1} Z`
   }
+}
+
+function cylinderRimPath(w: number): string {
+  const ry = 10
+  // The outer cylinder path owns the upper arc. Draw the lower half of the
+  // top ellipse separately so fill winding/closure can never hide the rim.
+  return `M 1 ${ry + 1} A ${w / 2 - 1} ${ry} 0 0 0 ${w - 1} ${ry + 1}`
 }
 
 // ShapeBackdrop — the fluid variant for nodes whose size is owned by the
@@ -109,6 +115,10 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed }: {
         strokeDasharray={dashed ? '6 4' : undefined}
         style={{ filter: CARD_SHADOW, transition: 'stroke 0.2s ease' }}
       />
+      {shape === 'cylinder' && (
+        <path d={cylinderRimPath(w)} fill="none" stroke={stroke} strokeWidth={strokeWidth}
+          strokeDasharray={dashed ? '6 4' : undefined} style={{ transition: 'stroke 0.2s ease' }} />
+      )}
     </svg>
   )
 }
@@ -160,6 +170,11 @@ export function NodeShell({
           strokeDasharray={dashed ? '6 4' : undefined}
           style={{ filter: CARD_SHADOW, transition: 'stroke-opacity 0.2s ease' }}
         />
+        {shape === 'cylinder' && (
+          <path d={cylinderRimPath(w)} fill="none" stroke={accent}
+            strokeOpacity={selected ? 1 : 0.55} strokeWidth={selected ? 1.8 : 1.2}
+            strokeDasharray={dashed ? '6 4' : undefined} />
+        )}
         {shape === 'folder' && (
           <text x={8} y={10.5} style={{ fontSize: 6.5, letterSpacing: '0.1em', fill: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
             SYSTEM

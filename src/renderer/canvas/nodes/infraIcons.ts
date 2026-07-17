@@ -5,6 +5,19 @@
 // icon. The package is data-only (SVG path strings); acceptable in a local
 // Electron bundle.
 import * as si from 'simple-icons'
+import awsLambda from '../../assets/infra/aws-lambda.svg'
+import awsRds from '../../assets/infra/aws-rds.svg'
+import awsDynamoDb from '../../assets/infra/aws-dynamodb.svg'
+import awsElastiCache from '../../assets/infra/aws-elasticache.svg'
+import awsS3 from '../../assets/infra/aws-s3.svg'
+import awsSqs from '../../assets/infra/aws-sqs.svg'
+import awsSes from '../../assets/infra/aws-ses.svg'
+import awsCloudFront from '../../assets/infra/aws-cloudfront.svg'
+import azureAppService from '../../assets/infra/azure-app-service.svg'
+import azureFunctions from '../../assets/infra/azure-functions.svg'
+import azureCosmosDb from '../../assets/infra/azure-cosmosdb.svg'
+import azureServiceBus from '../../assets/infra/azure-service-bus.svg'
+import azureBlobStorage from '../../assets/infra/azure-blob-storage.svg'
 
 // simple-icons exports are named `siPostgresql`, `siAmazons3`, ... — slug with
 // the first letter of each character run capitalized. Slugs are lowercase
@@ -19,6 +32,25 @@ export interface BrandIcon {
 }
 
 const cache = new Map<string, BrandIcon | null>()
+const officialServiceIcons: Record<string, string> = {
+  'aws/lambda': awsLambda,
+  'aws/rds': awsRds,
+  'aws/dynamodb': awsDynamoDb,
+  'aws/elasticache': awsElastiCache,
+  'aws/s3': awsS3,
+  'aws/sqs': awsSqs,
+  'aws/ses': awsSes,
+  'aws/cloudfront': awsCloudFront,
+  'azure/app-service': azureAppService,
+  'azure/functions': azureFunctions,
+  'azure/cosmosdb': azureCosmosDb,
+  'azure/service-bus': azureServiceBus,
+  'azure/blob-storage': azureBlobStorage,
+}
+
+export function officialServiceIcon(serviceId: string): string | undefined {
+  return officialServiceIcons[serviceId]
+}
 
 /** SVG path for a simple-icons slug, or null if the icon doesn't exist. */
 export function brandIcon(slug: string): BrandIcon | null {

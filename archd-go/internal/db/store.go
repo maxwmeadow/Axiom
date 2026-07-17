@@ -61,9 +61,9 @@ type File struct {
 	// ActivityScore/ActivityAt are the raw decayed-score anchor pair persisted
 	// by the activity engine (internal/activity). ContentHash detects
 	// no-op saves so formatters never register as activity.
-	ActivityScore float64  `json:"activityScore"`
-	ActivityAt    int64    `json:"activityAt"`
-	ContentHash   string   `json:"-"`
+	ActivityScore float64 `json:"activityScore"`
+	ActivityAt    int64   `json:"activityAt"`
+	ContentHash   string  `json:"-"`
 	// Shape is the inferred semantic role (''=plain box | 'class' | 'cylinder'
 	// data store | 'hexagon' service); ShapeOverride wins when set;
 	// DisplayName is the class-first title for shape='class'.
@@ -117,11 +117,12 @@ type InfraNode struct {
 }
 
 type CanvasSnapshot struct {
-	WorkspaceID  string       `json:"workspaceId"`
-	Systems      []System     `json:"systems"`
-	Files        []File       `json:"files"`
-	InfraNodes   []InfraNode  `json:"infraNodes"`
-	Dependencies []Dependency `json:"dependencies"`
+	WorkspaceID  string        `json:"workspaceId"`
+	Systems      []System      `json:"systems"`
+	Files        []File        `json:"files"`
+	InfraNodes   []InfraNode   `json:"infraNodes"`
+	Dependencies []Dependency  `json:"dependencies"`
+	FloorLayouts []FloorLayout `json:"floorLayouts"`
 }
 
 // ─── Workspaces ───────────────────────────────────────────────────────────────
@@ -903,12 +904,17 @@ func GetCanvasSnapshot(db *sql.DB, workspaceID string) (*CanvasSnapshot, error) 
 	if err != nil {
 		return nil, fmt.Errorf("get dependencies: %w", err)
 	}
+	layouts, err := GetFloorLayouts(db, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("get floor layouts: %w", err)
+	}
 	return &CanvasSnapshot{
 		WorkspaceID:  workspaceID,
 		Systems:      systems,
 		Files:        files,
 		InfraNodes:   infra,
 		Dependencies: dependencies,
+		FloorLayouts: layouts,
 	}, nil
 }
 

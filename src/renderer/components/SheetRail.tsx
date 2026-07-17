@@ -7,10 +7,11 @@ import { useSheetStore } from '../store/sheetStore'
 
 export function SheetRail() {
   const workspaceId = useGraphStore(s => s.currentProject?.id ?? '')
-  const { sheets, activeSheetId, fetchSheets, openSheet, createSheet, deleteSheet } =
+  const { sheets, activeSheetId, visibleSheetIds, fetchSheets, openSheet, toggleSheetVisibility, createSheet, deleteSheet } =
     useSheetStore(useShallow(s => ({
-      sheets: s.sheets, activeSheetId: s.activeSheetId,
+      sheets: s.sheets, activeSheetId: s.activeSheetId, visibleSheetIds: s.visibleSheetIds,
       fetchSheets: s.fetchSheets, openSheet: s.openSheet,
+      toggleSheetVisibility: s.toggleSheetVisibility,
       createSheet: s.createSheet, deleteSheet: s.deleteSheet,
     })))
   const [creating, setCreating] = useState(false)
@@ -60,11 +61,22 @@ export function SheetRail() {
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {sheets.map(sheet => (
           <div key={sheet.id} style={{ position: 'relative' }} className="sheet-rail-row">
+            <button
+              title={visibleSheetIds.includes(sheet.id) ? 'Hide layer' : 'Show layer'}
+              aria-label={visibleSheetIds.includes(sheet.id) ? `Hide ${sheet.name}` : `Show ${sheet.name}`}
+              onClick={() => void toggleSheetVisibility(workspaceId, sheet.id)}
+              style={{
+                position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', zIndex: 2,
+                width: 14, height: 14, padding: 0, border: '1px solid var(--border)',
+                background: visibleSheetIds.includes(sheet.id) ? 'var(--accent)' : 'transparent',
+                color: 'var(--bg-base)', cursor: 'pointer', fontSize: 10, lineHeight: '12px',
+              }}
+            >{visibleSheetIds.includes(sheet.id) ? '✓' : ''}</button>
             <button style={railBtn(activeSheetId === sheet.id)} onClick={() => void openSheet(workspaceId, sheet.id)}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <path d="M4 4h13l3 3v13H4z" /><path d="M17 4v3h3" />
               </svg>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginLeft: 16 }}>
                 {sheet.name}
               </span>
               {sheet.createdBy === 'agent' && (

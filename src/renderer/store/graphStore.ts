@@ -6,6 +6,7 @@ import type {
   DbInfraNode,
   DbDependency,
   CanvasSnapshot,
+  FloorLayout,
   DbGraphPatch,
 } from '../../shared/types'
 
@@ -149,12 +150,15 @@ interface GraphState {
   files: DbFile[]
   infraNodes: DbInfraNode[]
   dependencies: DbDependency[]
+  floorLayouts: FloorLayout[]
 
   // Canvas expand/collapse state
   expandedSystemIds: Set<string>
 
   // UI state
   selectedNodeId: string | null
+  inspectedNodeId: string | null
+  infraPickerNodeId: string | null
   agentTouchedIds: Set<string>
   indexingProgress: { indexed: number; total: number } | null
   isIndexing: boolean
@@ -200,6 +204,8 @@ interface GraphState {
   toggleSystemExpanded: (id: string) => void
   collapseAll: () => void
   setSelectedNode: (id: string | null) => void
+  setInspectedNode: (id: string | null) => void
+  setInfraPickerNode: (id: string | null) => void
   setIndexingProgress: (progress: { indexed: number; total: number } | null) => void
   setIndexingComplete: () => void
   setConnectionStatus: (s: 'disconnected' | 'connecting' | 'connected') => void
@@ -216,8 +222,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   files: [],
   infraNodes: [],
   dependencies: [],
+  floorLayouts: [],
   expandedSystemIds: new Set(),
   selectedNodeId: null,
+  inspectedNodeId: null,
+  infraPickerNodeId: null,
   agentTouchedIds: new Set(),
   indexingProgress: null,
   isIndexing: false,
@@ -355,7 +364,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     return { runtimeInjections: injections, runtimeNodes: nodes }
   }),
 
-  setCurrentProject: (p) => set({ currentProject: p }),
+  setCurrentProject: (p) => set({ currentProject: p, selectedNodeId: null, inspectedNodeId: null, infraPickerNodeId: null }),
   setRecentProjects: (ps) => set({ recentProjects: ps }),
 
   applySnapshot: (snap) => set({
@@ -363,6 +372,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     files: snap.files ?? [],
     infraNodes: snap.infraNodes ?? [],
     dependencies: snap.dependencies ?? [],
+    floorLayouts: snap.floorLayouts ?? [],
     // Start with all top-level systems collapsed
     expandedSystemIds: new Set(),
   }),
@@ -437,6 +447,29 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           const { id } = patch.payload as { id: string }
           return { dependencies: state.dependencies.filter(d => d.id !== id) }
         }
+        case 'floor:layouts': {
+          const { layouts } = patch.payload as { revision: number; layouts: FloorLayout[] }
+          const changed = new Set(layouts.map(layout => `${layout.nodeType}:${layout.nodeId}`))
+          const byKey = new Map(layouts.map(layout => [`${layout.nodeType}:${layout.nodeId}`, layout]))
+          return {
+            floorLayouts: [
+              ...state.floorLayouts.filter(layout => !changed.has(`${layout.nodeType}:${layout.nodeId}`)),
+              ...layouts,
+            ],
+            systems: state.systems.map(system => {
+              const layout = byKey.get(`system:${system.id}`)
+              return layout && layout.containmentKind !== 'hosted_by'
+                ? { ...system, parentId: layout.parentNodeId }
+                : system
+            }),
+            files: state.files.map(file => {
+              const layout = byKey.get(`file:${file.id}`)
+              return layout && layout.containmentKind !== 'hosted_by'
+                ? { ...file, systemId: layout.parentNodeId }
+                : file
+            }),
+          }
+        }
         default:
           return state
       }
@@ -455,6 +488,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   ),
 
   setSelectedNode: (id) => set({ selectedNodeId: id }),
+  setInspectedNode: (id) => set({ inspectedNodeId: id }),
+  setInfraPickerNode: (id) => set({ infraPickerNodeId: id }),
 
   setIndexingProgress: (progress) => set({
     indexingProgress: progress,
@@ -525,6 +560,8 @@ function eventLabel(ev: RuntimeEvent): string {
 // on a short interval so the canvas re-renders at most ~12 times per second.
 let pendingRuntimeEvents: RuntimeEvent[] = []
 let runtimeFlushTimer: ReturnType<typeof setTimeout> | null = null
+let dataFlowClearTimer: ReturnType<typeof setTimeout> | null = null
+let traceClearTimer: ReturnType<typeof setTimeout> | null = null
 
 function queueRuntimeEvent(ev: RuntimeEvent): void {
   pendingRuntimeEvents.push(ev)
@@ -636,9 +673,11 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
         level: 'info',
       })
       // Auto-clear the overlay after 30s so it doesn't linger.
-      setTimeout(() => {
+      if (dataFlowClearTimer) clearTimeout(dataFlowClearTimer)
+      dataFlowClearTimer = setTimeout(() => {
         const cur = useGraphStore.getState().dataFlow
         if (cur && cur.variable === variable) useGraphStore.getState().setDataFlow(null)
+        dataFlowClearTimer = null
       }, 30_000)
       break
     }
@@ -646,10 +685,12 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
       const { steps } = msg.payload as { steps: CallTraceStep[] }
       store.setActiveTrace(steps ?? null)
       // Auto-clear after 30 seconds so the trace doesn't linger forever
-      setTimeout(() => {
+      if (traceClearTimer) clearTimeout(traceClearTimer)
+      traceClearTimer = setTimeout(() => {
         if (useGraphStore.getState().activeTrace === steps) {
           useGraphStore.getState().setActiveTrace(null)
         }
+        traceClearTimer = null
       }, 30_000)
       break
     }

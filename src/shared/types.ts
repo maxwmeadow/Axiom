@@ -287,6 +287,25 @@ export interface DbInfraNode {
   positionY: number
 }
 
+export type FloorNodeType = 'system' | 'file' | 'infra'
+export type LayoutContainmentKind = 'root' | 'part_of' | 'hosted_by'
+
+/** Visual Floor geometry, intentionally independent from semantic ownership. */
+export interface FloorLayout {
+  workspaceId: string
+  nodeId: string
+  nodeType: FloorNodeType
+  parentNodeId: string | null
+  parentNodeType: 'system' | 'infra' | null
+  containmentKind: LayoutContainmentKind
+  positionX: number
+  positionY: number
+  width: number
+  height: number
+  scale: number
+  updatedAt: number
+}
+
 /** One entry of the infra service registry (GET /api/registry/services). */
 export interface InfraService {
   id: string
@@ -296,6 +315,7 @@ export interface InfraService {
   provider: string
   brand: { icon: string; color: string; darkColor?: string }
   configFields?: string[]
+  capabilities?: string[]
   layer?: 'embedded' | 'user' | 'workspace'
 }
 
@@ -311,6 +331,7 @@ export interface CanvasSnapshot {
   files: DbFile[]
   infraNodes: DbInfraNode[]
   dependencies: DbDependency[]
+  floorLayouts?: FloorLayout[]
 }
 
 /** Incremental patch sent by Go archd when a single entity changes. */
@@ -320,5 +341,6 @@ export interface DbGraphPatch {
     | 'file:updated'    | 'file:assigned'
     | 'infra:upserted'  | 'infra:deleted'
     | 'infra:connected' | 'infra:disconnected'
-  payload: DbSystem | DbFile | DbInfraNode | DbDependency | { id: string } | { fileId: string; systemId: string }
+    | 'floor:layouts'
+  payload: DbSystem | DbFile | DbInfraNode | DbDependency | { id: string } | { fileId: string; systemId: string } | { revision: number; layouts: FloorLayout[] }
 }

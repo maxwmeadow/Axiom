@@ -17,7 +17,7 @@
  *   ~400px of viewport — a "late reveal" Google Maps feel.
  *   Transitions use continuous fade (opacity + scale + blur) over a 30% range.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   Background,
@@ -49,13 +49,18 @@ import { InfraNode } from './nodes/InfraNode'
 import { OrthogonalEdge } from './edges/OrthogonalEdge'
 import { useGraphStore } from '../store/graphStore'
 import { useShallow } from 'zustand/react/shallow'
-import type { DbSystem, DbFile, DbInfraNode, DbDependency } from '../../shared/types'
+import type { DbSystem, DbFile, DbInfraNode, DbDependency, FloorLayout, FloorNodeType } from '../../shared/types'
 import { GroupDialog } from '../components/GroupDialog'
 import { NewSheetDialog } from '../components/NewSheetDialog'
-import { PlannedUmlNode } from './nodes/PlannedNode'
 import { SheetPalette, type StencilDef } from '../components/SheetPalette'
-import { useSheetStore } from '../store/sheetStore'
-import { apiAssignFile, apiUpdateFileSize, apiUpdateSystem, apiSaveNodePosition } from './arcdApi'
+import { InfraPickerDialog } from '../components/InfraPickerDialog'
+import { plannedMembers, plannedMetadata, sheetElementMetadata, useSheetStore } from '../store/sheetStore'
+import type { PlannedNodeKind, PlannedNodeMetadata, SheetLayoutMutation } from '../store/sheetStore'
+import { filenameForLanguage, languageFromFilename } from './languages'
+import { apiUpdateSystem, apiSaveNodePosition, apiSaveFloorLayouts } from './arcdApi'
+import { boundsOf, contentRect, findUnscaledIncomingPlacement, fitReferenceFrame, FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, highestSelectedRoots, localScaleAfterWorldFit, normalizeGeometry, transformReferencePoint } from './frameGeometry'
+import { countDirectChildren } from './directChildCounts'
+import { childPositionAfterParentResize, minimumContainerSize, resizeChanged, toCanonicalResizeGeometry, type NodeResizeParams } from './resizeGeometry'
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
@@ -63,11 +68,78 @@ const NODE_TYPES: NodeTypes = {
   system:  SystemNode     as any,
   file:    FileNode       as any,
   infra:   InfraNode      as any,
-  planned: PlannedUmlNode as any,
 }
 
 const EDGE_TYPES = {
   orthogonal: OrthogonalEdge as any,
+}
+
+type MoveTraceRow = Record<string, string | number | boolean | null>
+
+type NodeMoveTrace = {
+  session: number
+  nodeId: string
+  startedAt: number
+  lastLiveLogAt: number
+  startClientX: number
+  startClientY: number
+  previousClientX: number
+  previousClientY: number
+  startFlowX: number
+  startFlowY: number
+  startNodeX: number
+  startNodeY: number
+  startAbsoluteX: number
+  startAbsoluteY: number
+  startDomLeft: number | null
+  startDomTop: number | null
+  previousNodeX: number
+  previousNodeY: number
+  previousChangeByNodeId: Map<string, { x: number; y: number }>
+  callbackRows: MoveTraceRow[]
+  changeRows: MoveTraceRow[]
+}
+
+function pointerTraceCoordinates(event: unknown): {
+  clientX: number
+  clientY: number
+  movementX: number | null
+  movementY: number | null
+  coalescedEvents: number
+  pointerType: string
+} {
+  const candidate = event as {
+    clientX?: number
+    clientY?: number
+    movementX?: number
+    movementY?: number
+    pointerType?: string
+    touches?: ArrayLike<{ clientX: number; clientY: number }>
+    nativeEvent?: unknown
+  }
+  const touch = candidate.touches?.[0]
+  const native = (candidate.nativeEvent ?? candidate) as {
+    movementX?: number
+    movementY?: number
+    pointerType?: string
+    getCoalescedEvents?: () => unknown[]
+  }
+  return {
+    clientX: candidate.clientX ?? touch?.clientX ?? 0,
+    clientY: candidate.clientY ?? touch?.clientY ?? 0,
+    movementX: typeof native.movementX === 'number' ? native.movementX : null,
+    movementY: typeof native.movementY === 'number' ? native.movementY : null,
+    coalescedEvents: typeof native.getCoalescedEvents === 'function' ? native.getCoalescedEvents().length : 0,
+    pointerType: native.pointerType ?? (touch ? 'touch' : 'mouse'),
+  }
+}
+
+function renderedNodeRect(nodeId: string): DOMRect | null {
+  const elements = document.querySelectorAll<HTMLElement>('.react-flow__node[data-id]')
+  for (const element of elements) {
+    if (element.dataset.id === nodeId) return element.getBoundingClientRect()
+  }
+  return null
 }
 
 // ─── Zoom thresholds ───────────────────────────────────────────────────────
@@ -80,6 +152,8 @@ const EDGE_TYPES = {
 //   - depth 3+ (depth 3 parent reveals depth 4 children): zoom >= 1.80
 const REVEAL_THRESHOLDS = [0.45, 0.9, 1.35, 1.8]
 const FADE_RANGE_RATIO = 0.3
+const MIN_CANVAS_ZOOM = 0.02
+const MAX_CANVAS_ZOOM = 100
 
 // ─── World-space sizing ────────────────────────────────────────────────────
 // One scale factor halves the cell size per depth level.
@@ -158,22 +232,6 @@ function snappedH(hUnits: number, parentDepth: number): number {
   return hUnits * (ch + gap) - gap
 }
 
-/**
- * Exact inverse of containerW/H — use in drag handlers where the input width was
- * produced by containerW(n, parentDepth) at the same depth.
- * containerW(n, d) = n*(cw+gap)+gap  →  n = (w - gap) / (cw+gap)
- */
-function wUnitsExact(w: number, parentDepth: number): number {
-  const { w: cw } = fileNodeSize(parentDepth)
-  const gap = gridGap(parentDepth)
-  return Math.max(1, Math.round((w - gap) / (cw + gap)))
-}
-function hUnitsExact(h: number, parentDepth: number): number {
-  const { h: ch } = fileNodeSize(parentDepth)
-  const gap = gridGap(parentDepth)
-  return Math.max(1, Math.round((h - gap) / (ch + gap)))
-}
-
 // ─── Color palette ─────────────────────────────────────────────────────────
 
 // Muted technical accents, one per nesting depth — matches --depth-0..3 in global.css
@@ -211,9 +269,11 @@ function runAlternateAxisLayout(
   // Fill for systems
   for (const s of systems) {
     let cur = s
+    const visited = new Set<string>([cur.id])
     while (cur.parentId) {
       const p = systems.find(x => x.id === cur.parentId)
-      if (!p) break
+      if (!p || visited.has(p.id)) break
+      visited.add(p.id)
       cur = p
     }
     rootParentOf.set(s.id, cur.id)
@@ -257,7 +317,11 @@ function runAlternateAxisLayout(
 
   const computedPositions = new Map<string, LayoutNodeResult>()
   const computedSizes = new Map<string, { w: number; h: number }>()
-  const isTidy = !Array.from(existingMap.values()).some(n => n.type === 'system' && (n.position?.x !== 0 || n.position?.y !== 0))
+  // An explicit seed map means positions are authoritative. Inferring this
+  // from system-node metadata was brittle (sheet seeds and file-only sheets
+  // legitimately have no typed system entry) and caused every composition to
+  // rerun the root force layout.
+  const isTidy = existingMap.size === 0
 
   const getSortKey = (id: string) => {
     const ext = existingMap.get(id)
@@ -696,8 +760,8 @@ export interface SystemNodeData {
   description: string | null
   agentNotes: string | null
   depth: number
-  fileCount: number
-  childSystemCount: number
+  /** Every direct child descriptor, regardless of type, counted exactly once. */
+  directChildCount: number
   agentTouched: boolean
   currentZoom: number
   isChild: boolean
@@ -705,8 +769,12 @@ export interface SystemNodeData {
   selfScale?: number
   selfBlur?: number
   isDropTarget?: boolean
-  onResizeStart?: (w: number, h: number) => void
-  onResizeEnd?: (w: number, h: number) => void
+  onResizeStart?: (params: NodeResizeParams) => void
+  onResizeEnd?: (params: NodeResizeParams) => void
+  onRename?: (name: string) => void
+  umlKind?: PlannedNodeKind
+  umlMetadata?: PlannedNodeMetadata
+  onUmlMetadataChange?: (metadata: PlannedNodeMetadata) => void
   // Drop-target grid overlay
   nodeW?: number
   nodeH?: number
@@ -716,6 +784,12 @@ export interface SystemNodeData {
   occupiedCells?: Set<string>
   snapPreview?: { col: number; row: number; wUnits: number; hUnits: number } | null
   previewOffset?: { x: number; y: number } | null   // pixel offset showing predicted post-drop position
+  frameScale?: number
+  worldScale?: number
+  minResizeWidth?: number
+  minResizeHeight?: number
+  presentationBaseWidth?: number
+  presentationBaseHeight?: number
 }
 
 export interface FileNodeData {
@@ -735,6 +809,17 @@ export interface FileNodeData {
   childrenVisible: number
   worldScale: number  // fileNodeSize(parentDepth).w / BASE_FILE_W — drives proportional font/padding
   previewOffset?: { x: number; y: number } | null   // pixel offset showing predicted post-drop position
+  frameScale?: number
+  /** Optional synthetic symbols supplied by a sheet-local planned file/class. */
+  symbols?: Array<{ name: string; kind: string; lineStart: number; lineEnd: number }>
+  onRename?: (name: string) => void
+  onLanguageChange?: (language: string) => void
+  onResizeStart?: (params: NodeResizeParams) => void
+  onResizeEnd?: (params: NodeResizeParams) => void
+  onSymbolsChange?: (symbols: Array<{ name: string; kind: string; lineStart: number; lineEnd: number }>) => void
+  umlKind?: PlannedNodeKind
+  umlMetadata?: PlannedNodeMetadata
+  onUmlMetadataChange?: (metadata: PlannedNodeMetadata) => void
 }
 
 export interface InfraNodeData {
@@ -749,14 +834,21 @@ export interface InfraNodeData {
   subtype: string
   status: string
   agentTouched: boolean
+  umlKind?: PlannedNodeKind
+  umlMetadata?: PlannedNodeMetadata
+  onRename?: (name: string) => void
+  onChooseInfra?: () => void
+  onUmlMetadataChange?: (metadata: PlannedNodeMetadata) => void
+  onResizeStart?: (params: NodeResizeParams) => void
+  onResizeEnd?: (params: NodeResizeParams) => void
+  frameScale?: number
+  worldScale?: number
 }
 
 // ─── Zoom visibility (continuous fade) ─────────────────────────────────────
-// Instead of binary opacity, uses a smooth ramp over a zoom range:
-//   t = clamp((zoom - threshold) / fadeRange, 0, 1)
-//   opacity = t, scale = 0.92 + 0.08*t, blur = (1-t)*3px
-// This creates a "emerge from the substrate" feel.
-// Computed node-by-node top-down to allow node-specific thresholds.
+// Each node flips at the midpoint of its former reveal range. CSS completes
+// the fade after that flip, independently of continued zoom movement.
+// Computed node-by-node top-down so nested frames retain local thresholds.
 
 function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
   // Sort nodes by depth so parent visibility is computed before children
@@ -778,10 +870,17 @@ function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
       selfT = childrenVisibleMap.get(parentId) ?? 0
     }
 
-    // Children are revealed when parent's zoom level exceeds the threshold
-    const threshold = REVEAL_THRESHOLDS[Math.min(depth, REVEAL_THRESHOLDS.length - 1)]
-    const ramp = zoom >= threshold ? 1 : 0
-    const childT = selfT * ramp
+    // Semantic zoom is frame-relative: a subtree scaled to 25% must be zoomed
+    // four times farther before its details appear. Depth alone cannot express
+    // this once every container is freely resizable.
+    const worldScale = Number((node.data as any).worldScale ?? 1)
+    const effectiveZoom = zoom * worldScale
+    const threshold = 0.55
+    const fadeRange = threshold * FADE_RANGE_RATIO
+    // Trigger at the midpoint of the former reveal range. The CSS transition
+    // completes after this state flip; zoom no longer controls fade progress.
+    const revealThreshold = threshold - fadeRange / 2
+    const childT = selfT * (effectiveZoom >= revealThreshold ? 1 : 0)
 
     childrenVisibleMap.set(node.id, childT)
 
@@ -821,252 +920,282 @@ function makeFullyVisible(n: Node): Node {
 
 // ─── Layout engine ─────────────────────────────────────────────────────────
 
-function buildLayout(
+interface FloorDescriptor {
+  id: string
+  nodeType: FloorNodeType
+  parentId: string | null
+  depth: number
+  geometry: ReturnType<typeof normalizeGeometry>
+  worldScale: number
+}
+
+/**
+ * Materialize the Floor as nested coordinate frames. Unlike the legacy layout,
+ * this never quantizes authored positions, displaces siblings, or derives
+ * visual containment from a drop's semantic side effects.
+ */
+function buildFloorFrameLayout(
   systems: DbSystem[],
   files: DbFile[],
   infraNodes: DbInfraNode[],
   dependencies: DbDependency[],
+  floorLayouts: FloorLayout[],
   agentTouchedIds: Set<string>,
-  existingNodes: Node[],
   currentZoom: number,
-  droppedNodeId?: string,
-  layoutOverrides?: Map<string, { x?: number; y?: number; w?: number; h?: number }>,
-  draggingNodeId?: string | null,
 ): { rfNodes: Node[]; rfEdges: Edge[] } {
+  const systemsById = new Map(systems.map(system => [system.id, system]))
+  const filesById = new Map(files.map(file => [file.id, file]))
+  const infraById = new Map(infraNodes.map(infra => [infra.id, infra]))
+  const layoutsById = new Map(floorLayouts.map(layout => [layout.nodeId, layout]))
+  const initialGraphLayout = floorLayouts.length === 0
+    ? runAlternateAxisLayout(systems, files, infraNodes, dependencies, new Map())
+    : null
+  const nodeTypes = new Map<string, FloorNodeType>([
+    ...systems.map(system => [system.id, 'system'] as const),
+    ...files.map(file => [file.id, 'file'] as const),
+    ...infraNodes.map(infra => [infra.id, 'infra'] as const),
+  ])
 
-  const existingMap = new Map<string, any>()
-  if (existingNodes.length > 0) {
-    for (const n of existingNodes) {
-      existingMap.set(n.id, n)
-    }
-  } else {
-    for (const s of systems) {
-      if (s.positionX !== 0 || s.positionY !== 0) {
-        existingMap.set(s.id, {
-          id: s.id,
-          position: { x: s.positionX, y: s.positionY },
-          style: { width: s.width ?? undefined, height: s.height ?? undefined },
-        })
-      }
-    }
-    for (const f of files) {
-      if (f.positionX !== 0 || f.positionY !== 0) {
-        const parentSys = f.systemId ? systems.find(sys => sys.id === f.systemId) : null
-        const parentDepth = parentSys ? parentSys.depth : 0
-        const fsz = fileNodeSize(parentDepth)
-        existingMap.set(f.id, {
-          id: f.id,
-          position: { x: f.positionX, y: f.positionY },
-          style: { width: fsz.w, height: fsz.h },
-        })
-      }
-    }
-    for (const inf of infraNodes) {
-      if (inf.positionX !== 0 || inf.positionY !== 0) {
-        existingMap.set(inf.id, {
-          id: inf.id,
-          position: { x: inf.positionX, y: inf.positionY },
-          style: { width: 110, height: 110 },
-        })
-      }
+  const parentById = new Map<string, string | null>()
+  for (const system of systems) parentById.set(system.id, layoutsById.has(system.id) ? layoutsById.get(system.id)!.parentNodeId : system.parentId)
+  for (const file of files) parentById.set(file.id, layoutsById.has(file.id) ? layoutsById.get(file.id)!.parentNodeId : file.systemId)
+  for (const infra of infraNodes) parentById.set(infra.id, layoutsById.get(infra.id)?.parentNodeId ?? null)
+
+  // Invalid/missing parents and cycles degrade to root instead of making the
+  // graph disappear. The API rejects new invalid writes; this protects legacy DBs.
+  for (const [id, parentId] of parentById) {
+    if (parentId && (!nodeTypes.has(parentId) || nodeTypes.get(parentId) === 'file')) parentById.set(id, null)
+    const visited = new Set<string>([id])
+    let current = parentById.get(id) ?? null
+    while (current) {
+      if (visited.has(current)) { parentById.set(id, null); break }
+      visited.add(current)
+      current = parentById.get(current) ?? null
     }
   }
 
-  if (layoutOverrides) {
-    for (const [id, override] of layoutOverrides.entries()) {
-      const existing = existingMap.get(id)
-      if (existing) {
-        const updated = { ...existing }
-        if (override.x !== undefined && override.y !== undefined) {
-          updated.position = { x: override.x, y: override.y }
+  const siblingsByParent = new Map<string | null, string[]>()
+  for (const [id, parentId] of parentById) {
+    const siblings = siblingsByParent.get(parentId) ?? []
+    siblings.push(id)
+    siblingsByParent.set(parentId, siblings)
+  }
+  for (const siblings of siblingsByParent.values()) siblings.sort()
+
+  const geometryById = new Map<string, ReturnType<typeof normalizeGeometry>>()
+  const occupiedByParent = new Map<string | null, Array<{ x: number; y: number; width: number; height: number }>>()
+  const defaultSize = (id: string) => {
+    const system = systemsById.get(id)
+    if (system) return { width: system.width ?? 620, height: system.height ?? 420 }
+    const file = filesById.get(id)
+    if (file) return { width: file.width ?? BASE_FILE_W, height: file.height ?? BASE_FILE_H }
+    const infra = infraById.get(id)
+    return infra?.category === 'platform' ? { width: 760, height: 520 } : { width: 260, height: 160 }
+  }
+  for (const [id, parentId] of parentById) {
+    const layout = layoutsById.get(id)
+    const fallback = defaultSize(id)
+    const semantic = systemsById.get(id) ?? filesById.get(id) ?? infraById.get(id)
+    const initialPosition = parentId === null ? initialGraphLayout?.get(id) : undefined
+    let x = layout?.positionX ?? initialPosition?.x ?? semantic?.positionX ?? 0
+    let y = layout?.positionY ?? initialPosition?.y ?? semantic?.positionY ?? 0
+    const occupied = occupiedByParent.get(parentId) ?? []
+    if (!layout && x === 0 && y === 0) {
+      const siblings = siblingsByParent.get(parentId) ?? [id]
+      const columns = Math.max(1, Math.ceil(Math.sqrt(siblings.length)))
+      const gapX = parentId ? 300 : 760
+      const gapY = parentId ? 190 : 560
+      let index = Math.max(0, siblings.indexOf(id))
+      do {
+        x = (parentId ? 42 : 80) + (index % columns) * gapX
+        y = (parentId ? 76 : 80) + Math.floor(index / columns) * gapY
+        index++
+      } while (occupied.some(rect => x < rect.x + rect.width + 20 && x + fallback.width + 20 > rect.x &&
+        y < rect.y + rect.height + 20 && y + fallback.height + 20 > rect.y))
+    }
+    const geometry = normalizeGeometry({
+      x, y,
+      width: layout?.width ?? fallback.width,
+      height: layout?.height ?? fallback.height,
+      scale: layout?.scale ?? 1,
+    }, fallback)
+    geometryById.set(id, geometry)
+    occupied.push({ x: geometry.x, y: geometry.y, width: geometry.width * geometry.scale, height: geometry.height * geometry.scale })
+    occupiedByParent.set(parentId, occupied)
+  }
+
+  // Initial-index/legacy containers auto-fit their direct children once. A
+  // persisted layout is authored and therefore never silently resized.
+  for (const [containerId, children] of siblingsByParent) {
+    if (!containerId || layoutsById.has(containerId)) continue
+    const isContainer = systemsById.has(containerId) || infraById.get(containerId)?.category === 'platform'
+    if (!isContainer || children.length === 0) continue
+    const container = geometryById.get(containerId)
+    if (!container) continue
+    let right = 0
+    let bottom = 0
+    for (const childId of children) {
+      const child = geometryById.get(childId)
+      if (!child) continue
+      right = Math.max(right, child.x + child.width * child.scale)
+      bottom = Math.max(bottom, child.y + child.height * child.scale)
+    }
+    geometryById.set(containerId, {
+      ...container,
+      width: Math.max(container.width, right + FRAME_CONTENT_PADDING),
+      height: Math.max(container.height, bottom + FRAME_CONTENT_PADDING),
+    })
+  }
+
+  // The relationship-aware initializer was historically sized for the legacy
+  // grid renderer. Resolve its root collisions again using the materialized
+  // freeform frame bounds while retaining the force-directed neighborhood.
+  if (initialGraphLayout) {
+    const rootIds = siblingsByParent.get(null) ?? []
+    const padding = 72
+    for (let pass = 0; pass < 100; pass++) {
+      let moved = false
+      for (let leftIndex = 0; leftIndex < rootIds.length; leftIndex++) {
+        const left = geometryById.get(rootIds[leftIndex])!
+        const leftWidth = left.width * left.scale
+        const leftHeight = left.height * left.scale
+        for (let rightIndex = leftIndex + 1; rightIndex < rootIds.length; rightIndex++) {
+          const right = geometryById.get(rootIds[rightIndex])!
+          const rightWidth = right.width * right.scale
+          const rightHeight = right.height * right.scale
+          const overlapX = Math.min(left.x + leftWidth + padding, right.x + rightWidth + padding) - Math.max(left.x, right.x)
+          const overlapY = Math.min(left.y + leftHeight + padding, right.y + rightHeight + padding) - Math.max(left.y, right.y)
+          if (overlapX <= 0 || overlapY <= 0) continue
+          moved = true
+          if (overlapX < overlapY) {
+            const direction = right.x + rightWidth / 2 >= left.x + leftWidth / 2 ? 1 : -1
+            left.x -= direction * overlapX / 2
+            right.x += direction * overlapX / 2
+          } else {
+            const direction = right.y + rightHeight / 2 >= left.y + leftHeight / 2 ? 1 : -1
+            left.y -= direction * overlapY / 2
+            right.y += direction * overlapY / 2
+          }
         }
-        if (override.w !== undefined && override.h !== undefined) {
-          updated.style = { ...updated.style, width: override.w, height: override.h }
-        }
-        existingMap.set(id, updated)
+      }
+      if (!moved) break
+    }
+  }
+
+  const depthById = new Map<string, number>()
+  const worldScaleById = new Map<string, number>()
+  const resolveFrame = (id: string): { depth: number; worldScale: number } => {
+    const cachedDepth = depthById.get(id)
+    const cachedScale = worldScaleById.get(id)
+    if (cachedDepth !== undefined && cachedScale !== undefined) return { depth: cachedDepth, worldScale: cachedScale }
+    const parentId = parentById.get(id) ?? null
+    const parent = parentId ? resolveFrame(parentId) : { depth: -1, worldScale: 1 }
+    const result = { depth: parent.depth + 1, worldScale: parent.worldScale * (geometryById.get(id)?.scale ?? 1) }
+    depthById.set(id, result.depth)
+    worldScaleById.set(id, result.worldScale)
+    return result
+  }
+
+  const descriptors: FloorDescriptor[] = [...parentById.keys()].map(id => {
+    const resolved = resolveFrame(id)
+    return { id, nodeType: nodeTypes.get(id)!, parentId: parentById.get(id) ?? null, geometry: geometryById.get(id)!, ...resolved }
+  }).sort((a, b) => a.depth - b.depth || a.id.localeCompare(b.id))
+
+  // The badge represents rendered direct children, not separate semantic
+  // categories. One authoritative count prevents a descriptor from belonging
+  // to overlapping buckets (the old generic child count also included files,
+  // despite being passed to SystemNode as `childSystemCount`).
+  const directChildCounts = countDirectChildren(descriptors)
+  const resizeMinimumFor = (id: string, geometry: ReturnType<typeof normalizeGeometry>, worldScale: number) => {
+    const childRects = (siblingsByParent.get(id) ?? []).flatMap(childId => {
+      const child = geometryById.get(childId)
+      return child ? [{
+        x: child.x,
+        y: child.y,
+        width: child.width * child.scale,
+        height: child.height * child.scale,
+      }] : []
+    })
+    const minimum = minimumContainerSize(
+      { width: geometry.width, height: geometry.height },
+      childRects,
+      { left: FRAME_CONTENT_PADDING, right: FRAME_CONTENT_PADDING, top: FRAME_HEADER_HEIGHT, bottom: FRAME_CONTENT_PADDING },
+      { width: 1, height: 1 },
+    )
+    return { width: minimum.width * worldScale, height: minimum.height * worldScale }
+  }
+
+  const rfNodes: Node[] = descriptors.map(descriptor => {
+    const { id, parentId, geometry, worldScale, depth } = descriptor
+    const parentWorldScale = parentId ? (worldScaleById.get(parentId) ?? 1) : 1
+    const position = { x: geometry.x * parentWorldScale, y: geometry.y * parentWorldScale }
+    const style = { width: geometry.width * worldScale, height: geometry.height * worldScale }
+    if (descriptor.nodeType === 'system') {
+      const system = systemsById.get(id)!
+      const color = system.color ?? systemColor(depth)
+      const resizeMinimum = resizeMinimumFor(id, geometry, worldScale)
+      const presentationBase = defaultSize(id)
+      return {
+        id, type: 'system', parentId: parentId ?? undefined, position, style,
+        data: {
+          id, name: system.name, source: system.source, color, colorRgb: hexToRgb(color),
+          description: system.description, agentNotes: system.agentNotes, depth,
+          directChildCount: directChildCounts.get(id) ?? 0, agentTouched: agentTouchedIds.has(id),
+          currentZoom, isChild: !!parentId, childrenVisible: 0, nodeW: style.width,
+          nodeH: style.height, frameScale: geometry.scale, worldScale,
+          minResizeWidth: resizeMinimum.width, minResizeHeight: resizeMinimum.height,
+          presentationBaseWidth: presentationBase.width * worldScale,
+          presentationBaseHeight: presentationBase.height * worldScale,
+        } as unknown as Record<string, unknown>,
+        draggable: true, selectable: true,
       }
     }
-  }
-
-  const finalPositions = runAlternateAxisLayout(systems, files, infraNodes, dependencies, existingMap)
-
-  const rfNodes: Node[] = []
-
-  const childrenOf = new Map<string | null, DbSystem[]>()
-  for (const sys of systems) {
-    const key = sys.parentId ?? null
-    if (!childrenOf.has(key)) childrenOf.set(key, [])
-    childrenOf.get(key)!.push(sys)
-  }
-
-  const fileCounts = new Map<string, number>()
-  const filesOf = new Map<string | null, DbFile[]>()
-  for (const f of files) {
-    const key = f.systemId ?? null
-    if (key) {
-      fileCounts.set(key, (fileCounts.get(key) ?? 0) + 1)
+    if (descriptor.nodeType === 'file') {
+      const file = filesById.get(id)!
+      return {
+        id, type: 'file', parentId: parentId ?? undefined, position, style,
+        data: {
+          id, label: file.relPath.split('/').pop() ?? file.relPath, relPath: file.relPath,
+          language: file.language, lineCount: file.lineCount, churnScore: file.churnScore,
+          shape: (file.shapeOverride || file.shape || '') as FileNodeData['shape'],
+          displayName: file.displayName ?? '', agentTouched: agentTouchedIds.has(id), depth,
+          currentZoom, childrenVisible: 0, frameScale: geometry.scale, worldScale,
+        } satisfies FileNodeData as unknown as Record<string, unknown>,
+        draggable: true, selectable: true,
+      }
     }
-    if (!filesOf.has(key)) filesOf.set(key, [])
-    filesOf.get(key)!.push(f)
-  }
-
-  function makeFileNode(
-    file: DbFile,
-    parentId: string | undefined,
-    position: { x: number; y: number },
-    w: number,
-    h: number,
-    depth: number,
-  ): Node {
+    const infra = infraById.get(id)!
+    if (infra.category === 'platform') {
+      const color = '#6b8afd'
+      const resizeMinimum = resizeMinimumFor(id, geometry, worldScale)
+      const presentationBase = defaultSize(id)
+      return {
+        id, type: 'system', parentId: parentId ?? undefined, position, style,
+        data: {
+          id, name: infra.name, source: 'user', color, colorRgb: hexToRgb(color),
+          description: null, agentNotes: null, depth,
+          directChildCount: directChildCounts.get(id) ?? 0, agentTouched: agentTouchedIds.has(id),
+          currentZoom, isChild: !!parentId, childrenVisible: 0, nodeW: style.width,
+          nodeH: style.height, frameScale: geometry.scale, worldScale, umlKind: 'infra',
+          minResizeWidth: resizeMinimum.width, minResizeHeight: resizeMinimum.height,
+          presentationBaseWidth: presentationBase.width * worldScale,
+          presentationBaseHeight: presentationBase.height * worldScale,
+          umlMetadata: { version: 1, category: infra.category, provider: infra.provider, service: infra.service, subtype: infra.subtype },
+        } as unknown as Record<string, unknown>,
+        draggable: true, selectable: true,
+      }
+    }
     return {
-      id: file.id,
-      type: 'file',
-      parentId,
-      position,
-      style: { width: w, height: h },
+      id, type: 'infra', parentId: parentId ?? undefined, position, style,
       data: {
-        id: file.id,
-        label: file.relPath.split('/').pop() ?? file.relPath,
-        relPath: file.relPath,
-        language: file.language,
-        lineCount: file.lineCount,
-        churnScore: file.churnScore,
-        // unified shape vocabulary: override wins over inference
-        shape: (file.shapeOverride || file.shape || '') as FileNodeData['shape'],
-        displayName: file.displayName ?? '',
-        agentTouched: agentTouchedIds.has(file.id),
-        depth,
-        currentZoom,
-        childrenVisible: 0,
-        worldScale: fileNodeSize(depth - 1).w / BASE_FILE_W,
-      } satisfies FileNodeData as unknown as Record<string, unknown>,
-      draggable: true,
-      selectable: true,
-    }
-  }
-
-  function addNode(sys: DbSystem, depth: number, parentId: string | undefined, position: { x: number; y: number }, w: number, h: number) {
-    const color = systemColor(depth)
-    const children = childrenOf.get(sys.id) ?? []
-    const fileChildren = filesOf.get(sys.id) ?? []
-
-    // Compute occupied cells inside this system's grid (excluding the node currently being dragged)
-    const occupiedCells = new Set<string>()
-    const cw = fileNodeSize(depth).w
-    const ch = fileNodeSize(depth).h
-    const gap = gridGap(depth)
-
-    for (const child of children) {
-      if (child.id === draggingNodeId) continue
-      const pos = finalPositions.get(child.id) ?? { x: 0, y: 0, w: 200, h: 120 }
-      const colStart = Math.max(0, Math.floor((pos.x - gap / 2) / (cw + gap)))
-      const colEnd = Math.max(colStart, Math.floor((pos.x + pos.w - gap / 2) / (cw + gap)))
-      const rowStart = Math.max(0, Math.floor((pos.y - gap / 2) / (ch + gap)))
-      const rowEnd = Math.max(rowStart, Math.floor((pos.y + pos.h - gap / 2) / (ch + gap)))
-      for (let c = colStart; c <= colEnd; c++) {
-        for (let r = rowStart; r <= rowEnd; r++) {
-          occupiedCells.add(`${c}-${r}`)
-        }
-      }
-    }
-
-    for (const file of fileChildren) {
-      if (file.id === draggingNodeId) continue
-      const fsz = fileNodeSize(depth)
-      const pos = finalPositions.get(file.id) ?? { x: 0, y: 0, w: fsz.w, h: fsz.h }
-      const colStart = Math.max(0, Math.floor((pos.x - gap / 2) / (fsz.w + gap)))
-      const colEnd = Math.max(colStart, Math.floor((pos.x + pos.w - gap / 2) / (fsz.w + gap)))
-      const rowStart = Math.max(0, Math.floor((pos.y - gap / 2) / (fsz.h + gap)))
-      const rowEnd = Math.max(rowStart, Math.floor((pos.y + pos.h - gap / 2) / (fsz.h + gap)))
-      for (let c = colStart; c <= colEnd; c++) {
-        for (let r = rowStart; r <= rowEnd; r++) {
-          occupiedCells.add(`${c}-${r}`)
-        }
-      }
-    }
-
-    rfNodes.push({
-      id: sys.id,
-      type: 'system',
-      parentId,
-      position,
-      style: { width: w, height: h },
-      data: {
-        id: sys.id,
-        name: sys.name,
-        source: sys.source,
-        color,
-        colorRgb: hexToRgb(color),
-        description: sys.description,
-        agentNotes: sys.agentNotes,
-        depth,
-        fileCount: fileCounts.get(sys.id) ?? 0,
-        childSystemCount: children.length,
-        agentTouched: agentTouchedIds.has(sys.id),
-        currentZoom,
-        isChild: depth > 0,
-        childrenVisible: 0,
-        nodeW: w,
-        nodeH: h,
-        gridCellW: fileNodeSize(depth).w,
-        gridCellH: fileNodeSize(depth).h,
-        gridGap: gridGap(depth),
-        occupiedCells,
-      } satisfies SystemNodeData as unknown as Record<string, unknown>,
-      draggable: true,
-      selectable: true,
-    })
-
-    for (const child of children) {
-      const pos = finalPositions.get(child.id) ?? { x: 0, y: 0, w: 200, h: 120 }
-      addNode(child, depth + 1, sys.id, { x: pos.x, y: pos.y }, pos.w, pos.h)
-    }
-
-    for (const file of fileChildren) {
-      const fsz = fileNodeSize(depth)
-      const pos = finalPositions.get(file.id) ?? { x: 0, y: 0, w: fsz.w, h: fsz.h }
-      rfNodes.push(makeFileNode(file, sys.id, { x: pos.x, y: pos.y }, pos.w, pos.h, depth + 1))
-    }
-  }
-
-  const topSystems = childrenOf.get(null) ?? []
-  for (const sys of topSystems) {
-    const pos = finalPositions.get(sys.id) ?? { x: 0, y: 0, w: 400, h: 300 }
-    addNode(sys, 0, undefined, { x: pos.x, y: pos.y }, pos.w, pos.h)
-  }
-
-  infraNodes.forEach((infra) => {
-    const pos = finalPositions.get(infra.id) ?? { x: 0, y: 0, w: 110, h: 110 }
-    rfNodes.push({
-      id: infra.id,
-      type: 'infra',
-      position: { x: pos.x, y: pos.y },
-      style: { width: pos.w, height: pos.h },
-      data: {
-        id: infra.id,
-        label: infra.name,
-        name: infra.name,
-        infraType: infra.infraType,
-        category: infra.category ?? 'api',
-        provider: infra.provider ?? 'generic',
-        service: infra.service ?? '',
-        subtype: infra.subtype ?? '',
-        status: infra.status ?? 'confirmed',
-        agentTouched: agentTouchedIds.has(infra.id),
+        id, label: infra.name, name: infra.name, infraType: infra.infraType,
+        category: infra.category ?? 'api', provider: infra.provider ?? 'generic',
+        service: infra.service ?? '', subtype: infra.subtype ?? '', status: infra.status ?? 'confirmed',
+        agentTouched: agentTouchedIds.has(id), frameScale: geometry.scale, worldScale,
       } satisfies InfraNodeData as unknown as Record<string, unknown>,
-      draggable: true,
-      selectable: true,
-    })
+      draggable: true, selectable: true,
+    }
   })
-
-  // Render root-level files
-  const topFiles = filesOf.get(null) ?? []
-  for (const file of topFiles) {
-    const fsz = fileNodeSize(0)
-    const pos = finalPositions.get(file.id) ?? { x: 0, y: 0, w: fsz.w, h: fsz.h }
-    rfNodes.push(makeFileNode(file, undefined, { x: pos.x, y: pos.y }, pos.w, pos.h, 0))
-  }
-
   return { rfNodes, rfEdges: [] }
 }
 
@@ -1098,14 +1227,16 @@ interface AxiomCanvasProps {
 
 export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const {
-    systems, files, infraNodes, dependencies,
-    selectedNodeId, agentTouchedIds, selectionMode, activeTrace, runtimeNodes, dataFlow,
+    systems, files, infraNodes, dependencies, floorLayouts,
+    selectedNodeId, infraPickerNodeId, agentTouchedIds, selectionMode, activeTrace, runtimeNodes, dataFlow,
   } = useGraphStore(useShallow(s => ({
     systems:         s.systems,
     files:           s.files,
     infraNodes:      s.infraNodes,
     dependencies:    s.dependencies,
+    floorLayouts:    s.floorLayouts,
     selectedNodeId:  s.selectedNodeId,
+    infraPickerNodeId: s.infraPickerNodeId,
     agentTouchedIds: s.agentTouchedIds,
     selectionMode:   s.selectionMode,
     activeTrace:     s.activeTrace,
@@ -1113,14 +1244,38 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     dataFlow:        s.dataFlow,
   })))
 
-  const { setSelectedNode, setSelectionMode } = useGraphStore(
-    useShallow(s => ({ setSelectedNode: s.setSelectedNode, setSelectionMode: s.setSelectionMode }))
+  const { setSelectedNode, setInspectedNode, setInfraPickerNode, setSelectionMode } = useGraphStore(
+    useShallow(s => ({
+      setSelectedNode: s.setSelectedNode,
+      setInspectedNode: s.setInspectedNode,
+      setInfraPickerNode: s.setInfraPickerNode,
+      setSelectionMode: s.setSelectionMode,
+    }))
   )
   const currentProject = useGraphStore(s => s.currentProject)
   const { fitView, getViewport, setViewport, getInternalNode, screenToFlowPosition } = useReactFlow()
 
   const [rfNodes, setRfNodes] = useState<Node[]>([])
   const [rfEdges, setRfEdges] = useState<Edge[]>([])
+  // Sheet composition also needs the current zoom, so this ref must be
+  // initialized before its memoized layout runs.
+  const currentZoomRef = useRef(0.5)
+  const canvasRootRef = useRef<HTMLDivElement>(null)
+  const cursorTraceSignatureRef = useRef('')
+  const selectedIdsRef = useRef<Set<string>>(new Set())
+  const timeoutHandlesRef = useRef<Set<number>>(new Set())
+  const scheduleTimeout = useCallback((callback: () => void, delay: number) => {
+    const handle = window.setTimeout(() => {
+      timeoutHandlesRef.current.delete(handle)
+      callback()
+    }, delay)
+    timeoutHandlesRef.current.add(handle)
+    return handle
+  }, [])
+  useEffect(() => () => {
+    for (const handle of timeoutHandlesRef.current) window.clearTimeout(handle)
+    timeoutHandlesRef.current.clear()
+  }, [])
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [sheetDialogOpen, setSheetDialogOpen] = useState(false)
   // ── Sheet overlay (REVISION 2: sheets are layers over the Floor) ─────────
@@ -1128,45 +1283,536 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   // live nodes in place (stencil highlight), draw planned UML elements and
   // planned edges on top. Live members keep their Floor positions.
   const overlaySheetId = useSheetStore(s => s.activeSheetId)
+  const visibleSheetIds = useSheetStore(s => s.visibleSheetIds)
+  const layersById = useSheetStore(s => s.layersById)
   const overlayElements = useSheetStore(s => s.elements)
-  const overlayPlanned = useSheetStore(s => s.planned)
-  const overlayPlannedEdges = useSheetStore(s => s.plannedEdges)
   const workspaceIdForOverlay = useGraphStore(s => s.currentProject?.id ?? '')
 
-  const overlayMemberIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const e of overlayElements) {
-      if (e.systemId) ids.add(e.systemId)
-      if (e.fileId) ids.add(e.fileId)
-      if (e.infraId) ids.add(e.infraId)
+  // Resolve bottom-to-top, always applying the primary sheet last. A node has
+  // one visual owner, so secondary layers contribute nodes but never create a
+  // second instance of the same live model element.
+  const visibleLayers = useMemo(() => {
+    const ordered = visibleSheetIds.filter(id => id !== overlaySheetId)
+    if (overlaySheetId && visibleSheetIds.includes(overlaySheetId)) ordered.push(overlaySheetId)
+    return ordered.map(id => layersById[id]).filter(Boolean)
+  }, [visibleSheetIds, overlaySheetId, layersById])
+
+  const effectiveElements = useMemo(() => {
+    const byNodeId = new Map<string, (typeof overlayElements)[number]>()
+    for (const layer of visibleLayers) {
+      for (const e of layer.elements) {
+        const nodeId = e.systemId ?? e.fileId ?? e.infraId
+        if (nodeId) byNodeId.set(nodeId, e)
+      }
     }
-    return ids
+    return byNodeId
+  }, [visibleLayers, overlayElements])
+
+  const activeElementByNodeId = useMemo(() => {
+    const result = new Map<string, (typeof overlayElements)[number]>()
+    for (const e of overlayElements) {
+      const nodeId = e.systemId ?? e.fileId ?? e.infraId
+      if (nodeId) result.set(nodeId, e)
+    }
+    return result
   }, [overlayElements])
 
-  const displayNodes = useMemo(() => {
-    if (!overlaySheetId) return rfNodes
-    const dimmed = rfNodes.map(n => {
-      const isMember = overlayMemberIds.has(n.id) ||
-        (n.parentId ? overlayMemberIds.has(n.parentId) : false)
-      if (isMember) return n
-      const prevOpacity = typeof n.style?.opacity === 'number' ? n.style.opacity : 1
-      return { ...n, style: { ...n.style, opacity: Math.min(prevOpacity, 0.18) }, selectable: false }
-    })
-    const plannedNodes: Node[] = overlayPlanned
-      .filter(p => p.status !== 'flattened')
+  const overlayPlanned = useMemo(() => visibleLayers.flatMap(layer => layer.planned), [visibleLayers])
+  const overlayPlannedEdges = useMemo(() => visibleLayers.flatMap(layer => layer.plannedEdges), [visibleLayers])
+  const visiblePlannedByNodeId = useMemo(() => new Map(
+    overlayPlanned.map(p => [`planned:${p.id}`, p]),
+  ), [overlayPlanned])
+  const activePlannedByNodeId = useMemo(() => new Map(
+    (layersById[overlaySheetId ?? '']?.planned ?? []).map(p => [`planned:${p.id}`, p]),
+  ), [layersById, overlaySheetId])
+  const activeNodeIds = useMemo(() => new Set([
+    ...activeElementByNodeId.keys(),
+    ...activePlannedByNodeId.keys(),
+  ]), [activeElementByNodeId, activePlannedByNodeId])
+  const [isTransitioningLayout, setIsTransitioningLayout] = useState(false)
+
+  useLayoutEffect(() => {
+    setIsTransitioningLayout(true)
+    const timer = window.setTimeout(() => setIsTransitioningLayout(false), 500)
+    return () => window.clearTimeout(timer)
+  }, [overlaySheetId, visibleSheetIds.join('|')])
+
+  useEffect(() => {
+    setInspectedNode(null)
+    setInfraPickerNode(null)
+  }, [overlaySheetId, setInspectedNode, setInfraPickerNode])
+
+  const composedNodes = useMemo(() => {
+    const transition = isTransitioningLayout
+      ? 'transform 500ms cubic-bezier(0.16, 1, 0.3, 1), width 500ms cubic-bezier(0.16, 1, 0.3, 1), height 500ms cubic-bezier(0.16, 1, 0.3, 1), opacity 400ms ease-in-out'
+      : undefined
+    if (visibleLayers.length === 0) {
+      return isTransitioningLayout
+        ? rfNodes.map(n => ({ ...n, style: { ...n.style, transition } }))
+        : rfNodes
+    }
+
+    const memberIds = new Set(effectiveElements.keys())
+    const visiblePlanned = overlayPlanned.filter(p => p.status !== 'flattened')
+    const plannedSystems: DbSystem[] = visiblePlanned
+      .filter(p => p.kind === 'system' || (p.kind === 'infra' && (plannedMetadata(p).capabilities?.includes('container') || plannedMetadata(p).category === 'platform')))
       .map(p => ({
         id: `planned:${p.id}`,
-        type: 'planned',
-        position: { x: p.positionX, y: p.positionY },
-        data: { planned: p } as unknown as Record<string, unknown>,
-        draggable: true,
-        zIndex: 10000,
+        workspaceId: p.workspaceId,
+        name: p.name,
+        parentId: p.parentSystemId,
+        source: p.createdBy === 'agent' ? 'agent' : 'user',
+        color: p.color || null,
+        description: plannedMetadata(p).description || p.notes || null,
+        agentNotes: null,
+        depth: 0,
+        positionX: p.positionX,
+        positionY: p.positionY,
+        width: p.width,
+        height: p.height,
+        createdAt: 0,
+        updatedAt: 0,
       }))
-    return [...dimmed, ...plannedNodes]
-  }, [rfNodes, overlaySheetId, overlayMemberIds, overlayPlanned])
+    // A live system used as a sheet-local parent must keep its existing Floor
+    // subtree visible. Otherwise its children remain in the flattened base
+    // projection and are painted behind the now-opaque composed system body.
+    const contextSystemIds = new Set<string>()
+    for (const element of effectiveElements.values()) {
+      if (element.systemId) contextSystemIds.add(element.systemId)
+      if (element.parentSystemId && !element.parentSystemId.startsWith('planned:')) {
+        contextSystemIds.add(element.parentSystemId)
+      }
+    }
+    for (const planned of visiblePlanned) {
+      if (planned.parentSystemId && !planned.parentSystemId.startsWith('planned:')) {
+        contextSystemIds.add(planned.parentSystemId)
+      }
+    }
+    const liveSystemById = new Map(systems.map(system => [system.id, system]))
+    for (const id of [...contextSystemIds]) {
+      let parentId = liveSystemById.get(id)?.parentId ?? null
+      const seen = new Set<string>([id])
+      while (parentId && !seen.has(parentId)) {
+        seen.add(parentId)
+        contextSystemIds.add(parentId)
+        parentId = liveSystemById.get(parentId)?.parentId ?? null
+      }
+    }
+    let addedContextDescendant = true
+    while (addedContextDescendant) {
+      addedContextDescendant = false
+      for (const system of systems) {
+        if (!system.parentId || !contextSystemIds.has(system.parentId) || contextSystemIds.has(system.id)) continue
+        contextSystemIds.add(system.id)
+        addedContextDescendant = true
+      }
+    }
+    // Containers are structural context: a selected file remains inside its
+    // sheet-local parent even when that system was not explicitly selected.
+    const requiredSystemIds = new Set<string>()
+    for (const [nodeId, element] of effectiveElements) {
+      if (element.systemId) requiredSystemIds.add(nodeId)
+      if (element.parentSystemId) requiredSystemIds.add(element.parentSystemId)
+    }
+    for (const system of plannedSystems) {
+      requiredSystemIds.add(system.id)
+      if (system.parentId) requiredSystemIds.add(system.parentId)
+    }
+    for (const p of visiblePlanned) {
+      if (p.parentSystemId) requiredSystemIds.add(p.parentSystemId)
+    }
+    for (const id of contextSystemIds) requiredSystemIds.add(id)
+    let addedAncestor = true
+    while (addedAncestor) {
+      addedAncestor = false
+      for (const system of systems) {
+        if (!requiredSystemIds.has(system.id) || !system.parentId || requiredSystemIds.has(system.parentId)) continue
+        requiredSystemIds.add(system.parentId)
+        addedAncestor = true
+      }
+    }
+    const systemsById = new Map(systems.map(s => [s.id, s]))
+    const getFloorAbsolutePosition = (id: string, type: 'system' | 'file'): { x: number; y: number } => {
+      if (type === 'file') {
+        const f = files.find(x => x.id === id)
+        if (!f) return { x: 0, y: 0 }
+        if (!f.systemId) return { x: f.positionX, y: f.positionY }
+        const parentPos = getFloorAbsolutePosition(f.systemId, 'system')
+        return { x: parentPos.x + f.positionX, y: parentPos.y + f.positionY }
+      }
+      let x = 0
+      let y = 0
+      let currentId: string | null = id
+      const visited = new Set<string>()
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId)
+        const system = systemsById.get(currentId)
+        if (!system) break
+        x += system.positionX
+        y += system.positionY
+        currentId = system.parentId
+      }
+      return { x, y }
+    }
+
+    const virtualSystems: DbSystem[] = systems
+      .filter(s => requiredSystemIds.has(s.id))
+      .map(s => {
+        const e = effectiveElements.get(s.id)
+        return e
+          ? { ...s, parentId: e.parentSystemId, positionX: e.positionX, positionY: e.positionY }
+          : { ...s }
+      })
+      .concat(plannedSystems)
+    const virtualSystemIds = new Set(virtualSystems.map(s => s.id))
+    const virtualSystemById = new Map(virtualSystems.map(s => [s.id, s]))
+    for (const sys of virtualSystems) {
+      if (sys.parentId && (!virtualSystemIds.has(sys.parentId) || sys.parentId === sys.id)) {
+        if (!sys.id.startsWith('planned:')) {
+          const abs = getFloorAbsolutePosition(sys.id, 'system')
+          sys.positionX = abs.x
+          sys.positionY = abs.y
+        }
+        sys.parentId = null
+      }
+      const visited = new Set<string>([sys.id])
+      let parentId = sys.parentId
+      while (parentId) {
+        if (visited.has(parentId)) {
+          sys.parentId = null
+          break
+        }
+        visited.add(parentId)
+        parentId = virtualSystemById.get(parentId)?.parentId ?? null
+      }
+    }
+    const depthFor = (system: DbSystem): number => {
+      let depth = 0
+      let parentId = system.parentId
+      const seen = new Set([system.id])
+      while (parentId && !seen.has(parentId)) {
+        seen.add(parentId)
+        depth++
+        parentId = virtualSystemById.get(parentId)?.parentId ?? null
+      }
+      return depth
+    }
+    for (const system of virtualSystems) system.depth = depthFor(system)
+
+    const plannedFiles: DbFile[] = visiblePlanned
+      .filter(p => p.kind !== 'system' && p.kind !== 'infra')
+      .map(p => {
+        const metadata = plannedMetadata(p)
+        const inferredLanguage = languageFromFilename(p.name)?.id ?? ''
+        return {
+          id: `planned:${p.id}`,
+          rootId: '',
+          path: p.declaredPath || p.name,
+          relPath: p.declaredPath || p.name,
+          language: metadata.language ?? inferredLanguage,
+          systemId: p.parentSystemId && virtualSystemIds.has(p.parentSystemId) ? p.parentSystemId : null,
+          lineCount: 0,
+          churnScore: 0,
+          shape: p.shape === 'cylinder' || p.shape === 'hexagon'
+            ? p.shape
+            : (p.kind === 'class' ? 'class' : ''),
+          displayName: p.kind === 'class' ? p.name : '',
+          positionX: p.positionX,
+          positionY: p.positionY,
+          width: p.width,
+          height: p.height,
+          indexedAt: 0,
+        }
+      })
+    const virtualFiles: DbFile[] = files
+      .filter(f => memberIds.has(f.id) || Boolean(f.systemId && contextSystemIds.has(f.systemId)))
+      .map(f => {
+        const e = effectiveElements.get(f.id)
+        if (!e) {
+          const parentId = f.systemId && virtualSystemIds.has(f.systemId) ? f.systemId : null
+          if (!parentId && f.systemId) {
+            const abs = getFloorAbsolutePosition(f.id, 'file')
+            return { ...f, systemId: null, positionX: abs.x, positionY: abs.y }
+          }
+          return { ...f, systemId: parentId }
+        }
+        return {
+          ...f,
+          systemId: e.parentSystemId && virtualSystemIds.has(e.parentSystemId) ? e.parentSystemId : null,
+          positionX: e.positionX,
+          positionY: e.positionY,
+        }
+      })
+      .concat(plannedFiles)
+    const plannedInfra: DbInfraNode[] = visiblePlanned
+      .filter(p => p.kind === 'infra' && !(plannedMetadata(p).capabilities?.includes('container') || plannedMetadata(p).category === 'platform'))
+      .map(p => {
+        const metadata = plannedMetadata(p)
+        return {
+          id: `planned:${p.id}`,
+          workspaceId: p.workspaceId,
+          name: p.name,
+          infraType: metadata.category ?? 'api',
+          category: (metadata.category ?? 'api') as DbInfraNode['category'],
+          provider: metadata.provider ?? 'generic',
+          service: metadata.service ?? '',
+          subtype: metadata.subtype ?? '',
+          status: 'proposed',
+          config: {},
+          positionX: p.positionX,
+          positionY: p.positionY,
+        }
+      })
+    const virtualInfra = infraNodes
+      .filter(n => memberIds.has(n.id))
+      .map(n => {
+        const e = effectiveElements.get(n.id)!
+        return { ...n, positionX: e.positionX, positionY: e.positionY }
+      })
+      .concat(plannedInfra)
+    const sheetFrameLayouts: FloorLayout[] = [
+      ...virtualSystems.map(system => {
+        const element = effectiveElements.get(system.id)
+        const planned = system.id.startsWith('planned:') ? visiblePlannedByNodeId.get(system.id) : undefined
+        return {
+          workspaceId: workspaceIdForOverlay, nodeId: system.id, nodeType: 'system' as const,
+          parentNodeId: element?.parentSystemId ?? planned?.parentSystemId ?? system.parentId,
+          parentNodeType: (element?.parentSystemId ?? planned?.parentSystemId ?? system.parentId) ? 'system' as const : null,
+          containmentKind: (element?.parentSystemId ?? planned?.parentSystemId ?? system.parentId) ? 'part_of' as const : 'root' as const,
+          positionX: element?.positionX ?? planned?.positionX ?? system.positionX,
+          positionY: element?.positionY ?? planned?.positionY ?? system.positionY,
+          width: element?.width ?? planned?.width ?? system.width ?? 620,
+          height: element?.height ?? planned?.height ?? system.height ?? 420,
+          scale: element?.scale ?? planned?.scale ?? 1, updatedAt: 0,
+        }
+      }),
+      ...virtualFiles.map(file => {
+        const element = effectiveElements.get(file.id)
+        const planned = file.id.startsWith('planned:') ? visiblePlannedByNodeId.get(file.id) : undefined
+        const parentId = element?.parentSystemId ?? planned?.parentSystemId ?? file.systemId
+        return {
+          workspaceId: workspaceIdForOverlay, nodeId: file.id, nodeType: 'file' as const,
+          parentNodeId: parentId, parentNodeType: parentId ? 'system' as const : null,
+          containmentKind: parentId ? 'part_of' as const : 'root' as const,
+          positionX: element?.positionX ?? planned?.positionX ?? file.positionX,
+          positionY: element?.positionY ?? planned?.positionY ?? file.positionY,
+          width: element?.width ?? planned?.width ?? file.width ?? BASE_FILE_W,
+          height: element?.height ?? planned?.height ?? file.height ?? BASE_FILE_H,
+          scale: element?.scale ?? planned?.scale ?? 1, updatedAt: 0,
+        }
+      }),
+      ...virtualInfra.map(infra => {
+        const element = effectiveElements.get(infra.id)
+        const planned = infra.id.startsWith('planned:') ? visiblePlannedByNodeId.get(infra.id) : undefined
+        const parentId = element?.parentSystemId ?? planned?.parentSystemId ?? null
+        return {
+          workspaceId: workspaceIdForOverlay, nodeId: infra.id, nodeType: 'infra' as const,
+          parentNodeId: parentId, parentNodeType: parentId ? 'system' as const : null,
+          containmentKind: parentId ? 'part_of' as const : 'root' as const,
+          positionX: element?.positionX ?? planned?.positionX ?? infra.positionX,
+          positionY: element?.positionY ?? planned?.positionY ?? infra.positionY,
+          width: element?.width ?? planned?.width ?? (infra.category === 'platform' ? 760 : 260),
+          height: element?.height ?? planned?.height ?? (infra.category === 'platform' ? 520 : 160),
+          scale: element?.scale ?? planned?.scale ?? 1, updatedAt: 0,
+        }
+      }),
+    ]
+    const sheetLayout = applyZoomVisibility(buildFloorFrameLayout(
+      virtualSystems, virtualFiles, virtualInfra, dependencies, sheetFrameLayouts,
+      agentTouchedIds, currentZoomRef.current,
+    ).rfNodes, currentZoomRef.current)
+    const floorById = new Map(rfNodes.map(n => [n.id, n]))
+    const floorAbsolutePositions = new Map<string, { x: number; y: number }>()
+    const floorAbsolutePosition = (node: Node, visiting = new Set<string>()): { x: number; y: number } => {
+      const cached = floorAbsolutePositions.get(node.id)
+      if (cached) return cached
+      if (!node.parentId || visiting.has(node.id)) {
+        const root = { x: node.position.x, y: node.position.y }
+        floorAbsolutePositions.set(node.id, root)
+        return root
+      }
+      const parent = floorById.get(node.parentId)
+      if (!parent) {
+        const root = { x: node.position.x, y: node.position.y }
+        floorAbsolutePositions.set(node.id, root)
+        return root
+      }
+      const nextVisiting = new Set(visiting).add(node.id)
+      const parentPosition = floorAbsolutePosition(parent, nextVisiting)
+      const absolute = { x: parentPosition.x + node.position.x, y: parentPosition.y + node.position.y }
+      floorAbsolutePositions.set(node.id, absolute)
+      return absolute
+    }
+    const morphed = sheetLayout.map(sheetNode => {
+      const floorNode = floorById.get(sheetNode.id)
+      const planned = visiblePlannedByNodeId.get(sheetNode.id)
+      const editablePlanned = activePlannedByNodeId.get(sheetNode.id)
+      const sheetElement = effectiveElements.get(sheetNode.id)
+      const editableElement = activeElementByNodeId.get(sheetNode.id)
+      const metadata = planned ? plannedMetadata(planned) : undefined
+      const liveDesignMetadata = sheetElement ? sheetElementMetadata(sheetElement) : undefined
+      const suppliedSymbols = planned && planned.kind !== 'system' && planned.kind !== 'infra'
+        ? (() => {
+            const rows: Array<{ name: string; kind: string; lineStart: number; lineEnd: number }> = []
+            if (planned.kind === 'class') {
+              metadata?.attributes?.forEach(item => rows.push({ name: `${item.name}${item.dataType ? `: ${item.dataType}` : ''}`, kind: 'variable', lineStart: 0, lineEnd: 0 }))
+              metadata?.methods?.forEach(item => rows.push({ name: item.name, kind: 'method', lineStart: 0, lineEnd: 0 }))
+            } else if (planned.kind === 'service') {
+              metadata?.endpoints?.forEach(item => rows.push({ name: item.name, kind: 'method', lineStart: 0, lineEnd: 0 }))
+            } else {
+              ;(metadata?.symbols ?? metadata?.exports?.map(name => ({ name, kind: 'variable' })) ?? []).forEach(item =>
+                rows.push({ name: item.name, kind: item.kind, lineStart: 0, lineEnd: 0 }))
+            }
+            if (rows.length === 0) plannedMembers(planned).forEach(member => rows.push({
+              name: member.signature.split('(')[0]?.trim() || member.signature, kind: 'method', lineStart: 0, lineEnd: 0,
+            }))
+            return rows
+          })()
+        : sheetNode.type === 'file' && liveDesignMetadata?.symbols
+          ? liveDesignMetadata.symbols.map(symbol => ({ ...symbol, lineStart: 0, lineEnd: 0 }))
+          : undefined
+      const nodeOpacity = typeof sheetNode.style?.opacity === 'number' ? sheetNode.style.opacity : 1
+      const isFloorContextNode = !effectiveElements.has(sheetNode.id) && !planned
+      const isStructuralFloorContext = Boolean(
+        floorNode && sheetNode.type === 'system' && !effectiveElements.has(sheetNode.id),
+      )
+      const sheetW = parseFloat(String(sheetNode.style?.width ?? 0))
+      const sheetH = parseFloat(String(sheetNode.style?.height ?? 0))
+      const floorW = parseFloat(String(floorNode?.style?.width ?? 0))
+      const floorH = parseFloat(String(floorNode?.style?.height ?? 0))
+      const renderedW = isStructuralFloorContext ? Math.max(sheetW, floorW) : sheetW
+      const renderedH = isStructuralFloorContext ? Math.max(sheetH, floorH) : sheetH
+      return {
+        ...sheetNode,
+        selected: selectedIdsRef.current.has(sheetNode.id) || sheetNode.id === selectedNodeId,
+        data: {
+          ...sheetNode.data,
+          ...(planned && planned.kind !== 'system' ? {
+            label: planned.name,
+            displayName: planned.name,
+            relPath: planned.declaredPath || planned.name,
+          } : {}),
+          ...(planned ? {
+            umlKind: planned.kind,
+            umlMetadata: plannedMetadata(planned),
+          } : {}),
+          ...(suppliedSymbols ? { symbols: suppliedSymbols } : {}),
+          ...(editablePlanned ? {
+            onChooseInfra: editablePlanned.kind === 'infra' ? () => setInfraPickerNode(editablePlanned.id) : undefined,
+            onRename: (name: string) => {
+              const current = useSheetStore.getState().planned.find(p => p.id === editablePlanned.id)
+              if (!current) return
+              const inferred = current.kind === 'file' ? languageFromFilename(name) : undefined
+              const nextMetadata = inferred ? { ...plannedMetadata(current), language: inferred.id } : current.metadata
+              void useSheetStore.getState().updatePlanned(workspaceIdForOverlay, {
+                ...current, name, declaredPath: current.kind === 'file' ? name : '', metadata: nextMetadata,
+              })
+            },
+            onLanguageChange: editablePlanned.kind === 'class' || editablePlanned.kind === 'file' ? (language: string) => {
+              const current = useSheetStore.getState().planned.find(p => p.id === editablePlanned.id)
+              if (!current) return
+              const name = current.kind === 'file' ? filenameForLanguage(current.name, language) : current.name
+              void useSheetStore.getState().updatePlanned(workspaceIdForOverlay, {
+                ...current, name, declaredPath: current.kind === 'file' ? name : '',
+                metadata: { ...plannedMetadata(current), language },
+              })
+            } : undefined,
+            onSymbolsChange: (symbols: Array<{ name: string; kind: string }>) => {
+              const current = useSheetStore.getState().planned.find(p => p.id === editablePlanned.id)
+              if (!current) return
+              const meta = plannedMetadata(current)
+              let next: PlannedNodeMetadata
+              if (current.kind === 'class') {
+                const methods = symbols.filter(symbol => symbol.kind === 'function' || symbol.kind === 'method').map((symbol, index) => ({
+                  ...(meta.methods?.[index] ?? { visibility: 'public' as const, parameters: [], returnType: '' }), name: symbol.name,
+                }))
+                const attributes = symbols.filter(symbol => symbol.kind !== 'function' && symbol.kind !== 'method' && symbol.kind !== 'class').map((symbol, index) => {
+                  const [name, dataType = ''] = symbol.name.split(':').map(part => part.trim())
+                  return { ...(meta.attributes?.[index] ?? { visibility: 'private' as const }), name, dataType }
+                })
+                next = { ...meta, methods, attributes }
+              } else if (current.kind === 'service') {
+                next = { ...meta, endpoints: symbols.map((symbol, index) => ({
+                  ...(meta.endpoints?.[index] ?? { visibility: 'public' as const, parameters: [], returnType: '' }), name: symbol.name,
+                })) }
+              } else next = { ...meta, symbols: symbols.map(({ name, kind }) => ({ name, kind })) }
+              void useSheetStore.getState().updatePlanned(workspaceIdForOverlay, { ...current, metadata: next })
+            },
+            onUmlMetadataChange: (metadata: PlannedNodeMetadata) => {
+              const current = useSheetStore.getState().planned.find(p => p.id === editablePlanned.id)
+              if (current) void useSheetStore.getState().updatePlanned(
+                workspaceIdForOverlay, {
+                  ...current, metadata,
+                  ...((current.kind === 'class' || current.kind === 'file') && metadata.path !== undefined
+                    ? { declaredPath: metadata.path }
+                    : {}),
+                },
+              )
+            },
+          } : {}),
+          ...(!editablePlanned && editableElement && sheetNode.type === 'file' ? {
+            onSymbolsChange: (symbols: Array<{ name: string; kind: string }>) => {
+              const current = useSheetStore.getState().elements.find(element => element.id === editableElement.id)
+              if (!current) return
+              const currentMetadata = sheetElementMetadata(current) ?? { version: 1 as const }
+              void useSheetStore.getState().updateElementMetadata(workspaceIdForOverlay, current.id, {
+                ...currentMetadata,
+                symbols: symbols.map(({ name, kind }) => ({ name, kind })),
+              }).catch(error => console.error('[sheets] live file design metadata update failed:', error))
+            },
+          } : {}),
+          ...(isStructuralFloorContext ? { nodeW: renderedW, nodeH: renderedH } : {}),
+        },
+        style: {
+          ...sheetNode.style,
+          ...(isStructuralFloorContext ? { width: renderedW, height: renderedH } : {}),
+          ...(isFloorContextNode ? {
+            opacity: Math.min(nodeOpacity, 0.45),
+            pointerEvents: 'none' as const,
+          } : {}),
+          transition,
+        },
+        draggable: activeNodeIds.has(sheetNode.id) && nodeOpacity > 0.1,
+        selectable: !isFloorContextNode && nodeOpacity > 0.1,
+        zIndex: sheetNode.id.startsWith('planned:') ? 10000 : sheetNode.zIndex,
+      }
+    })
+    const sheetIds = new Set(sheetLayout.map(n => n.id))
+    const dimmedFloor = rfNodes.flatMap(n => {
+      if (sheetIds.has(n.id)) return []
+      const floorOpacity = typeof n.style?.opacity === 'number' ? n.style.opacity : 1
+      return [{
+        ...n,
+        // The Floor is a projected base layer. Flatten its non-sheet nodes to
+        // absolute coordinates so a sheet-local system cannot capture and
+        // recursively transform the live system's Floor descendants.
+        parentId: undefined,
+        position: floorAbsolutePosition(n),
+        // Keep the Floor legible beneath a sheet without reviving descendants
+        // that semantic zoom has intentionally hidden.
+        style: { ...n.style, opacity: Math.min(floorOpacity, 0.45), pointerEvents: 'none' as const, transition },
+        selectable: false, draggable: false,
+      }]
+    })
+    return [...dimmedFloor, ...morphed]
+  }, [rfNodes, visibleLayers, effectiveElements, activeElementByNodeId, systems, files, infraNodes, dependencies, agentTouchedIds, overlayPlanned, isTransitioningLayout, visiblePlannedByNodeId, activePlannedByNodeId, activeNodeIds, selectedNodeId, workspaceIdForOverlay, setInfraPickerNode])
+
+  const [sheetInteractionNodes, setSheetInteractionNodes] = useState<Node[] | null>(null)
+  useEffect(() => setSheetInteractionNodes(null), [overlaySheetId, visibleSheetIds.join('|')])
+  const displayNodes = sheetInteractionNodes ?? composedNodes
+  const displayNodesRef = useRef<Node[]>(displayNodes)
+  displayNodesRef.current = displayNodes
+
+  const updateInteractiveNodes = useCallback((updater: (nodes: Node[]) => Node[]) => {
+    if (useSheetStore.getState().activeSheetId) {
+      setSheetInteractionNodes(current => updater(current ?? displayNodesRef.current))
+    } else {
+      setRfNodes(updater)
+    }
+  }, [])
 
   const displayEdges = useMemo(() => {
-    if (!overlaySheetId) return rfEdges
+    if (visibleLayers.length === 0) return rfEdges
     const plannedRf: Edge[] = overlayPlannedEdges.map(e => ({
       id: `pedge:${e.id}`,
       source: e.srcPlanned ? `planned:${e.srcPlanned}` : (e.srcLive ?? ''),
@@ -1177,13 +1823,20 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       labelStyle: { fontSize: 8, fontFamily: 'var(--font-mono)', fill: 'var(--text-secondary)' },
       zIndex: 10000,
     }))
-    return [...rfEdges, ...plannedRf]
-  }, [rfEdges, overlaySheetId, overlayPlannedEdges])
+    const visibleIds = new Set(displayNodes.filter(n => n.style?.opacity !== 0).map(n => n.id))
+    return [
+      ...rfEdges.map(e => visibleIds.has(e.source) && visibleIds.has(e.target)
+        ? e
+        : { ...e, style: { ...e.style, opacity: 0 }, selectable: false }),
+      ...plannedRf,
+    ]
+  }, [rfEdges, visibleLayers, overlayPlannedEdges, displayNodes])
 
   // Stencil drop: palette → canvas → planned element born in name-edit mode.
   const onOverlayDragOver = useCallback((e: React.DragEvent) => {
     if (e.dataTransfer.types.includes('application/axiom-stencil')) {
       e.preventDefault()
+      e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
     }
   }, [])
@@ -1191,6 +1844,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     const raw = e.dataTransfer.getData('application/axiom-stencil')
     if (!raw || !overlaySheetId) return
     e.preventDefault()
+    e.stopPropagation()
     const stencil = JSON.parse(raw) as StencilDef
     const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     const store = useSheetStore.getState()
@@ -1203,8 +1857,13 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       kind: stencil.kind,
       shape: stencil.shape as 'box' | 'folder' | 'cylinder' | 'hexagon',
       positionX: pos.x, positionY: pos.y,
-    })
-  }, [overlaySheetId, workspaceIdForOverlay, screenToFlowPosition])
+    }).then(created => {
+      if (created && stencil.kind === 'infra') {
+        setSelectedNode(`planned:${created.id}`)
+        setInfraPickerNode(created.id)
+      }
+    }).catch(err => console.error('[sheets] stencil creation failed:', err))
+  }, [overlaySheetId, workspaceIdForOverlay, screenToFlowPosition, setSelectedNode, setInfraPickerNode])
 
   const onConnectPlanned = useCallback((conn: Connection) => {
     if (!overlaySheetId || !conn.source || !conn.target) return
@@ -1216,7 +1875,6 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     })
   }, [overlaySheetId, workspaceIdForOverlay])
   const [isTidying, setIsTidying] = useState(false)
-  const [debugState, setDebugState] = useState<any>(null)
   // Focused-subgraph mode: when a trace or runtime session is active, dim the
   // nodes that are off the active path so the investigation stays legible on a
   // large graph. User-toggleable; on by default.
@@ -1299,7 +1957,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       await Promise.all(apiPromises)
 
       // Fit the view to show the new layout
-      setTimeout(() => fitView({ padding: 0.12, duration: 400 }), 100)
+      scheduleTimeout(() => fitView({ padding: 0.12, duration: 400 }), 100)
     } catch (err) {
       console.error('[AxiomCanvas] Tidy layout failed', err)
     } finally {
@@ -1307,37 +1965,107 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }
   }, [systems, files, infraNodes, dependencies, currentProject, fitView])
 
-  // Trigger tidy automatically on first-load when all coordinates are (0,0)
-  useEffect(() => {
-    if (systems.length === 0 && infraNodes.length === 0) return
-    const projectId = currentProject?.id ?? 'demo'
-    if (layoutBuiltRef.current !== projectId) {
-      const allZero = systems.every(s => s.positionX === 0 && s.positionY === 0)
-      if (allZero && !readOnly) {
-        tidyCanvas()
+  const tidyFrame = useCallback(async () => {
+    const all = displayNodesRef.current
+    const selectedContainer = selectedNodeId
+      ? all.find(node => node.id === selectedNodeId && node.type === 'system')
+      : undefined
+    const scopeId = selectedContainer?.id ?? null
+    const children = all.filter(node => (node.parentId ?? null) === scopeId && node.draggable !== false)
+      .sort((a, b) => a.id.localeCompare(b.id))
+    if (children.length === 0) return
+    setIsTidying(true)
+    try {
+      const parentScale = selectedContainer ? Number((selectedContainer.data as any).worldScale ?? 1) : 1
+      const parentCanonical = selectedContainer ? {
+        width: Number(selectedContainer.style?.width ?? selectedContainer.measured?.width ?? 1) / parentScale,
+        height: Number(selectedContainer.style?.height ?? selectedContainer.measured?.height ?? 1) / parentScale,
+      } : { width: 2600, height: 1800 }
+      const content = scopeId ? contentRect(parentCanonical) : { x: 80, y: 80, width: parentCanonical.width - 160, height: parentCanonical.height - 160 }
+      const gap = 42
+      let x = content.x
+      let y = content.y
+      let rowHeight = 0
+      const positions = new Map<string, { x: number; y: number }>()
+      for (const child of children) {
+        const width = Number(child.style?.width ?? child.measured?.width ?? BASE_FILE_W) / parentScale
+        const height = Number(child.style?.height ?? child.measured?.height ?? BASE_FILE_H) / parentScale
+        if (x > content.x && x + width > content.x + content.width) {
+          x = content.x
+          y += rowHeight + gap
+          rowHeight = 0
+        }
+        positions.set(child.id, { x, y })
+        x += width + gap
+        rowHeight = Math.max(rowHeight, height)
       }
-    }
-  }, [systems, files, currentProject, readOnly, tidyCanvas])
 
-  const currentZoomRef    = useRef(0.5)
+      const sheet = useSheetStore.getState()
+      if (sheet.activeSheetId) {
+        const mutations: SheetLayoutMutation[] = children.flatMap(child => {
+          const position = positions.get(child.id)!
+          const element = sheet.elements.find(item => (item.systemId ?? item.fileId ?? item.infraId) === child.id)
+          const planned = child.id.startsWith('planned:') ? sheet.planned.find(item => item.id === child.id.slice(8)) : undefined
+          if (!element && !planned) return []
+          return [{
+            kind: element ? 'element' as const : 'planned' as const,
+            id: element?.id ?? planned!.id,
+            x: position.x, y: position.y, parentSystemId: scopeId,
+            width: Number(element?.width ?? planned?.width ?? child.style?.width ?? BASE_FILE_W),
+            height: Number(element?.height ?? planned?.height ?? child.style?.height ?? BASE_FILE_H),
+            scale: element?.scale ?? planned?.scale ?? 1,
+          }]
+        })
+        await sheet.updateLayoutsBatch(workspaceIdForOverlay, sheet.activeSheetId, mutations)
+      } else {
+        const graph = useGraphStore.getState()
+        const workspaceId = graph.currentProject?.id
+        if (!workspaceId) return
+        const updates: Omit<FloorLayout, 'workspaceId' | 'updatedAt'>[] = children.map(child => {
+          const nodeType: FloorNodeType = graph.systems.some(item => item.id === child.id)
+            ? 'system' : graph.files.some(item => item.id === child.id) ? 'file' : 'infra'
+          const previous = graph.floorLayouts.find(item => item.nodeId === child.id && item.nodeType === nodeType)
+          const worldScale = Number((child.data as any).worldScale ?? previous?.scale ?? 1)
+          const ownScale = previous?.scale ?? Number((child.data as any).frameScale ?? 1)
+          const position = positions.get(child.id)!
+          return {
+            nodeId: child.id, nodeType, parentNodeId: scopeId,
+            parentNodeType: scopeId ? (graph.infraNodes.some(item => item.id === scopeId) ? 'infra' : 'system') : null,
+            containmentKind: scopeId ? (graph.infraNodes.some(item => item.id === scopeId) ? 'hosted_by' : 'part_of') : 'root',
+            positionX: position.x, positionY: position.y,
+            width: previous?.width ?? Number(child.style?.width ?? BASE_FILE_W) / Math.max(0.0001, worldScale),
+            height: previous?.height ?? Number(child.style?.height ?? BASE_FILE_H) / Math.max(0.0001, worldScale),
+            scale: ownScale,
+          }
+        })
+        await apiSaveFloorLayouts(workspaceId, updates)
+        const saved = updates.map(update => ({ ...update, workspaceId, updatedAt: Date.now() }))
+        const changed = new Set(saved.map(item => item.nodeType + ':' + item.nodeId))
+        useGraphStore.setState(state => ({
+          floorLayouts: [...state.floorLayouts.filter(item => !changed.has(item.nodeType + ':' + item.nodeId)), ...saved],
+        }))
+      }
+      scheduleTimeout(() => fitView({ padding: 0.12, duration: 400 }), 80)
+    } catch (error) {
+      console.error('[AxiomCanvas] tidy frame failed', error)
+    } finally {
+      setIsTidying(false)
+    }
+  }, [fitView, selectedNodeId, workspaceIdForOverlay])
+
   const zoomRafRef        = useRef<number | null>(null)
   const layoutBuiltRef = useRef<string | null>(null)
+  const initialFloorPersistRef = useRef<string | null>(null)
   const heldKeysRef       = useRef<Set<string>>(new Set())
   const wasdRafRef        = useRef<number | null>(null)
-  const resizeStartRef    = useRef<Map<string, { w: number; h: number }>>(new Map())
+  const resizeStartRef    = useRef<Map<string, NodeResizeParams & { children: Map<string, { x: number; y: number }> }>>(new Map())
+  const resizingNodeIdRef = useRef<string | null>(null)
   const rfNodesRef        = useRef<Node[]>([])
   const dropTargetRef     = useRef<string | null>(null)
   const draggingNodeIdRef = useRef<string | null>(null)
-  const dragGrabRef       = useRef<{ offsetX: number; offsetY: number; startW: number; startH: number } | null>(null)
-  const lastTargetWRef    = useRef<number | null>(null)
-  const lastTargetHRef    = useRef<number | null>(null)
-  const activeSnapPreviewRef = useRef<{ id: string | null; col: number; row: number } | null>(null)
-  const justDroppedRef    = useRef<string | null>(null)
-  const resistanceRef     = useRef<{
-    holdLocalX: number; holdLocalY: number  // node's local position at the crossing point
-    startCX: number;    startCY: number     // canvas cursor position at the crossing point
-  } | null>(null)
-  const layoutOverridesRef = useRef<Map<string, { x?: number; y?: number; w?: number; h?: number }>>(new Map())
+  const dragPositionRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const dragTraceSessionRef = useRef(0)
+  const dragTraceRef = useRef<NodeMoveTrace | null>(null)
   const targetZoomRef      = useRef<number | null>(null)
   const targetViewportRef  = useRef<{ x: number; y: number } | null>(null)
   const smoothZoomRafRef   = useRef<number | null>(null)
@@ -1346,59 +2074,137 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   rfNodesRef.current = rfNodes
 
   // ── Node resize ──────────────────────────────────────────────────────────
-  const onNodeResizeEnd = useCallback((nodeId: string, newW: number, newH: number) => {
+  const armResizeEndFallback = useCallback((nodeId: string) => {
+    // XYFlow intentionally omits onResizeEnd when a handle is pressed and
+    // released without a drag. Clear our interaction session after pointer-up
+    // only if the normal end callback did not already consume it.
+    const onPointerUp = () => requestAnimationFrame(() => {
+      if (!resizeStartRef.current.has(nodeId)) return
+      resizeStartRef.current.delete(nodeId)
+      if (resizingNodeIdRef.current === nodeId) resizingNodeIdRef.current = null
+      if (useSheetStore.getState().activeSheetId) setSheetInteractionNodes(null)
+    })
+    window.addEventListener('pointerup', onPointerUp, { once: true, capture: true })
+  }, [])
+
+  const onNodeResizeEnd = useCallback((nodeId: string, end: NodeResizeParams) => {
     const start = resizeStartRef.current.get(nodeId)
     resizeStartRef.current.delete(nodeId)
-    if (!start) return
-    if (Math.abs(newW - start.w) < 0.001 && Math.abs(newH - start.h) < 0.001) return
+    requestAnimationFrame(() => {
+      if (resizingNodeIdRef.current === nodeId) resizingNodeIdRef.current = null
+    })
+    if (!start) {
+      if (useSheetStore.getState().activeSheetId) setSheetInteractionNodes(null)
+      return
+    }
+    if (!resizeChanged(start, end)) {
+      if (useSheetStore.getState().activeSheetId) setSheetInteractionNodes(null)
+      return
+    }
 
-    // Find parent system depth to snap size correctly
-    const node = rfNodesRef.current.find(n => n.id === nodeId)
-    if (!node) return
+    // React Flow emits rendered, parent-local geometry; persistence uses
+    // canonical geometry in the immediate parent's frame.
+    const sheetState = useSheetStore.getState()
+    const node = (sheetState.activeSheetId ? displayNodesRef.current : rfNodesRef.current).find(n => n.id === nodeId)
+    if (!node) {
+      if (sheetState.activeSheetId) setSheetInteractionNodes(null)
+      return
+    }
 
     const parentId = node.parentId
-    const parentNode = parentId ? rfNodesRef.current.find(n => n.id === parentId) : null
-    const depth = parentNode ? ((parentNode.data as any).depth ?? 0) : 0
+    const ownScale = Number((node.data as any).frameScale ?? 1)
+    const worldScale = Number((node.data as any).worldScale ?? ownScale)
+    const canonical = toCanonicalResizeGeometry(end, worldScale, ownScale, !!parentId)
 
-    // Snap to grid dimensions at this depth
-    const wUnits = wUnitsFor(newW, depth)
-    const hUnits = hUnitsFor(newH, depth)
-    const snappedW = containerW(wUnits, depth)
-    const snappedH = containerH(hUnits, depth)
-
-    // Set the resized node's size in overrides
-    layoutOverridesRef.current.set(nodeId, { w: snappedW, h: snappedH })
-
-    // Update the size in rfNodes for immediate feedback
-    setRfNodes(curr => curr.map(n => {
-      if (n.id === nodeId) {
-        return {
-          ...n,
-          style: { ...n.style, width: snappedW, height: snappedH },
-        }
+    // Sheets already store canonical local geometry. Resizing is intentionally
+    // freeform: no grid units and no sibling displacement.
+    if (sheetState.activeSheetId) {
+      const sheetId = sheetState.activeSheetId
+      const mutationFor = (
+        renderedId: string,
+        x: number,
+        y: number,
+        parentSystemId: string | null,
+        size?: { width: number; height: number; scale: number },
+      ): SheetLayoutMutation | null => {
+        const member = sheetState.elements.find(item => (item.systemId ?? item.fileId ?? item.infraId) === renderedId)
+        if (member) return { kind: 'element', id: member.id, x, y, parentSystemId, ...size }
+        const plannedNode = renderedId.startsWith('planned:')
+          ? sheetState.planned.find(item => item.id === renderedId.slice(8))
+          : undefined
+        return plannedNode ? { kind: 'planned', id: plannedNode.id, x, y, parentSystemId, ...size } : null
       }
-      return n
-    }))
-
-    // Persist the new size — systems go to DB; files go to DB via the size endpoint
-    const store = useGraphStore.getState()
-    const sys = store.systems.find(s => s.id === nodeId)
-    if (sys) {
-      const updated = { ...sys, width: snappedW, height: snappedH }
-      apiUpdateSystem(updated)
-      useGraphStore.setState(s => ({
-        systems: s.systems.map(s2 => s2.id === nodeId ? updated : s2),
-      }))
-    } else {
-      const f = store.files.find(file => file.id === nodeId)
-      if (f) {
-        apiUpdateFileSize(nodeId, snappedW, snappedH, useGraphStore.getState().currentProject?.id ?? '')
-        useGraphStore.setState(s => ({
-          files: s.files.map(file => file.id === nodeId ? { ...file, width: snappedW, height: snappedH } : file),
-        }))
+      const parentMutation = mutationFor(nodeId, canonical.x, canonical.y, parentId ?? null, {
+        width: canonical.width,
+        height: canonical.height,
+        scale: ownScale,
+      })
+      const childMutations = [...start.children].flatMap(([childId, childStart]) => {
+        const position = childPositionAfterParentResize(childStart, start, end, worldScale)
+        const mutation = mutationFor(childId, position.x, position.y, nodeId)
+        return mutation ? [mutation] : []
+      })
+      if (sheetId && parentMutation) {
+        void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetId, [parentMutation, ...childMutations]).catch(() => {})
       }
+      setSheetInteractionNodes(null)
+      return
     }
-  }, [])
+
+    const graph = useGraphStore.getState()
+    const workspaceId = graph.currentProject?.id
+    if (!workspaceId) return
+    const nodeType: FloorNodeType = graph.systems.some(system => system.id === nodeId)
+      ? 'system' : graph.files.some(file => file.id === nodeId) ? 'file' : 'infra'
+    const previous = graph.floorLayouts.find(layout => layout.nodeId === nodeId && layout.nodeType === nodeType)
+    const parentType = parentId ? (graph.infraNodes.some(infra => infra.id === parentId) ? 'infra' : 'system') : null
+    const nextLayout: Omit<FloorLayout, 'workspaceId' | 'updatedAt'> = {
+      nodeId, nodeType, parentNodeId: parentId ?? null, parentNodeType: parentType,
+      containmentKind: parentType === 'infra' ? 'hosted_by' : parentType === 'system' ? 'part_of' : 'root',
+      positionX: canonical.x,
+      positionY: canonical.y,
+      width: canonical.width,
+      height: canonical.height,
+      scale: ownScale,
+    }
+    const childLayouts: Omit<FloorLayout, 'workspaceId' | 'updatedAt'>[] = [...start.children].flatMap(([childId, childStart]) => {
+      const childNode = rfNodesRef.current.find(candidate => candidate.id === childId)
+      if (!childNode) return []
+      const childType: FloorNodeType = graph.systems.some(system => system.id === childId)
+        ? 'system' : graph.files.some(file => file.id === childId) ? 'file' : 'infra'
+      const childPrevious = graph.floorLayouts.find(layout => layout.nodeId === childId && layout.nodeType === childType)
+      const childOwnScale = childPrevious?.scale ?? Number((childNode.data as any).frameScale ?? 1)
+      const childWorldScale = Number((childNode.data as any).worldScale ?? worldScale * childOwnScale)
+      const position = childPositionAfterParentResize(childStart, start, end, worldScale)
+      return [{
+        nodeId: childId,
+        nodeType: childType,
+        parentNodeId: nodeId,
+        parentNodeType: nodeType === 'infra' ? 'infra' : 'system',
+        containmentKind: nodeType === 'infra' ? 'hosted_by' : 'part_of',
+        positionX: position.x,
+        positionY: position.y,
+        width: childPrevious?.width ?? Number(childNode.style?.width ?? childNode.measured?.width ?? 1) / Math.max(0.0001, childWorldScale),
+        height: childPrevious?.height ?? Number(childNode.style?.height ?? childNode.measured?.height ?? 1) / Math.max(0.0001, childWorldScale),
+        scale: childOwnScale,
+      }]
+    })
+    const updates = [nextLayout, ...childLayouts]
+    const changed = new Set(updates.map(layout => `${layout.nodeType}:${layout.nodeId}`))
+    const previousLayouts = graph.floorLayouts.filter(layout => changed.has(`${layout.nodeType}:${layout.nodeId}`))
+    const optimistic = updates.map(layout => ({ ...layout, workspaceId, updatedAt: Date.now() }))
+    useGraphStore.setState(state => ({
+      floorLayouts: [...state.floorLayouts.filter(layout => !changed.has(`${layout.nodeType}:${layout.nodeId}`)), ...optimistic],
+    }))
+    void apiSaveFloorLayouts(workspaceId, updates).catch(error => {
+      console.error('[AxiomCanvas] floor resize failed', error)
+      useGraphStore.setState(state => ({
+        floorLayouts: [...state.floorLayouts.filter(layout => !changed.has(`${layout.nodeType}:${layout.nodeId}`)), ...previousLayouts],
+      }))
+    })
+    return
+
+  }, [workspaceIdForOverlay])
 
   useEffect(() => {
     if (systems.length === 0 && infraNodes.length === 0) return
@@ -1409,49 +2215,70 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     const isFirstLayout = layoutBuiltRef.current !== projectId
     const existingNodes = isFirstLayout ? [] : rfNodes
 
-    const { rfNodes: layout, rfEdges: newEdges } = buildLayout(
-      systems, files, infraNodes, dependencies,
-      agentTouchedIds, existingNodes, currentZoomRef.current,
-      justDroppedRef.current ?? undefined,
-      layoutOverridesRef.current,
-      draggingNodeIdRef.current,
+    const { rfNodes: layout, rfEdges: newEdges } = buildFloorFrameLayout(
+      systems, files, infraNodes, dependencies, floorLayouts,
+      agentTouchedIds, currentZoomRef.current,
     )
 
-    // Clear layout overrides now that they have been integrated into the layout
-    layoutOverridesRef.current.clear()
-
-    // Debug logging
-    console.log(`[AxiomCanvas] Layout: ${layout.length} nodes`)
-    layout.forEach(n => console.log(`  Name: ${(n.data as any).name || (n.data as any).label}, ID: ${n.id}, Parent: ${n.parentId || 'NULL'}, pos: (${Math.round(n.position.x)}, ${Math.round(n.position.y)}) size: (${Math.round(parseFloat(String(n.style?.width ?? 0)))}, ${Math.round(parseFloat(String(n.style?.height ?? 0)))})`))
+    // A genuinely empty Floor gets one relationship-aware initialization.
+    // Persist the complete result immediately; after this, authored freeform
+    // geometry is the sole source of truth and the force layout never reruns.
+    if (!readOnly && currentProject && floorLayouts.length === 0 && initialFloorPersistRef.current !== projectId) {
+      initialFloorPersistRef.current = projectId
+      const initialLayouts: Omit<FloorLayout, 'workspaceId' | 'updatedAt'>[] = layout.map(node => {
+        const nodeType: FloorNodeType = systems.some(system => system.id === node.id)
+          ? 'system' : files.some(file => file.id === node.id) ? 'file' : 'infra'
+        const ownScale = Number((node.data as any).frameScale ?? 1)
+        const worldScale = Number((node.data as any).worldScale ?? ownScale)
+        const parentWorldScale = node.parentId ? worldScale / Math.max(0.0001, ownScale) : 1
+        const parentNodeType = node.parentId
+          ? (infraNodes.some(infra => infra.id === node.parentId) ? 'infra' : 'system')
+          : null
+        return {
+          nodeId: node.id,
+          nodeType,
+          parentNodeId: node.parentId ?? null,
+          parentNodeType,
+          containmentKind: parentNodeType === 'infra' ? 'hosted_by' : parentNodeType === 'system' ? 'part_of' : 'root',
+          positionX: node.position.x / Math.max(0.0001, parentWorldScale),
+          positionY: node.position.y / Math.max(0.0001, parentWorldScale),
+          width: Number(node.style?.width ?? node.measured?.width ?? 1) / Math.max(0.0001, worldScale),
+          height: Number(node.style?.height ?? node.measured?.height ?? 1) / Math.max(0.0001, worldScale),
+          scale: ownScale,
+        }
+      })
+      const optimistic = initialLayouts.map(item => ({ ...item, workspaceId: currentProject.id, updatedAt: Date.now() }))
+      useGraphStore.setState({ floorLayouts: optimistic })
+      void apiSaveFloorLayouts(currentProject.id, initialLayouts).catch(error => {
+        console.error('[AxiomCanvas] initial Floor layout failed', error)
+        initialFloorPersistRef.current = null
+        useGraphStore.setState({ floorLayouts: [] })
+      })
+    }
 
     const layoutWithCallbacks = layout.map(n => ({
       ...n,
       data: {
         ...n.data,
-        onResizeStart: readOnly ? undefined : (w: number, h: number) => { resizeStartRef.current.set(n.id, { w, h }) },
-        onResizeEnd:   readOnly ? undefined : (w: number, h: number) => onNodeResizeEnd(n.id, w, h),
+        onResizeStart: readOnly ? undefined : (params: NodeResizeParams) => {
+          resizingNodeIdRef.current = n.id
+          draggingNodeIdRef.current = null
+          dragPositionRef.current.delete(n.id)
+          const children = new Map(rfNodesRef.current
+            .filter(child => child.parentId === n.id)
+            .map(child => [child.id, { x: child.position.x, y: child.position.y }]))
+          resizeStartRef.current.set(n.id, { ...params, children })
+          armResizeEndFallback(n.id)
+        },
+        onResizeEnd: readOnly ? undefined : (params: NodeResizeParams) => onNodeResizeEnd(n.id, params),
       },
     }))
     const withZoom = applyZoomVisibility(layoutWithCallbacks, currentZoomRef.current)
-    const fixed = withZoom
-    const dropId = justDroppedRef.current
-    if (dropId) {
-      // Reveal dropped node AND every ancestor so it's never hidden by a low-opacity parent
-      const nodeMap = new Map(fixed.map(n => [n.id, n]))
-      const toReveal = new Set<string>([dropId])
-      let cur = nodeMap.get(dropId)
-      while (cur?.parentId) { toReveal.add(cur.parentId); cur = nodeMap.get(cur.parentId) }
-      setRfNodes(fixed.map(n => toReveal.has(n.id) ? makeFullyVisible(n) : n))
-
-      // Save the final position of the dropped node to the database
-      const droppedNode = fixed.find(n => n.id === dropId)
-      if (droppedNode && currentProject) {
-        const ntype = droppedNode.type === 'file' ? 'file' : 'system'
-        apiSaveNodePosition(droppedNode.id, droppedNode.position.x, droppedNode.position.y, currentProject.id, ntype)
-      }
-    } else {
-      setRfNodes(fixed)
-    }
+    const fixed = withZoom.map(node => ({
+      ...node,
+      selected: selectedIdsRef.current.has(node.id) || node.id === selectedNodeId,
+    }))
+    setRfNodes(fixed)
     setRfEdges(newEdges)
     // Signal overlay effects (runtime / focus / trace) to restamp their
     // per-node flags, which this full rebuild just discarded.
@@ -1459,9 +2286,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
 
     if (isFirstLayout) {
       layoutBuiltRef.current = projectId
-      setTimeout(() => fitView({ padding: 0.12, duration: 400 }), 80)
+      scheduleTimeout(() => fitView({ padding: 0.12, duration: 400 }), 80)
     }
-  }, [systems, files, infraNodes, dependencies, selectionMode, onNodeResizeEnd])
+  }, [systems, files, infraNodes, floorLayouts, dependencies, selectionMode, onNodeResizeEnd, armResizeEndFallback])
 
   useEffect(() => {
     setRfNodes(curr => curr.map(n => ({ ...n, selected: n.id === selectedNodeId })))
@@ -1627,6 +2454,36 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [getViewport, setViewport])
 
   useEffect(() => {
+    if (readOnly || !overlaySheetId || !selectedNodeId) return
+    const onDeleteSelectedSheetNode = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) return
+
+      const planned = activePlannedByNodeId.get(selectedNodeId)
+      const element = activeElementByNodeId.get(selectedNodeId)
+      if (!planned && !element) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      setSelectedNode(null)
+      setInspectedNode(null)
+      if (planned?.id === infraPickerNodeId) setInfraPickerNode(null)
+      if (planned) {
+        void useSheetStore.getState().deletePlanned(workspaceIdForOverlay, planned.id)
+          .catch(error => console.error('[sheets] failed to delete selected planned node:', error))
+      } else if (element) {
+        void useSheetStore.getState().removeElement(
+          workspaceIdForOverlay, overlaySheetId, element.id,
+        ).catch(error => console.error('[sheets] failed to remove selected live node:', error))
+      }
+    }
+    window.addEventListener('keydown', onDeleteSelectedSheetNode)
+    return () => window.removeEventListener('keydown', onDeleteSelectedSheetNode)
+  }, [readOnly, overlaySheetId, selectedNodeId, activePlannedByNodeId, activeElementByNodeId, workspaceIdForOverlay, setSelectedNode, setInspectedNode, setInfraPickerNode, infraPickerNodeId])
+
+  useEffect(() => {
     return () => {
       if (smoothZoomRafRef.current !== null) {
         cancelAnimationFrame(smoothZoomRafRef.current)
@@ -1634,7 +2491,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }
   }, [])
 
-  const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+  const handleWheel = useCallback((e: WheelEvent) => {
     // Check if target or any ancestor is marked "nowheel"
     let target = e.target as HTMLElement | null
     while (target) {
@@ -1645,7 +2502,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     e.preventDefault()
 
     const currentViewport = getViewport()
-    const rect = e.currentTarget.getBoundingClientRect()
+    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
     const mx = e.clientX - rect.left
     const my = e.clientY - rect.top
 
@@ -1659,9 +2516,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     // Accumulate the zoom target based on scroll direction
     const factor = 1.15
     if (e.deltaY < 0) {
-      targetZoomRef.current = Math.min(20, targetZoomRef.current * factor)
+      targetZoomRef.current = Math.min(MAX_CANVAS_ZOOM, targetZoomRef.current * factor)
     } else {
-      targetZoomRef.current = Math.max(0.02, targetZoomRef.current / factor)
+      targetZoomRef.current = Math.max(MIN_CANVAS_ZOOM, targetZoomRef.current / factor)
     }
 
     // Start the animation loop if it's not already running
@@ -1709,9 +2566,22 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }
   }, [getViewport, setViewport])
 
+  useEffect(() => {
+    const element = canvasRootRef.current
+    if (!element) return
+    element.addEventListener('wheel', handleWheel, { passive: false })
+    return () => element.removeEventListener('wheel', handleWheel)
+  }, [handleWheel])
+
   const onMove: OnMove = useCallback((event, viewport) => {
     const zoom = viewport.zoom
     currentZoomRef.current = zoom
+
+    // A sheet interaction snapshot must never outlive the geometry mutation
+    // that created it, or it freezes semantic zoom on stale node styles.
+    if (useSheetStore.getState().activeSheetId && !draggingNodeIdRef.current && resizeStartRef.current.size === 0) {
+      setSheetInteractionNodes(null)
+    }
 
     // Cancel smooth zoom animation if movement is driven by user interaction (drag, pinch, etc.)
     if (event) {
@@ -1736,530 +2606,340 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
 
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => {
-      // Planned overlay nodes live in the sheet store, not rfNodes — route
-      // their drags there and keep the rest on the normal path.
-      const plannedChanges = changes.filter(c => 'id' in c && typeof (c as any).id === 'string' && (c as any).id.startsWith('planned:'))
-      for (const ch of plannedChanges) {
-        if (ch.type === 'position' && ch.position && ch.dragging === false) {
-          useSheetStore.getState().movePlanned(
-            useGraphStore.getState().currentProject?.id ?? '',
-            (ch as any).id.slice(8), ch.position.x, ch.position.y)
-        }
-        if (ch.type === 'position' && ch.position) {
-          // live-update during drag so the box follows the cursor
-          useSheetStore.setState(s => ({
-            planned: s.planned.map(p => `planned:${p.id}` === (ch as any).id
-              ? { ...p, positionX: ch.position!.x, positionY: ch.position!.y } : p),
-          }))
+      const moveTrace = dragTraceRef.current
+      if (moveTrace) {
+        const viewport = getViewport()
+        const now = performance.now()
+        for (const change of changes) {
+          if (change.type !== 'position') continue
+          const previous = moveTrace.previousChangeByNodeId.get(change.id)
+          const x = change.position?.x ?? null
+          const y = change.position?.y ?? null
+          moveTrace.changeRows.push({
+            sample: moveTrace.changeRows.length + 1,
+            tMs: now - moveTrace.startedAt,
+            nodeId: change.id,
+            primaryNode: change.id === moveTrace.nodeId,
+            dragging: change.dragging ?? null,
+            zoom: viewport.zoom,
+            emittedX: x,
+            emittedY: y,
+            emittedAbsoluteX: change.positionAbsolute?.x ?? null,
+            emittedAbsoluteY: change.positionAbsolute?.y ?? null,
+            deltaFromPreviousX: x !== null && previous ? x - previous.x : null,
+            deltaFromPreviousY: y !== null && previous ? y - previous.y : null,
+            screenDeltaFromPreviousX: x !== null && previous ? (x - previous.x) * viewport.zoom : null,
+            screenDeltaFromPreviousY: y !== null && previous ? (y - previous.y) * viewport.zoom : null,
+          })
+          if (x !== null && y !== null) moveTrace.previousChangeByNodeId.set(change.id, { x, y })
         }
       }
-      const rest = changes.filter(c => !plannedChanges.includes(c))
-      if (rest.length > 0) setRfNodes(ns => applyNodeChanges(rest, ns))
-    }, []
+      for (const change of changes) {
+        if (change.type !== 'select') continue
+        const next = new Set(selectedIdsRef.current)
+        if (change.selected) next.add(change.id)
+        else next.delete(change.id)
+        selectedIdsRef.current = next
+      }
+      // North/west resize handles change the frame origin as well as its
+      // dimensions. Apply the complete React Flow change set so the edge under
+      // the pointer remains under the pointer and child compensation stays live.
+      const interactionChanges = changes
+      // Planned overlay nodes live in the sheet store, not rfNodes — route
+      // their drags there and keep the rest on the normal path.
+      if (overlaySheetId) {
+        const geometryChanges = interactionChanges.filter(change => change.type === 'position' || change.type === 'select' ||
+          (change.type === 'dimensions' && resizeStartRef.current.size > 0))
+        if (geometryChanges.length > 0) {
+          setSheetInteractionNodes(nodes => applyNodeChanges(geometryChanges, nodes ?? displayNodesRef.current))
+        }
+      } else {
+        setRfNodes(nodes => applyNodeChanges(interactionChanges, nodes))
+      }
+    }, [getViewport, overlaySheetId]
   )
   const onEdgesChange: OnEdgesChange = useCallback(
     (changes) => setRfEdges(es => applyEdgeChanges(changes, es)), []
   )
 
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+  const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
+    selectedIdsRef.current = new Set([node.id])
     setSelectedNode(node.id)
-  }, [setSelectedNode])
+    const target = event.target as HTMLElement | null
+    if (!target?.closest('input, textarea, select, button, [contenteditable="true"], [data-node-editable="true"]')) {
+      setInspectedNode(null)
+    }
+  }, [setSelectedNode, setInspectedNode])
+
+  const onNodeDoubleClick = useCallback((event: React.MouseEvent, node: Node) => {
+    const target = event.target as HTMLElement | null
+    if (target?.closest('input, textarea, select, button, [contenteditable="true"], [data-node-editable="true"]')) return
+    setSelectedNode(node.id)
+    setInspectedNode(node.id)
+  }, [setSelectedNode, setInspectedNode])
 
   const onPaneClick = useCallback(() => {
+    selectedIdsRef.current = new Set()
     setSelectedNode(null)
-  }, [setSelectedNode])
+    setInspectedNode(null)
+  }, [setSelectedNode, setInspectedNode])
 
   // ── Drag visibility override ─────────────────────────────────────────────
   const onNodeDragStart: OnNodeDrag = useCallback((event, node) => {
+    if (resizingNodeIdRef.current === node.id) return
+    setIsTransitioningLayout(false)
     draggingNodeIdRef.current = node.id
-    setRfNodes(curr => curr.map(n => n.id === node.id ? makeFullyVisible(n) : n))
-    setDebugState({ event: 'start', id: node.id, time: new Date().toLocaleTimeString() })
+    dragPositionRef.current.set(node.id, { x: node.position.x, y: node.position.y })
+    const pointer = pointerTraceCoordinates(event)
+    const viewport = getViewport()
+    const flowPointer = screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY })
+    const internal = getInternalNode(node.id)
+    const absolute = internal?.internals.positionAbsolute ?? node.position
+    const domRect = renderedNodeRect(node.id)
+    const session = ++dragTraceSessionRef.current
+    dragTraceRef.current = {
+      session,
+      nodeId: node.id,
+      startedAt: performance.now(),
+      lastLiveLogAt: 0,
+      startClientX: pointer.clientX,
+      startClientY: pointer.clientY,
+      previousClientX: pointer.clientX,
+      previousClientY: pointer.clientY,
+      startFlowX: flowPointer.x,
+      startFlowY: flowPointer.y,
+      startNodeX: node.position.x,
+      startNodeY: node.position.y,
+      startAbsoluteX: absolute.x,
+      startAbsoluteY: absolute.y,
+      startDomLeft: domRect?.left ?? null,
+      startDomTop: domRect?.top ?? null,
+      previousNodeX: node.position.x,
+      previousNodeY: node.position.y,
+      previousChangeByNodeId: new Map([[node.id, { x: node.position.x, y: node.position.y }]]),
+      callbackRows: [],
+      changeRows: [],
+    }
+    const traceState = useSheetStore.getState()
+    console.info(`[AxiomMoveTrace #${session}] start`, {
+      id: node.id,
+      type: node.type,
+      callbackPosition: node.position,
+      absolutePosition: absolute,
+      parentId: node.parentId ?? null,
+      viewport,
+      pointerClientCssPixels: { x: pointer.clientX, y: pointer.clientY },
+      pointerFlowUnits: flowPointer,
+      devicePixelRatio: window.devicePixelRatio,
+      conversion: `1 browser CSS px = ${1 / viewport.zoom} React Flow units at ${viewport.zoom}x zoom`,
+      units: {
+        clientAndDom: 'browser CSS pixels',
+        nodeAndFlow: 'React Flow world units',
+        screenEquivalent: 'React Flow delta multiplied by zoom (browser CSS pixels)',
+        devicePixelEstimate: 'browser CSS pixels multiplied by devicePixelRatio',
+      },
+      activeSheetId: traceState.activeSheetId,
+      planned: node.id.startsWith('planned:')
+        ? traceState.planned.find(p => p.id === node.id.slice(8))
+        : undefined,
+      element: traceState.elements.find(e => (e.systemId ?? e.fileId ?? e.infraId) === node.id),
+    })
+    updateInteractiveNodes(curr => curr.map(n => n.id === node.id ? makeFullyVisible(n) : n))
 
-    const clientX = 'clientX' in event ? event.clientX : (event as any).touches?.[0]?.clientX ?? 0
-    const clientY = 'clientY' in event ? event.clientY : (event as any).touches?.[0]?.clientY ?? 0
-    const { x: cx, y: cy } = screenToFlowPosition({ x: clientX, y: clientY })
-
-    // Find the correct absolute position of the node relative to flow space
-    const all = rfNodesRef.current
-    const parentId = node.parentId
-    const parentNode = parentId ? all.find(n => n.id === parentId) : null
-    const parentAbs = parentNode ? (getInternalNode(parentNode.id)?.internals.positionAbsolute ?? { x: 0, y: 0 }) : { x: 0, y: 0 }
-    const absX = parentAbs.x + node.position.x
-    const absY = parentAbs.y + node.position.y
-
-    const originalDepth = (node.data as any).depth ?? 0
-    const parentDepthAtStart = Math.max(0, originalDepth - 1)
-
-    const startW = parseFloat(String(node.style?.width ?? (node.type === 'file' ? fileNodeSize(parentDepthAtStart).w : containerW(1, parentDepthAtStart))))
-    const startH = parseFloat(String(node.style?.height ?? (node.type === 'file' ? fileNodeSize(parentDepthAtStart).h : containerH(1, parentDepthAtStart))))
-
-    const offsetX = cx - absX
-    const offsetY = cy - absY
-
-    dragGrabRef.current = { offsetX, offsetY, startW, startH }
-  }, [getInternalNode, screenToFlowPosition])
-
-  // ── Drag highlight + barrier resistance ──────────────────────────────────
-  // RESISTANCE_PX: screen pixels the cursor must push past a boundary before the
-  // node pops through. Measured in screen space so it's zoom-independent.
-  const RESISTANCE_PX = 52
+  }, [getInternalNode, getViewport, screenToFlowPosition, updateInteractiveNodes])
 
   const onNodeDrag: OnNodeDrag = useCallback((event, node) => {
-    const clientX = 'clientX' in event ? event.clientX : event.touches[0]?.clientX ?? 0
-    const clientY = 'clientY' in event ? event.clientY : event.touches[0]?.clientY ?? 0
+    if (resizingNodeIdRef.current === node.id) return
+    const pointer = pointerTraceCoordinates(event)
+    const clientX = pointer.clientX
+    const clientY = pointer.clientY
 
-    // Use actual cursor position in flow space for hit-testing.
-    // Do NOT use getInternalNode(node.id).positionAbsolute — we override the
-    // dragged node's position during resistance, which causes positionAbsolute to
-    // reflect the held position rather than the true cursor, breaking the distance check.
-    const { x: cx, y: cy } = screenToFlowPosition({ x: clientX, y: clientY })
-
-    const all = rfNodesRef.current
-
-    // Find the innermost system the cursor is currently over (excluding self + descendants)
-    const candidate = all
-      .filter(n => {
-        if (n.type !== 'system' || n.id === node.id) return false
-        let p: Node | undefined = n
-        while (p?.parentId) {
-          if (p.parentId === node.id) return false
-          p = all.find(x => x.id === p!.parentId)
-        }
-        const internal = getInternalNode(n.id)
-        if (!internal) return false
-        const a = internal.internals.positionAbsolute
-        const w = parseFloat(String(n.style?.width ?? 0))
-        const h = parseFloat(String(n.style?.height ?? 0))
-        return cx >= a.x && cx <= a.x + w && cy >= a.y && cy <= a.y + h
-      })
-      .sort((a, b) => ((b.data as any).depth ?? 0) - ((a.data as any).depth ?? 0))[0] ?? null
-
-    const wouldReassign = (candidate?.id ?? null) !== (node.parentId ?? null)
-
-    // ── Resistance ────────────────────────────────────────────────────────
-    // Distance is in SCREEN pixels (clientX/Y) so overriding node position
-    // doesn't feed back into the measurement and cause an infinite hold.
-    // Curve: cubic ease-in — node barely creeps at first, then snaps free.
-    const r = resistanceRef.current
-    if (r) {
-      if (!wouldReassign) {
-        resistanceRef.current = null  // cursor returned to home zone, cancel
-      } else {
-        const sdx = clientX - r.startCX
-        const sdy = clientY - r.startCY
-        const dist = Math.hypot(sdx, sdy)
-        if (dist < RESISTANCE_PX) {
-          const t     = dist / RESISTANCE_PX
-          const eased = t * t * t                        // cubic ease-in
-          const zoom  = currentZoomRef.current || 1
-          setRfNodes(curr => curr.map(n =>
-            n.id === node.id
-              ? { ...n, position: { x: r.holdLocalX + (sdx / zoom) * eased,
-                                    y: r.holdLocalY + (sdy / zoom) * eased } }
-              : n
-          ))
-          return  // suppress highlight updates during resistance
-        }
-        resistanceRef.current = null  // popped through
+    const moveTrace = dragTraceRef.current
+    if (moveTrace?.nodeId === node.id) {
+      const now = performance.now()
+      const viewport = getViewport()
+      const flowPointer = screenToFlowPosition({ x: clientX, y: clientY })
+      const internal = getInternalNode(node.id)
+      const absolute = internal?.internals.positionAbsolute ?? node.position
+      const domRect = renderedNodeRect(node.id)
+      const pointerStepX = clientX - moveTrace.previousClientX
+      const pointerStepY = clientY - moveTrace.previousClientY
+      const pointerTotalX = clientX - moveTrace.startClientX
+      const pointerTotalY = clientY - moveTrace.startClientY
+      const nodeStepX = node.position.x - moveTrace.previousNodeX
+      const nodeStepY = node.position.y - moveTrace.previousNodeY
+      const nodeTotalX = node.position.x - moveTrace.startNodeX
+      const nodeTotalY = node.position.y - moveTrace.startNodeY
+      const expectedFlowTotalX = pointerTotalX / viewport.zoom
+      const expectedFlowTotalY = pointerTotalY / viewport.zoom
+      const trackingErrorFlowX = nodeTotalX - expectedFlowTotalX
+      const trackingErrorFlowY = nodeTotalY - expectedFlowTotalY
+      const row: MoveTraceRow = {
+        sample: moveTrace.callbackRows.length + 1,
+        tMs: now - moveTrace.startedAt,
+        zoom: viewport.zoom,
+        viewportX: viewport.x,
+        viewportY: viewport.y,
+        pointerType: pointer.pointerType,
+        clientX,
+        clientY,
+        pointerStepCssX: pointerStepX,
+        pointerStepCssY: pointerStepY,
+        pointerTotalCssX: pointerTotalX,
+        pointerTotalCssY: pointerTotalY,
+        pointerStepDeviceEstimateX: pointerStepX * window.devicePixelRatio,
+        pointerStepDeviceEstimateY: pointerStepY * window.devicePixelRatio,
+        eventMovementX: pointer.movementX,
+        eventMovementY: pointer.movementY,
+        coalescedEvents: pointer.coalescedEvents,
+        expectedFlowStepX: pointerStepX / viewport.zoom,
+        expectedFlowStepY: pointerStepY / viewport.zoom,
+        cursorFlowX: flowPointer.x,
+        cursorFlowY: flowPointer.y,
+        cursorFlowTotalX: flowPointer.x - moveTrace.startFlowX,
+        cursorFlowTotalY: flowPointer.y - moveTrace.startFlowY,
+        nodeLocalX: node.position.x,
+        nodeLocalY: node.position.y,
+        nodeStepFlowX: nodeStepX,
+        nodeStepFlowY: nodeStepY,
+        nodeTotalFlowX: nodeTotalX,
+        nodeTotalFlowY: nodeTotalY,
+        nodeStepScreenX: nodeStepX * viewport.zoom,
+        nodeStepScreenY: nodeStepY * viewport.zoom,
+        expectedNodeX: moveTrace.startNodeX + expectedFlowTotalX,
+        expectedNodeY: moveTrace.startNodeY + expectedFlowTotalY,
+        trackingErrorFlowX,
+        trackingErrorFlowY,
+        trackingErrorScreenX: trackingErrorFlowX * viewport.zoom,
+        trackingErrorScreenY: trackingErrorFlowY * viewport.zoom,
+        nodeAbsoluteX: absolute.x,
+        nodeAbsoluteY: absolute.y,
+        absoluteTotalFlowX: absolute.x - moveTrace.startAbsoluteX,
+        absoluteTotalFlowY: absolute.y - moveTrace.startAbsoluteY,
+        domLeft: domRect?.left ?? null,
+        domTop: domRect?.top ?? null,
+        domTotalCssX: domRect && moveTrace.startDomLeft !== null ? domRect.left - moveTrace.startDomLeft : null,
+        domTotalCssY: domRect && moveTrace.startDomTop !== null ? domRect.top - moveTrace.startDomTop : null,
+      }
+      moveTrace.callbackRows.push(row)
+      moveTrace.previousClientX = clientX
+      moveTrace.previousClientY = clientY
+      moveTrace.previousNodeX = node.position.x
+      moveTrace.previousNodeY = node.position.y
+      if (now - moveTrace.lastLiveLogAt >= 250) {
+        moveTrace.lastLiveLogAt = now
+        console.debug(`[AxiomMoveTrace #${moveTrace.session}] live sample ${row.sample}`, row)
       }
     }
 
-    // ── Highlight + Snapping Preview ──────────────────────────────────────
-    let snapPreview: { col: number; row: number; wUnits: number; hUnits: number } | null = null
-    const newId = candidate?.id ?? null
-
-    const originalDepth = (node.data as any).depth ?? 0
-    const parentDepthAtStart = Math.max(0, originalDepth - 1)
-    const sz = {
-      w: parseFloat(String(node.style?.width ?? (node.type === 'file' ? fileNodeSize(parentDepthAtStart).w : containerW(1, parentDepthAtStart)))),
-      h: parseFloat(String(node.style?.height ?? (node.type === 'file' ? fileNodeSize(parentDepthAtStart).h : containerH(1, parentDepthAtStart))))
+    // Freeform hit-testing: choose the smallest eligible frame under the
+    // cursor. No barriers, cell snapping, sibling displacement, or DOM nudges.
+    dragPositionRef.current.set(node.id, { x: node.position.x, y: node.position.y })
+    const cursor = screenToFlowPosition({ x: clientX, y: clientY })
+    const allNodes = displayNodesRef.current
+    const parentById = new Map(allNodes.map(candidate => [candidate.id, candidate.parentId ?? null]))
+    const selectedDuringDrag = new Set(allNodes.filter(candidate => candidate.selected).map(candidate => candidate.id))
+    selectedDuringDrag.add(node.id)
+    const isInsideDraggedSubtree = (candidateId: string) => {
+      let current: string | null = candidateId
+      const visited = new Set<string>()
+      while (current && !visited.has(current)) {
+        if (selectedDuringDrag.has(current)) return true
+        visited.add(current)
+        current = parentById.get(current) ?? null
+      }
+      return false
     }
-    const wUnits = node.type === 'file' ? 1 : wUnitsExact(sz.w, parentDepthAtStart)
-    const hUnits = node.type === 'file' ? 1 : hUnitsExact(sz.h, parentDepthAtStart)
-
-    // Determine target size and depth details for the dragged node in real time
-    let targetW = node.style?.width
-    let targetH = node.style?.height
-    let childDepth = originalDepth
-    let scale = (node.data as any).worldScale ?? 1
-
-    if (candidate) {
-      const parentDepth = (candidate.data as any).depth ?? 0
-      const parentAbs = getInternalNode(candidate.id)?.internals.positionAbsolute ?? { x: 0, y: 0 }
-      const localCursorX = cx - parentAbs.x
-      const localCursorY = cy - parentAbs.y
-
-      const cw = fileNodeSize(parentDepth).w
-      const ch = fileNodeSize(parentDepth).h
-      const gap = gridGap(parentDepth)
-
-      const col = Math.max(0, Math.round((localCursorX - gap) / (cw + gap)))
-      const row = Math.max(0, Math.round((localCursorY - gap) / (ch + gap)))
-
-      const occupiedCells = (candidate.data as any).occupiedCells as Set<string> | undefined
-
-      let fits = true
-      for (let c = col; c < col + wUnits; c++) {
-        for (let r = row; r < row + hUnits; r++) {
-          if (occupiedCells?.has(`${c}-${r}`)) {
-            fits = false
-            break
-          }
-        }
-        if (!fits) break
-      }
-
-      let foundCol = col
-      let foundRow = row
-
-      if (node.type === 'file') {
-        if (!fits) {
-          let found = false
-          // Spiral search up to radius 12
-          for (let r_limit = 1; r_limit <= 12; r_limit++) {
-            for (let dx = -r_limit; dx <= r_limit; dx++) {
-              for (let dy = -r_limit; dy <= r_limit; dy++) {
-                if (Math.abs(dx) !== r_limit && Math.abs(dy) !== r_limit) continue
-                const c = col + dx
-                const r = row + dy
-                if (c < 0 || r < 0) continue
-
-                let possible = true
-                for (let cc = c; cc < c + wUnits; cc++) {
-                  for (let rr = r; rr < r + hUnits; rr++) {
-                    if (occupiedCells?.has(`${cc}-${rr}`)) {
-                      possible = false
-                      break
-                    }
-                  }
-                  if (!possible) break
-                }
-                if (possible) {
-                  foundCol = c
-                  foundRow = r
-                  found = true
-                  break
-                }
-              }
-              if (found) break
-            }
-            if (found) break
-          }
-        }
-      } else {
-        // System node: always snap directly to cursor!
-        foundCol = col
-        foundRow = row
-      }
-
-      snapPreview = { col: foundCol, row: foundRow, wUnits, hUnits }
-
-      childDepth = parentDepth + 1
-      scale = fileNodeSize(Math.max(0, childDepth - 1)).w / BASE_FILE_W
-      if (node.type === 'file') {
-        targetW = cw
-        targetH = ch
-      } else {
-        targetW = containerW(wUnits, parentDepth)
-        targetH = containerH(hUnits, parentDepth)
-      }
-    } else {
-      // Root canvas size snap
-      childDepth = 0
-      scale = 1
-      if (node.type === 'file') {
-        targetW = fileNodeSize(0).w
-        targetH = fileNodeSize(0).h
-      } else {
-        targetW = containerW(wUnits, 0)
-        targetH = containerH(hUnits, 0)
-      }
-    }
-
-    const prevSnap = activeSnapPreviewRef.current
-    const prevId = dropTargetRef.current
-
-    // Check if the target parent container ID changed
-    const targetChanged = (newId !== prevId)
-
-    // Check if the snap cell position changed (only relevant if we are hovering over a container)
-    const cellChanged = newId !== null && (
-      !prevSnap || 
-      prevSnap.id !== newId || 
-      !snapPreview || 
-      prevSnap.col !== snapPreview.col || 
-      prevSnap.row !== snapPreview.row
-    )
-
-    const snapChanged = targetChanged || cellChanged
-
-    if (!snapChanged) return // Skip state update if snap target remains the same to avoid lag
-
-    console.error(`[AxiomCanvas] onNodeDrag - Target: ${newId} (cell: ${snapPreview ? `${snapPreview.col}-${snapPreview.row}` : 'none'}, size: ${targetW}x${targetH})`)
-    setDebugState({
-      event: 'drag',
-      nodeId: node.id,
-      hoveredSystemId: newId,
-      snapCell: snapPreview ? `${snapPreview.col}-${snapPreview.row}` : 'none',
-      targetSize: `${targetW}x${targetH}`,
-      childDepth,
-      scale,
+    const candidates = allNodes.filter(candidate => {
+      if (candidate.id === node.id || isInsideDraggedSubtree(candidate.id) || candidate.type !== 'system') return false
+      if (overlaySheetId && !activeNodeIds.has(candidate.id)) return false
+      const internal = getInternalNode(candidate.id)
+      if (!internal) return false
+      const absolute = internal.internals.positionAbsolute
+      const width = Number(candidate.measured?.width ?? candidate.style?.width ?? 0)
+      const height = Number(candidate.measured?.height ?? candidate.style?.height ?? 0)
+      return cursor.x >= absolute.x && cursor.x <= absolute.x + width && cursor.y >= absolute.y && cursor.y <= absolute.y + height
+    }).sort((a, b) => {
+      const area = (candidate: Node) => Number(candidate.measured?.width ?? candidate.style?.width ?? 0) * Number(candidate.measured?.height ?? candidate.style?.height ?? 0)
+      return area(a) - area(b)
     })
-
-    activeSnapPreviewRef.current = snapPreview ? { id: newId, col: snapPreview.col, row: snapPreview.row } : null
-    dropTargetRef.current = newId
-
-    // Arm resistance when cursor first enters a new zone
-    if (newId !== prevId && newId !== null) {
-      resistanceRef.current = {
-        holdLocalX: node.position.x,
-        holdLocalY: node.position.y,
-        startCX: clientX,
-        startCY: clientY,
-      }
+    const previousTarget = dropTargetRef.current
+    const nextTarget = candidates[0]?.id ?? null
+    dropTargetRef.current = nextTarget
+    if (previousTarget !== nextTarget) {
+      updateInteractiveNodes(current => current.map(candidate => ({
+        ...candidate,
+        data: { ...candidate.data, isDropTarget: candidate.id === nextTarget },
+      })))
     }
-
-    // Compute margin offsets to center the node under the cursor
-    let diffX = 0
-    let diffY = 0
-    let sizeChanged = false
-    const grab = dragGrabRef.current
-    if (grab && targetW !== undefined && targetH !== undefined) {
-      const curW = typeof targetW === 'number' ? targetW : parseFloat(String(targetW))
-      const curH = typeof targetH === 'number' ? targetH : parseFloat(String(targetH))
-      
-      // Determine if this is a size change (not the initial drag start frame)
-      const isFirstFrame = lastTargetWRef.current === null
-      sizeChanged = !isFirstFrame && (lastTargetWRef.current !== curW || lastTargetHRef.current !== curH)
-      
-      lastTargetWRef.current = curW
-      lastTargetHRef.current = curH
-
-      // Center the node under the cursor: offset = originalGrabOffset - currentHalfSize
-      diffX = grab.offsetX - (curW / 2)
-      diffY = grab.offsetY - (curH / 2)
-    }
-
-    // Direct DOM mutation of the React Flow node wrapper to bypass internal drag size caching
-    const el = document.querySelector(`.react-flow__node[data-id="${node.id}"]`) as HTMLElement | null
-    if (el) {
-      if (targetW !== undefined && targetH !== undefined) {
-        // Enable transition only when size actually changes (to allow instant centering on grab)
-        if (sizeChanged) {
-          el.style.transition = 'width 0.3s cubic-bezier(0.25, 1, 0.5, 1), height 0.3s cubic-bezier(0.25, 1, 0.5, 1), margin-left 0.3s cubic-bezier(0.25, 1, 0.5, 1), margin-top 0.3s cubic-bezier(0.25, 1, 0.5, 1)'
-        } else {
-          el.style.transition = 'none'
-        }
-        el.style.width = typeof targetW === 'number' ? `${targetW}px` : String(targetW)
-        el.style.height = typeof targetH === 'number' ? `${targetH}px` : String(targetH)
-        el.style.marginLeft = `${diffX}px`
-        el.style.marginTop = `${diffY}px`
-      }
-    }
-
-    // Sibling displacement calculation for system node dragging
-    const siblingDisplacements = new Map<string, { x: number; y: number }>()
-    let maxColUsed = 0
-    let maxRowUsed = 0
-
-    if (node.type !== 'file' && newId !== null && snapPreview && candidate) {
-      const parentDepth = (candidate.data as any).depth ?? 0
-      const cw = fileNodeSize(parentDepth).w
-      const ch = fileNodeSize(parentDepth).h
-      const gap = gridGap(parentDepth)
-
-      // 1. Footprint of the dragged system
-      const occupiedByPlaced = new Set<string>()
-      for (let c = snapPreview.col; c < snapPreview.col + snapPreview.wUnits; c++) {
-        for (let r = snapPreview.row; r < snapPreview.row + snapPreview.hUnits; r++) {
-          occupiedByPlaced.add(`${c}-${r}`)
-        }
-      }
-      maxColUsed = Math.max(maxColUsed, snapPreview.col + snapPreview.wUnits)
-      maxRowUsed = Math.max(maxRowUsed, snapPreview.row + snapPreview.hUnits)
-
-      // 2. Find all siblings in candidate
-      const siblings = all
-        .filter(n => n.parentId === newId && n.id !== node.id)
-        // Sort top-to-bottom, left-to-right
-        .sort((a, b) => {
-          const ay = a.position.y, ax = a.position.x
-          const by = b.position.y, bx = b.position.x
-          return ay !== by ? ay - by : ax - bx
-        })
-
-      // 3. Place siblings one by one
-      for (const sib of siblings) {
-        const sibW = parseFloat(String(sib.style?.width ?? (sib.type === 'file' ? fileNodeSize(parentDepth).w : containerW(1, parentDepth))))
-        const sibH = parseFloat(String(sib.style?.height ?? (sib.type === 'file' ? fileNodeSize(parentDepth).h : containerH(1, parentDepth))))
-        const sibCol = Math.max(0, Math.round((sib.position.x - gap) / (cw + gap)))
-        const sibRow = Math.max(0, Math.round((sib.position.y - gap) / (ch + gap)))
-        const sibWU = sib.type === 'file' ? 1 : wUnitsExact(sibW, parentDepth)
-        const sibHU = sib.type === 'file' ? 1 : hUnitsExact(sibH, parentDepth)
-
-        // Check if overlaps with currently occupied cells
-        let overlaps = false
-        for (let c = sibCol; c < sibCol + sibWU; c++) {
-          for (let r = sibRow; r < sibRow + sibHU; r++) {
-            if (occupiedByPlaced.has(`${c}-${r}`)) {
-              overlaps = true
-              break
-            }
-          }
-          if (overlaps) break
-        }
-
-        let finalCol = sibCol
-        let finalRow = sibRow
-
-        if (overlaps) {
-          // Find next nearest free spot using spiral search
-          let found = false
-          for (let r_limit = 1; r_limit <= 20; r_limit++) {
-            for (let dx = -r_limit; dx <= r_limit; dx++) {
-              for (let dy = -r_limit; dy <= r_limit; dy++) {
-                if (Math.abs(dx) !== r_limit && Math.abs(dy) !== r_limit) continue
-                const c = sibCol + dx
-                const r = sibRow + dy
-                if (c < 0 || r < 0) continue
-
-                let possible = true
-                for (let cc = c; cc < c + sibWU; cc++) {
-                  for (let rr = r; rr < r + sibHU; rr++) {
-                    if (occupiedByPlaced.has(`${cc}-${rr}`)) {
-                      possible = false;
-                      break
-                    }
-                  }
-                  if (!possible) break
-                }
-                if (possible) {
-                  finalCol = c
-                  finalRow = r
-                  found = true
-                  break
-                }
-              }
-              if (found) break
-            }
-            if (found) break
-          }
-        }
-
-        // Mark footprint as occupied
-        for (let c = finalCol; c < finalCol + sibWU; c++) {
-          for (let r = finalRow; r < finalRow + sibHU; r++) {
-            occupiedByPlaced.add(`${c}-${r}`)
-          }
-        }
-        maxColUsed = Math.max(maxColUsed, finalCol + sibWU)
-        maxRowUsed = Math.max(maxRowUsed, finalRow + sibHU)
-
-        // Calculate visual offset in pixels
-        const dx = cellX(finalCol, parentDepth) - cellX(sibCol, parentDepth)
-        const dy = cellY(finalRow, parentDepth) - cellY(sibRow, parentDepth)
-        siblingDisplacements.set(sib.id, { x: dx, y: dy })
-      }
-    }
-
-    setRfNodes(curr => curr.map(n => {
-      let updatedNode = n
-      // Resize the node being dragged in real time to target size and update its depth/scale
-      if (n.id === node.id) {
-        updatedNode = {
-          ...n,
-          style: { ...n.style, width: targetW, height: targetH },
-          data: {
-            ...n.data,
-            depth: childDepth,
-            worldScale: scale,
-            previewOffset: null,
-          }
-        }
-      }
-
-      // If it is a displaced sibling, apply displacement previewOffset
-      const disp = siblingDisplacements.get(n.id)
-      if (disp) {
-        updatedNode = {
-          ...updatedNode,
-          data: {
-            ...updatedNode.data,
-            previewOffset: disp,
-          }
-        }
-      } else if (n.data && (n.data as any).previewOffset) {
-        updatedNode = {
-          ...updatedNode,
-          data: {
-            ...updatedNode.data,
-            previewOffset: null,
-          }
-        }
-      }
-
-      // Preview target container expansion
-      if (n.id === newId && node.type !== 'file' && maxColUsed > 0 && maxRowUsed > 0 && candidate) {
-        const parentDepth = (candidate.data as any).depth ?? 0
-        const previewW = containerW(maxColUsed, parentDepth)
-        const previewH = containerH(maxRowUsed, parentDepth)
-        updatedNode = {
-          ...updatedNode,
-          style: { ...updatedNode.style, width: previewW, height: previewH },
-          data: {
-            ...updatedNode.data,
-            nodeW: previewW,
-            nodeH: previewH,
-          }
-        }
-      }
-
-      // Restore container size of previous target if we hovered out
-      if (n.id === prevId && prevId !== newId) {
-        const orig = useGraphStore.getState().systems.find(sys => sys.id === prevId)
-        const origW = orig?.width ?? containerW(1, (n.data as any).depth ?? 0)
-        const origH = orig?.height ?? containerH(1, (n.data as any).depth ?? 0)
-        updatedNode = {
-          ...updatedNode,
-          style: { ...updatedNode.style, width: origW, height: origH },
-          data: {
-            ...updatedNode.data,
-            isDropTarget: false,
-            snapPreview: null,
-            selfScale: 0.97,
-            nodeW: origW,
-            nodeH: origH,
-          }
-        }
-      }
-
-      // Set preview for new target
-      if (n.id === newId) {
-        return { ...updatedNode, data: { ...updatedNode.data, isDropTarget: true, snapPreview, selfScale: prevId !== newId ? 1.03 : 1.0 } }
-      }
-      // Clear other previews
-      if (n.data && (n.data as any).snapPreview && n.id !== newId) {
-        return { ...updatedNode, data: { ...updatedNode.data, snapPreview: null } }
-      }
-      return updatedNode
-    }))
-
-    if (newId !== prevId) {
-      setTimeout(() => {
-        setRfNodes(curr => curr.map(n => {
-          if (n.id === newId || n.id === prevId) return { ...n, data: { ...n.data, selfScale: 1.0 } }
-          return n
-        }))
-      }, 140)
-    }
-  }, [getInternalNode, screenToFlowPosition])
+  }, [getInternalNode, getViewport, screenToFlowPosition, overlaySheetId, activeNodeIds, updateInteractiveNodes])
 
   const onNodeDragStop: OnNodeDrag = useCallback((event, node) => {
-    const displacedSiblings: { id: string; type: string; x: number; y: number }[] = []
+    if (resizingNodeIdRef.current === node.id) return
+    const finalPosition = dragPositionRef.current.get(node.id) ?? node.position
+    dragPositionRef.current.delete(node.id)
+    const moveTrace = dragTraceRef.current
+    if (moveTrace?.nodeId === node.id) {
+      const viewport = getViewport()
+      const stopPointer = pointerTraceCoordinates(event)
+      const renderedPosition = displayNodesRef.current.find(n => n.id === node.id)?.position
+      const nonZeroScreenSteps = moveTrace.callbackRows.flatMap(row => {
+        const x = typeof row.nodeStepScreenX === 'number' ? Math.abs(row.nodeStepScreenX) : 0
+        const y = typeof row.nodeStepScreenY === 'number' ? Math.abs(row.nodeStepScreenY) : 0
+        return [x, y].filter(value => value > Number.EPSILON)
+      })
+      const nonZeroFlowSteps = moveTrace.callbackRows.flatMap(row => {
+        const x = typeof row.nodeStepFlowX === 'number' ? Math.abs(row.nodeStepFlowX) : 0
+        const y = typeof row.nodeStepFlowY === 'number' ? Math.abs(row.nodeStepFlowY) : 0
+        return [x, y].filter(value => value > Number.EPSILON)
+      })
+      const summary = {
+        id: node.id,
+        parentId: node.parentId ?? null,
+        elapsedMs: performance.now() - moveTrace.startedAt,
+        zoomAtStop: viewport.zoom,
+        browserCssPixelsPerFlowUnit: viewport.zoom,
+        flowUnitsPerBrowserCssPixel: 1 / viewport.zoom,
+        devicePixelRatio: window.devicePixelRatio,
+        callbackSamples: moveTrace.callbackRows.length,
+        reactFlowPositionChanges: moveTrace.changeRows.length,
+        smallestObservedNodeStepFlowUnits: nonZeroFlowSteps.length ? Math.min(...nonZeroFlowSteps) : 0,
+        smallestObservedNodeStepBrowserCssPixels: nonZeroScreenSteps.length ? Math.min(...nonZeroScreenSteps) : 0,
+        startPointerCss: { x: moveTrace.startClientX, y: moveTrace.startClientY },
+        stopPointerCss: { x: stopPointer.clientX, y: stopPointer.clientY },
+        totalPointerCss: {
+          x: stopPointer.clientX - moveTrace.startClientX,
+          y: stopPointer.clientY - moveTrace.startClientY,
+        },
+        startNodeFlow: { x: moveTrace.startNodeX, y: moveTrace.startNodeY },
+        callbackPosition: node.position,
+        authoritativePosition: finalPosition,
+        renderedPosition,
+        totalNodeFlow: {
+          x: finalPosition.x - moveTrace.startNodeX,
+          y: finalPosition.y - moveTrace.startNodeY,
+        },
+        totalNodeScreenEquivalent: {
+          x: (finalPosition.x - moveTrace.startNodeX) * viewport.zoom,
+          y: (finalPosition.y - moveTrace.startNodeY) * viewport.zoom,
+        },
+      }
+      console.groupCollapsed(`[AxiomMoveTrace #${moveTrace.session}] COMPLETE — ${node.id}`)
+      console.info('Summary and unit conversion', summary)
+      console.info('Drag callback samples — pointer input compared with node output')
+      console.table(moveTrace.callbackRows)
+      console.info('Raw onNodesChange position emissions from React Flow')
+      console.table(moveTrace.changeRows)
+      console.log('Copyable raw trace', {
+        summary,
+        callbackSamples: moveTrace.callbackRows,
+        reactFlowPositionChanges: moveTrace.changeRows,
+      })
+      console.groupEnd()
+      dragTraceRef.current = null
+    }
     // Clear drag state — restore zoom visibility, clear drop highlight
     draggingNodeIdRef.current = null
-    resistanceRef.current = null
-    activeSnapPreviewRef.current = null
     const prevTarget = dropTargetRef.current
     dropTargetRef.current = null
 
@@ -2270,456 +2950,296 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       el.style.marginLeft = ''
       el.style.marginTop = ''
     }
-    dragGrabRef.current = null
-    lastTargetWRef.current = null
-    lastTargetHRef.current = null
-
-    setRfNodes(curr => applyZoomVisibility(
-      curr.map(n => {
-        let updated = n.id === prevTarget ? { ...n, data: { ...n.data, isDropTarget: false, snapPreview: null } } : n
-        if (updated.data && (updated.data as any).previewOffset) {
-          updated = { ...updated, data: { ...updated.data, previewOffset: null } }
+    // Floor drops are one atomic frame transform. They never rewrite semantic
+    // system/file ownership.
+    if (!useSheetStore.getState().activeSheetId) {
+      const graph = useGraphStore.getState()
+      const workspaceId = graph.currentProject?.id
+      const all = displayNodesRef.current
+      const parentById = new Map(all.map(candidate => [candidate.id, candidate.parentId ?? null]))
+      const selected = all.filter(candidate => candidate.selected).map(candidate => candidate.id)
+      if (!selected.includes(node.id)) selected.push(node.id)
+      const roots = highestSelectedRoots(selected, parentById)
+        .map(id => all.find(candidate => candidate.id === id))
+        .filter((candidate): candidate is Node => !!candidate)
+      const targetNode = prevTarget ? all.find(candidate => candidate.id === prevTarget) : null
+      const changesParent = !!targetNode && roots.some(root => root.parentId !== targetNode.id)
+      // Reparenting changes the destination frame for the entire sibling set.
+      // Include the target's current direct children so the existing contents
+      // and the incoming selection are fitted as one group, without resizing
+      // the target container itself.
+      const incomingIds = new Set(roots.map(root => root.id))
+      const layoutRoots = changesParent && targetNode
+        ? [
+            ...all.filter(candidate => candidate.parentId === targetNode.id && !incomingIds.has(candidate.id)),
+            ...roots,
+          ]
+        : roots
+      const rootRects = layoutRoots.map(root => {
+        const absolute = getInternalNode(root.id)?.internals.positionAbsolute ?? root.position
+        return {
+          id: root.id, x: absolute.x, y: absolute.y,
+          width: Number(root.measured?.width ?? root.style?.width ?? 1),
+          height: Number(root.measured?.height ?? root.style?.height ?? 1),
         }
-        return updated
-      }),
-      currentZoomRef.current,
-    ))
-
-    // Infra nodes: just persist position, no reassignment
-    if (node.type === 'infra') {
-      useGraphStore.setState(s => ({
-        infraNodes: s.infraNodes.map(n =>
-          n.id === node.id ? { ...n, positionX: node.position.x, positionY: node.position.y } : n
-        )
-      }))
-      return
-    }
-
-    // ── Drop detection for ALL system and file nodes ─────────────────────
-    const all = rfNodesRef.current
-
-    // Invariant wUnits and hUnits calculation based on original depth
-    const originalDepth = (node.data as any).depth ?? 0
-    const parentDepthAtStart = Math.max(0, originalDepth - 1)
-    const sz = {
-      w: parseFloat(String(node.style?.width ?? (node.type === 'file' ? fileNodeSize(parentDepthAtStart).w : containerW(1, parentDepthAtStart)))),
-      h: parseFloat(String(node.style?.height ?? (node.type === 'file' ? fileNodeSize(parentDepthAtStart).h : containerH(1, parentDepthAtStart))))
-    }
-    const wUnits = node.type === 'file' ? 1 : wUnitsExact(sz.w, parentDepthAtStart)
-    const hUnits = node.type === 'file' ? 1 : hUnitsExact(sz.h, parentDepthAtStart)
-
-    // Calculate absolute coordinates of the dragged node
-    const oldParentId = node.parentId
-    const oldParentNode = oldParentId ? all.find(n => n.id === oldParentId) : null
-    const oldParentAbs = oldParentNode ? (getInternalNode(oldParentNode.id)?.internals.positionAbsolute ?? { x: 0, y: 0 }) : { x: 0, y: 0 }
-    const absX = oldParentAbs.x + node.position.x
-    const absY = oldParentAbs.y + node.position.y
-
-    // Use cursor position for hit-testing — this matches onNodeDrag's highlight logic exactly.
-    const clientX = 'clientX' in event ? event.clientX : (event as any).touches?.[0]?.clientX ?? 0
-    const clientY = 'clientY' in event ? event.clientY : (event as any).touches?.[0]?.clientY ?? 0
-    const { x: cursorX, y: cursorY } = screenToFlowPosition({ x: clientX, y: clientY })
-
-    // Find the innermost system under the cursor (excluding self and own descendants)
-    const newParent = all
-      .filter(n => {
-        if (n.type !== 'system' || n.id === node.id) return false
-        let p: Node | undefined = n
-        while (p?.parentId) {
-          if (p.parentId === node.id) return false
-          p = all.find(x => x.id === p!.parentId)
-        }
-        const internal = getInternalNode(n.id)
-        if (!internal) return false
-        const a = internal.internals.positionAbsolute
-        const w = parseFloat(String(n.style?.width ?? 0))
-        const h = parseFloat(String(n.style?.height ?? 0))
-        return cursorX >= a.x && cursorX <= a.x + w && cursorY >= a.y && cursorY <= a.y + h
       })
-      .sort((a, b) => ((b.data as any).depth ?? 0) - ((a.data as any).depth ?? 0))[0] ?? null
+      const targetAbsolute = targetNode
+        ? (getInternalNode(targetNode.id)?.internals.positionAbsolute ?? { x: 0, y: 0 })
+        : { x: 0, y: 0 }
+      const targetWorldScale = targetNode ? Number((targetNode.data as any).worldScale ?? 1) : 1
+      const targetContent = targetNode ? contentRect({
+        width: Number(targetNode.style?.width ?? targetNode.measured?.width ?? 1) / Math.max(0.0001, targetWorldScale),
+        height: Number(targetNode.style?.height ?? targetNode.measured?.height ?? 1) / Math.max(0.0001, targetWorldScale),
+      }) : null
+      const destination = targetContent ? {
+        x: targetAbsolute.x + targetContent.x * targetWorldScale,
+        y: targetAbsolute.y + targetContent.y * targetWorldScale,
+        width: targetContent.width * targetWorldScale,
+        height: targetContent.height * targetWorldScale,
+      } : null
+      // Preserve the authored reference frame. Existing siblings and incoming
+      // roots may overlap; a drop must never repack or otherwise rearrange
+      // them. If their combined bounds exceed the destination, the entire
+      // frame is translated/scaled uniformly below.
+      const placementRects = rootRects
+      const groupBounds = boundsOf(placementRects)
+      const incomingBounds = boundsOf(rootRects.filter(rect => incomingIds.has(rect.id)))
+      const occupiedRects = rootRects.filter(rect => !incomingIds.has(rect.id))
+      const incomingOffset = changesParent && destination && incomingBounds
+        ? findUnscaledIncomingPlacement(incomingBounds, destination, occupiedRects)
+        : null
+      const frameTransform = changesParent && !incomingOffset && groupBounds && destination && incomingBounds
+        ? fitReferenceFrame(groupBounds, destination, incomingBounds)
+        : null
+      const fit = frameTransform?.scale ?? 1
 
-    // Compute the target position (snapped to parent cells if in a container, raw if at root)
-    let newPos = { x: absX, y: absY }
-    if (newParent) {
-      const parentDepth = (newParent.data as any).depth ?? 0
-      const parentAbs = getInternalNode(newParent.id)?.internals.positionAbsolute ?? { x: 0, y: 0 }
-
-      const cw = fileNodeSize(parentDepth).w
-      const ch = fileNodeSize(parentDepth).h
-      const gap = gridGap(parentDepth)
-
-      // Use the stored snap preview cell that the user visually saw highlighted.
-      // Only fall back to cursor-based calculation when the preview is stale or mismatched.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const snapData = activeSnapPreviewRef.current as any as { id: string; col: number; row: number } | null
-      let foundCol: number
-      let foundRow: number
-
-      if (snapData !== null && snapData.id === newParent.id) {
-        // Snap exactly to what was highlighted on screen
-        foundCol = snapData.col
-        foundRow = snapData.row
-      } else {
-        // Cursor-based fallback (preview was not set, e.g. drag ended before onNodeDrag fired)
-        const localCursorX = cursorX - parentAbs.x
-        const localCursorY = cursorY - parentAbs.y
-        const col = Math.max(0, Math.round((localCursorX - gap) / (cw + gap)))
-        const row = Math.max(0, Math.round((localCursorY - gap) / (ch + gap)))
-
-        const occupiedCells = (newParent.data as any).occupiedCells as Set<string> | undefined
-
-        let fits = true
-        for (let c = col; c < col + wUnits; c++) {
-          for (let r = row; r < row + hUnits; r++) {
-            if (occupiedCells?.has(`${c}-${r}`)) { fits = false; break }
+      if (workspaceId && groupBounds) {
+        const updates: Omit<FloorLayout, 'workspaceId' | 'updatedAt'>[] = layoutRoots.map(root => {
+          const nodeType: FloorNodeType = graph.systems.some(system => system.id === root.id)
+            ? 'system' : graph.files.some(file => file.id === root.id) ? 'file' : 'infra'
+          const previous = graph.floorLayouts.find(layout => layout.nodeId === root.id && layout.nodeType === nodeType)
+          const rect = placementRects.find(candidate => candidate.id === root.id)!
+          const nextWorld = frameTransform
+            ? transformReferencePoint(rect, frameTransform)
+            : incomingIds.has(rect.id) && incomingOffset
+              ? { x: rect.x + incomingOffset.x, y: rect.y + incomingOffset.y }
+              : { x: rect.x, y: rect.y }
+          const oldWorldScale = Number((root.data as any).worldScale ?? previous?.scale ?? 1)
+          // A legacy/unpersisted container may have been auto-fitted around its
+          // children. Preserve that materialized frame on its first move rather
+          // than falling back to the smaller semantic/default dimensions.
+          const materializedWidth = Number(root.style?.width ?? rect.width) / Math.max(0.0001, oldWorldScale)
+          const materializedHeight = Number(root.style?.height ?? rect.height) / Math.max(0.0001, oldWorldScale)
+          const parentNodeType = targetNode
+            ? (graph.infraNodes.some(candidate => candidate.id === targetNode.id) ? 'infra' : 'system')
+            : null
+          return {
+            nodeId: root.id, nodeType, parentNodeId: targetNode?.id ?? null, parentNodeType,
+            containmentKind: parentNodeType === 'infra' ? 'hosted_by' : parentNodeType === 'system' ? 'part_of' : 'root',
+            positionX: targetNode ? (nextWorld.x - targetAbsolute.x) / targetWorldScale : nextWorld.x,
+            positionY: targetNode ? (nextWorld.y - targetAbsolute.y) / targetWorldScale : nextWorld.y,
+            width: previous?.width ?? materializedWidth,
+            height: previous?.height ?? materializedHeight,
+            scale: localScaleAfterWorldFit(oldWorldScale, fit, targetNode ? targetWorldScale : 1),
           }
-          if (!fits) break
-        }
-
-        foundCol = col
-        foundRow = row
-
-        if (!fits) {
-          let found = false
-          for (let r_limit = 1; r_limit <= 12 && !found; r_limit++) {
-            for (let dx = -r_limit; dx <= r_limit && !found; dx++) {
-              for (let dy = -r_limit; dy <= r_limit && !found; dy++) {
-                if (Math.abs(dx) !== r_limit && Math.abs(dy) !== r_limit) continue
-                const c = col + dx, r = row + dy
-                if (c < 0 || r < 0) continue
-                let possible = true
-                for (let cc = c; cc < c + wUnits && possible; cc++)
-                  for (let rr = r; rr < r + hUnits && possible; rr++)
-                    if (occupiedCells?.has(`${cc}-${rr}`)) possible = false
-                if (possible) { foundCol = c; foundRow = r; found = true }
-              }
-            }
-          }
-        }
-      }
-
-      newPos = {
-        x: cellX(foundCol, parentDepth),
-        y: cellY(foundRow, parentDepth)
-      }
-
-      // Sibling displacement resolution on drop (only if dragged node is a system node)
-      if (node.type !== 'file') {
-        // Use the resolved foundCol and foundRow for the dropped node
-        const occupiedByPlaced = new Set<string>()
-        for (let c = foundCol; c < foundCol + wUnits; c++) {
-          for (let r = foundRow; r < foundRow + hUnits; r++) {
-            occupiedByPlaced.add(`${c}-${r}`)
-          }
-        }
-
-        // Find all siblings in newParent (excluding the dragged node itself)
-        const siblings = all
-          .filter(n => n.parentId === newParent.id && n.id !== node.id)
-          .sort((a, b) => {
-            const ay = a.position.y, ax = a.position.x
-            const by = b.position.y, bx = b.position.x
-            return ay !== by ? ay - by : ax - bx
-          })
-
-        for (const sib of siblings) {
-          const sibW = parseFloat(String(sib.style?.width ?? (sib.type === 'file' ? fileNodeSize(parentDepth).w : containerW(1, parentDepth))))
-          const sibH = parseFloat(String(sib.style?.height ?? (sib.type === 'file' ? fileNodeSize(parentDepth).h : containerH(1, parentDepth))))
-          const sibCol = Math.max(0, Math.round((sib.position.x - gap) / (cw + gap)))
-          const sibRow = Math.max(0, Math.round((sib.position.y - gap) / (ch + gap)))
-          const sibWU = sib.type === 'file' ? 1 : wUnitsExact(sibW, parentDepth)
-          const sibHU = sib.type === 'file' ? 1 : hUnitsExact(sibH, parentDepth)
-
-          let overlaps = false
-          for (let c = sibCol; c < sibCol + sibWU; c++) {
-            for (let r = sibRow; r < sibRow + sibHU; r++) {
-              if (occupiedByPlaced.has(`${c}-${r}`)) {
-                overlaps = true
-                break
-              }
-            }
-            if (overlaps) break
-          }
-
-          let finalCol = sibCol
-          let finalRow = sibRow
-
-          if (overlaps) {
-            let found = false
-            for (let r_limit = 1; r_limit <= 20; r_limit++) {
-              for (let dx = -r_limit; dx <= r_limit; dx++) {
-                for (let dy = -r_limit; dy <= r_limit; dy++) {
-                  if (Math.abs(dx) !== r_limit && Math.abs(dy) !== r_limit) continue
-                  const c = sibCol + dx
-                  const r = sibRow + dy
-                  if (c < 0 || r < 0) continue
-
-                  let possible = true
-                  for (let cc = c; cc < c + sibWU; cc++) {
-                    for (let rr = r; rr < r + sibHU; rr++) {
-                      if (occupiedByPlaced.has(`${cc}-${rr}`)) {
-                        possible = false
-                        break
-                      }
-                    }
-                    if (!possible) break
-                  }
-                  if (possible) {
-                    finalCol = c
-                    finalRow = r
-                    found = true
-                    break
-                  }
-                }
-                if (found) break
-              }
-              if (found) break
-            }
-          }
-
-          for (let c = finalCol; c < finalCol + sibWU; c++) {
-            for (let r = finalRow; r < finalRow + sibHU; r++) {
-              occupiedByPlaced.add(`${c}-${r}`)
-            }
-          }
-
-          if (finalCol !== sibCol || finalRow !== sibRow) {
-            displacedSiblings.push({
-              id: sib.id,
-              type: sib.type ?? 'system',
-              x: cellX(finalCol, parentDepth),
-              y: cellY(finalRow, parentDepth)
-            })
-          }
-        }
-      }
-    }
-
-    const sameParent = (newParent?.id ?? null) === (node.parentId ?? null)
-    if (sameParent) {
-      if (newParent) {
-        if (currentProject) {
-          const ntype = node.type === 'file' ? 'file' : 'system'
-          apiSaveNodePosition(node.id, newPos.x, newPos.y, currentProject.id, ntype)
-        }
-        if (node.type === 'system') {
-          useGraphStore.setState(s => ({
-            systems: s.systems.map(sys =>
-              sys.id === node.id ? { ...sys, positionX: newPos.x, positionY: newPos.y } : sys
-            )
-          }))
-        } else if (node.type === 'file') {
-          useGraphStore.setState(s => ({
-            files: s.files.map(f =>
-              f.id === node.id ? { ...f, positionX: newPos.x, positionY: newPos.y } : f
-            )
-          }))
-        }
-
-        // Apply database and store updates for displaced siblings
-        for (const sib of displacedSiblings) {
-          if (sib.type === 'file') {
-            useGraphStore.setState(s => ({
-              files: s.files.map(f => f.id === sib.id ? { ...f, positionX: sib.x, positionY: sib.y } : f)
-            }))
-            apiSaveNodePosition(sib.id, sib.x, sib.y, currentProject?.id ?? '', 'file')
-          } else {
-            const storedSib = useGraphStore.getState().systems.find(sys => sys.id === sib.id)
-            if (storedSib) {
-              const updatedSib = {
-                ...storedSib,
-                positionX: sib.x,
-                positionY: sib.y,
-              }
-              useGraphStore.setState(s => ({
-                systems: s.systems.map(sys => sys.id === sib.id ? updatedSib : sys)
-              }))
-              apiUpdateSystem(updatedSib)
-            }
-          }
-        }
-
-        setRfNodes(curr => curr.map(n => {
-          let updated = n.id === node.id ? { ...n, position: newPos } : n
-
-          // Clear previewOffset
-          if (updated.data && (updated.data as any).previewOffset) {
-            updated = { ...updated, data: { ...updated.data, previewOffset: null } }
-          }
-
-          // Apply displaced siblings position updates to rfNodes
-          const disp = displacedSiblings.find(s => s.id === updated.id)
-          if (disp) {
-            updated = { ...updated, position: { x: disp.x, y: disp.y } }
-          }
-          return updated
+        })
+        const changedKeys = new Set(updates.map(update => update.nodeType + ':' + update.nodeId))
+        const previousLayouts = graph.floorLayouts.filter(layout => changedKeys.has(layout.nodeType + ':' + layout.nodeId))
+        const optimistic = updates.map(update => ({ ...update, workspaceId, updatedAt: Date.now() }))
+        useGraphStore.setState(state => ({
+          floorLayouts: [...state.floorLayouts.filter(layout => !changedKeys.has(layout.nodeType + ':' + layout.nodeId)), ...optimistic],
         }))
-      } else {
-        if (currentProject) {
-          const ntype = node.type === 'file' ? 'file' : 'system'
-          apiSaveNodePosition(node.id, node.position.x, node.position.y, currentProject.id, ntype)
-        }
-        if (node.type === 'system') {
-          useGraphStore.setState(s => ({
-            systems: s.systems.map(sys =>
-              sys.id === node.id ? { ...sys, positionX: node.position.x, positionY: node.position.y } : sys
-            )
+        void apiSaveFloorLayouts(workspaceId, updates).catch(error => {
+          console.error('[AxiomCanvas] floor group drop failed', error)
+          useGraphStore.setState(state => ({
+            floorLayouts: [...state.floorLayouts.filter(layout => !changedKeys.has(layout.nodeType + ':' + layout.nodeId)), ...previousLayouts],
           }))
-        } else if (node.type === 'file') {
-          useGraphStore.setState(s => ({
-            files: s.files.map(f =>
-              f.id === node.id ? { ...f, positionX: node.position.x, positionY: node.position.y } : f
-            )
-          }))
-        }
+        })
       }
+      selectedIdsRef.current = new Set(selected)
+      updateInteractiveNodes(current => current.map(candidate => ({
+        ...candidate,
+        selected: selected.includes(candidate.id),
+        data: { ...candidate.data, isDropTarget: false, snapPreview: null, previewOffset: null },
+      })))
       return
     }
 
-    // Reassignment — keep the node visible through the layout rebuild
-    justDroppedRef.current = node.id
-    setTimeout(() => {
-      if (justDroppedRef.current === node.id) {
-        justDroppedRef.current = null
-        setRfNodes(curr => applyZoomVisibility(curr, currentZoomRef.current))
-      }
-    }, 2500)
-
-    const parentId = newParent?.id ?? null
-    const parentDepth = newParent ? ((newParent.data as any).depth ?? 0) : 0
-    const childDepth = newParent ? parentDepth + 1 : 0
-    const scale = fileNodeSize(Math.max(0, childDepth - 1)).w / BASE_FILE_W
-    const newW = node.type === 'file'
-      ? (newParent ? fileNodeSize(parentDepth).w : fileNodeSize(0).w)
-      : (newParent ? containerW(wUnits, parentDepth) : containerW(wUnits, 0))
-    const newH = node.type === 'file'
-      ? (newParent ? fileNodeSize(parentDepth).h : fileNodeSize(0).h)
-      : (newParent ? containerH(hUnits, parentDepth) : containerH(hUnits, 0))
-
-    layoutOverridesRef.current.set(node.id, { x: newPos.x, y: newPos.y, w: newW, h: newH })
-
-    console.error(`[AxiomCanvas] onNodeDragStop - Node: ${node.id}, parentId: ${parentId}, newPos: (${newPos.x}, ${newPos.y}), size: ${newW}x${newH}`)
-    setDebugState({
-      event: 'stop',
-      nodeId: node.id,
-      parentId,
-      newPos,
-      newSize: `${newW}x${newH}`,
-    })
-
-    // Apply updates for displaced siblings in cross-parent drop
-    for (const sib of displacedSiblings) {
-      if (sib.type === 'file') {
-        useGraphStore.setState(s => ({
-          files: s.files.map(f => f.id === sib.id ? { ...f, positionX: sib.x, positionY: sib.y } : f)
-        }))
-        apiSaveNodePosition(sib.id, sib.x, sib.y, currentProject?.id ?? '', 'file')
-      } else {
-        const storedSib = useGraphStore.getState().systems.find(sys => sys.id === sib.id)
-        if (storedSib) {
-          const updatedSib = {
-            ...storedSib,
-            positionX: sib.x,
-            positionY: sib.y,
-          }
-          useGraphStore.setState(s => ({
-            systems: s.systems.map(sys => sys.id === sib.id ? updatedSib : sys)
-          }))
-          apiUpdateSystem(updatedSib)
+    const sheetState = useSheetStore.getState()
+    const sheetId = sheetState.activeSheetId
+    if (sheetId) {
+      const all = displayNodesRef.current
+      const parentById = new Map(all.map(candidate => [candidate.id, candidate.parentId ?? null]))
+      const selected = all.filter(candidate => candidate.selected && activeNodeIds.has(candidate.id)).map(candidate => candidate.id)
+      if (!selected.includes(node.id)) selected.push(node.id)
+      const roots = highestSelectedRoots(selected, parentById)
+        .map(id => all.find(candidate => candidate.id === id))
+        .filter((candidate): candidate is Node => !!candidate)
+      const target = prevTarget ? all.find(candidate => candidate.id === prevTarget) : null
+      const changesParent = !!target && roots.some(root => root.parentId !== target.id)
+      const incomingIds = new Set(roots.map(root => root.id))
+      const layoutRoots = changesParent && target
+        ? [
+            ...all.filter(candidate => candidate.parentId === target.id && activeNodeIds.has(candidate.id) && !incomingIds.has(candidate.id)),
+            ...roots,
+          ]
+        : roots
+      const rects = layoutRoots.map(root => {
+        const absolute = getInternalNode(root.id)?.internals.positionAbsolute ?? root.position
+        return { id: root.id, x: absolute.x, y: absolute.y,
+          width: Number(root.measured?.width ?? root.style?.width ?? 1),
+          height: Number(root.measured?.height ?? root.style?.height ?? 1) }
+      })
+      const targetAbsolute = target ? (getInternalNode(target.id)?.internals.positionAbsolute ?? { x: 0, y: 0 }) : { x: 0, y: 0 }
+      const targetScale = target ? Number((target.data as any).worldScale ?? 1) : 1
+      const targetBox = target ? contentRect({
+        width: Number(target.style?.width ?? target.measured?.width ?? 1) / Math.max(0.0001, targetScale),
+        height: Number(target.style?.height ?? target.measured?.height ?? 1) / Math.max(0.0001, targetScale),
+      }) : null
+      const destination = targetBox ? {
+        x: targetAbsolute.x + targetBox.x * targetScale,
+        y: targetAbsolute.y + targetBox.y * targetScale,
+        width: targetBox.width * targetScale,
+        height: targetBox.height * targetScale,
+      } : null
+      // Sheet drops follow the same reference-frame rule as the Floor: keep
+      // every existing relative position, allow overlap, and fit only the
+      // combined bounds when they cross the parent's content border.
+      const placementRects = rects
+      const group = boundsOf(placementRects)
+      const incomingBounds = boundsOf(rects.filter(rect => incomingIds.has(rect.id)))
+      const occupiedRects = rects.filter(rect => !incomingIds.has(rect.id))
+      const incomingOffset = changesParent && target && destination && incomingBounds
+        ? findUnscaledIncomingPlacement(incomingBounds, destination, occupiedRects)
+        : null
+      const frameTransform = changesParent && target && !incomingOffset && group && destination && incomingBounds
+        ? fitReferenceFrame(group, destination, incomingBounds)
+        : null
+      const fit = frameTransform?.scale ?? 1
+      const mutations: SheetLayoutMutation[] = []
+      if (group) {
+        for (const root of layoutRoots) {
+          const element = sheetState.elements.find(item => (item.systemId ?? item.fileId ?? item.infraId) === root.id)
+          const planned = root.id.startsWith('planned:') ? sheetState.planned.find(item => item.id === root.id.slice(8)) : undefined
+          if (!element && !planned) continue
+          const rect = placementRects.find(item => item.id === root.id)!
+          const world = frameTransform
+            ? transformReferencePoint(rect, frameTransform)
+            : incomingIds.has(rect.id) && incomingOffset
+              ? { x: rect.x + incomingOffset.x, y: rect.y + incomingOffset.y }
+              : { x: rect.x, y: rect.y }
+          const oldScale = Number((root.data as any).worldScale ?? element?.scale ?? planned?.scale ?? 1)
+          mutations.push({
+            kind: element ? 'element' : 'planned',
+            id: element?.id ?? planned!.id,
+            x: target ? (world.x - targetAbsolute.x) / targetScale : world.x,
+            y: target ? (world.y - targetAbsolute.y) / targetScale : world.y,
+            parentSystemId: target?.id ?? null,
+            width: Number(element?.width ?? planned?.width ?? root.style?.width ?? (root.type === 'file' ? BASE_FILE_W : 620)),
+            height: Number(element?.height ?? planned?.height ?? root.style?.height ?? (root.type === 'file' ? BASE_FILE_H : 420)),
+            scale: localScaleAfterWorldFit(oldScale, fit, target ? targetScale : 1),
+          })
         }
       }
+      if (mutations.length > 0) {
+        void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetId, mutations).catch(() => {})
+      }
+      selectedIdsRef.current = new Set(selected)
+      setSheetInteractionNodes(null)
+      updateInteractiveNodes(current => current.map(candidate => ({
+        ...candidate,
+        selected: selected.includes(candidate.id),
+        data: { ...candidate.data, isDropTarget: false, snapPreview: null, previewOffset: null },
+      })))
+      return
     }
 
-    setRfNodes(curr => curr.map(n => {
-      let updatedNode = n
+  }, [currentProject, getInternalNode, getViewport, screenToFlowPosition, overlaySheetId, activeElementByNodeId, activePlannedByNodeId, activeNodeIds, workspaceIdForOverlay, updateInteractiveNodes])
 
-      // Clear previewOffset
-      if (n.data && (n.data as any).previewOffset) {
-        updatedNode = { ...updatedNode, data: { ...updatedNode.data, previewOffset: null } }
-      }
-
-      if (n.id === node.id) {
-        updatedNode = {
-          ...updatedNode,
-          position: newPos,
-          parentId: parentId ?? undefined,
-          style: { ...updatedNode.style, width: newW, height: newH },
+  const renderedNodes = overlaySheetId
+    ? displayNodes.map(n => activeNodeIds.has(n.id)
+      ? {
+          ...n,
           data: {
-            ...updatedNode.data,
-            depth: childDepth,
-            worldScale: scale,
-          }
+            ...n.data,
+            onResizeStart: readOnly ? undefined : (params: NodeResizeParams) => {
+              resizingNodeIdRef.current = n.id
+              draggingNodeIdRef.current = null
+              dragPositionRef.current.delete(n.id)
+              const children = new Map(displayNodesRef.current
+                .filter(child => child.parentId === n.id)
+                .map(child => [child.id, { x: child.position.x, y: child.position.y }]))
+              resizeStartRef.current.set(n.id, { ...params, children })
+              armResizeEndFallback(n.id)
+              setSheetInteractionNodes(current => current ?? displayNodesRef.current)
+            },
+            onResizeEnd: readOnly ? undefined : (params: NodeResizeParams) => onNodeResizeEnd(n.id, params),
+          },
         }
-      }
+      : n)
+    : displayNodes
 
-      // Apply displaced sibling positions to rfNodes
-      const disp = displacedSiblings.find(s => s.id === updatedNode.id)
-      if (disp) {
-        updatedNode = {
-          ...updatedNode,
-          position: { x: disp.x, y: disp.y }
-        }
-      }
-
-      return updatedNode
-    }))
-
-    if (node.type === 'file') {
-      useGraphStore.setState(s => ({
-        files: s.files.map(f => f.id === node.id ? { ...f, systemId: parentId, positionX: newPos.x, positionY: newPos.y, width: newW, height: newH } : f)
-      }))
-      apiAssignFile(node.id, parentId, currentProject?.id ?? '')
-      apiUpdateFileSize(node.id, newW, newH, currentProject?.id ?? '')
-      apiSaveNodePosition(node.id, newPos.x, newPos.y, currentProject?.id ?? '', 'file')
-
-    } else if (node.type === 'system') {
-      const stored = useGraphStore.getState().systems.find(s => s.id === node.id)
-      if (!stored) return
-      const updated = {
-        ...stored,
-        parentId: parentId,
-        depth: childDepth,
-        positionX: newPos.x,
-        positionY: newPos.y,
-        width: newW,
-        height: newH,
-      }
-      useGraphStore.setState(s => ({
-        systems: s.systems.map(sys => sys.id === node.id ? updated : sys)
-      }))
-      apiUpdateSystem(updated)
-    }
-  }, [currentProject, getInternalNode, screenToFlowPosition])
-
-  const selectedFileIds = rfNodes
+  const selectedFileIds = renderedNodes
     .filter(n => n.selected && n.type === 'file')
     .map(n => n.id)
 
+  const traceSuspiciousCursor = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const element = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null
+    if (!element) return
+    const cursor = window.getComputedStyle(element).cursor
+    if (!['crosshair', 'cell', 'copy', 'alias'].includes(cursor)) return
+    const ancestry: string[] = []
+    let current: HTMLElement | null = element
+    for (let depth = 0; current && depth < 7; depth++, current = current.parentElement) {
+      ancestry.push([
+        current.tagName.toLowerCase(),
+        current.id ? `#${current.id}` : '',
+        ...[...current.classList].map(name => `.${name}`),
+        current.dataset.id ? `[data-id=${current.dataset.id}]` : '',
+      ].join(''))
+    }
+    const signature = `${cursor}|${ancestry.join('>')}|${selectionMode}|${overlaySheetId ?? 'floor'}`
+    if (cursorTraceSignatureRef.current === signature) return
+    cursorTraceSignatureRef.current = signature
+    console.warn('[AxiomCursorTrace]', {
+      cursor,
+      element: ancestry[0],
+      ancestry,
+      selectionMode,
+      sheetId: overlaySheetId,
+      readOnly,
+      nodeConnectionsEnabled: !readOnly && !!overlaySheetId,
+    })
+  }, [selectionMode, overlaySheetId, readOnly])
+
   return (
     <div
-      onWheel={handleWheel}
-      onDragOver={onOverlayDragOver}
-      onDrop={onOverlayDrop}
+      ref={canvasRootRef}
+      className={isTransitioningLayout ? 'layout-transition' : undefined}
+      onDragOverCapture={onOverlayDragOver}
+      onDropCapture={onOverlayDrop}
+      onPointerMoveCapture={traceSuspiciousCursor}
       style={{ width: '100%', height: '100%', position: 'relative' }}
     >
       <ReactFlow
         zoomOnScroll={false}
-        nodes={displayNodes}
+        nodes={renderedNodes}
         edges={displayEdges}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         defaultEdgeOptions={{ type: 'orthogonal' }}
         onNodesChange={readOnly ? undefined : onNodesChange}
         onEdgesChange={readOnly ? undefined : onEdgesChange}
-        onConnect={readOnly ? undefined : onConnectPlanned}
+        onConnect={readOnly || !overlaySheetId ? undefined : onConnectPlanned}
         onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
         onPaneClick={onPaneClick}
         onNodeDragStart={readOnly ? undefined : onNodeDragStart}
         onNodeDrag={readOnly ? undefined : onNodeDrag}
         onNodeDragStop={readOnly ? undefined : onNodeDragStop}
         onMove={onMove}
-        minZoom={0.02}
-        maxZoom={20}
+        minZoom={MIN_CANVAS_ZOOM}
+        maxZoom={MAX_CANVAS_ZOOM}
         defaultViewport={{ x: 0, y: 0, zoom: 0.5 }}
         fitView
         fitViewOptions={{ padding: 0.14 }}
@@ -2728,7 +3248,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         selectionOnDrag={readOnly ? false : selectionMode}
         selectionMode={selectionMode ? SelectionMode.Partial : SelectionMode.Full}
         nodesDraggable={!readOnly}
-        nodesConnectable={!readOnly}
+        nodesConnectable={!readOnly && !!overlaySheetId}
         elementsSelectable={!readOnly}
         snapToGrid={false}
         // Large graphs: skip rendering off-screen nodes. Kept off for small
@@ -2752,7 +3272,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         />
         <Panel position="top-left" style={{ display: 'flex', gap: 8, margin: '12px' }}>
           <button
-            onClick={tidyCanvas}
+            onClick={tidyFrame}
             disabled={isTidying || readOnly}
             style={{
               background: 'var(--bg-surface)',
@@ -2915,31 +3435,13 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         }}
       />
 
-      {debugState && (
-        <div style={{
-          position: 'absolute',
-          bottom: 24,
-          right: 24,
-          zIndex: 99999,
-          background: 'var(--bg-surface)',
-          color: '#34d399',
-          padding: '12px',
-          borderRadius: 0,
-          fontFamily: 'monospace',
-          fontSize: '11px',
-          pointerEvents: 'none',
-          maxHeight: '350px',
-          width: '280px',
-          overflow: 'auto',
-          border: '1px solid rgba(52, 211, 153, 0.3)',
-          boxShadow: 'var(--shadow-card)',
-        }}>
-          <div style={{ fontWeight: 'bold', marginBottom: '6px', borderBottom: '1px solid rgba(52, 211, 153, 0.2)', paddingBottom: '4px' }}>
-            Axiom Drag Debug Overlay
-          </div>
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(debugState, null, 2)}</pre>
-        </div>
+      {infraPickerNodeId && activePlannedByNodeId.get(`planned:${infraPickerNodeId}`) && (
+        <InfraPickerDialog
+          node={activePlannedByNodeId.get(`planned:${infraPickerNodeId}`)!}
+          onClose={() => setInfraPickerNode(null)}
+        />
       )}
+
     </div>
   )
 }

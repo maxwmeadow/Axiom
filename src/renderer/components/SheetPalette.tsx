@@ -6,7 +6,7 @@ import React from 'react'
 export interface StencilDef {
   id: string
   label: string
-  kind: 'system' | 'class' | 'file'
+  kind: 'system' | 'class' | 'file' | 'service' | 'data_store' | 'infra'
   shape: 'box' | 'folder' | 'cylinder' | 'hexagon' | 'note'
   hint: string
 }
@@ -15,8 +15,8 @@ export const STENCILS: StencilDef[] = [
   { id: 'class',   label: 'Class',      kind: 'class',  shape: 'box',      hint: 'Compartment box — functions/methods inside' },
   { id: 'file',    label: 'File',       kind: 'file',   shape: 'box',      hint: 'A source file to be created' },
   { id: 'system',  label: 'System',     kind: 'system', shape: 'folder',   hint: 'Package/module grouping' },
-  { id: 'store',   label: 'Data Store', kind: 'class',  shape: 'cylinder', hint: 'Database / persistent store' },
-  { id: 'service', label: 'Service',    kind: 'class',  shape: 'hexagon',  hint: 'Service / API surface' },
+  { id: 'service', label: 'Service',    kind: 'service', shape: 'hexagon',  hint: 'Service / API surface' },
+  { id: 'infra',   label: 'Infra',      kind: 'infra',   shape: 'box',      hint: 'Choose hosting, database, queue, API, or another provider service' },
   { id: 'note',    label: 'Note',       kind: 'class',  shape: 'note',     hint: 'Free-floating annotation' },
 ]
 

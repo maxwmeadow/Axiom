@@ -14,6 +14,7 @@ out/
 *.exe~
 *~
 *.log
+electron.vite.config.*.mjs
 __pycache__/
 *.pyc
 *.class

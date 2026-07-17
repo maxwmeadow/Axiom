@@ -9,9 +9,9 @@
 // Adding a service is a data change: drop a .json file into a registry layer.
 // Resolution is layered — later layers override earlier by service id:
 //
-//	1. embedded defaults   (archd-go/internal/registry/services/*.json, go:embed)
-//	2. global user layer   (~/.config/axiom/services/*.json)
-//	3. workspace layer     (<root>/.axiom/services/*.json)
+//  1. embedded defaults   (archd-go/internal/registry/services/*.json, go:embed)
+//  2. global user layer   (~/.config/axiom/services/*.json)
+//  3. workspace layer     (<root>/.axiom/services/*.json)
 //
 // The renderer never bundles its own copy: it fetches the resolved registry
 // from GET /api/registry/services, so archd and canvas cannot disagree.
@@ -50,6 +50,16 @@ var Categories = map[string][]string{
 	"email":         {"SENDS_VIA"},
 }
 
+// CategoryCapabilities define shared behavior. Services inherit these and may
+// append provider-specific capabilities in their registry JSON.
+var CategoryCapabilities = map[string][]string{
+	"platform": {"container", "environment"},
+	"database": {"schema"},
+	"queue":    {"topics"},
+	"cache":    {"keys"},
+	"storage":  {"buckets"},
+}
+
 // Brand is the visual identity of a service on the canvas.
 type Brand struct {
 	Icon      string `json:"icon"`                // simple-icons slug ("amazonrds", "openai")
@@ -73,6 +83,7 @@ type Service struct {
 	Provider     string   `json:"provider"`
 	Brand        Brand    `json:"brand"`
 	ConfigFields []string `json:"configFields,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
 	Detect       *Detect  `json:"detect,omitempty"`
 	Layer        string   `json:"layer,omitempty"` // resolved provenance: 'embedded'|'user'|'workspace'
 }
@@ -175,6 +186,18 @@ func (r *Registry) addFile(data []byte, layer, name string) {
 			log.Printf("[registry] %s (%s): skipped: %v", name, layer, err)
 			continue
 		}
+		inherited := append([]string(nil), CategoryCapabilities[s.Category]...)
+		seen := make(map[string]bool, len(inherited)+len(s.Capabilities))
+		for _, capability := range inherited {
+			seen[capability] = true
+		}
+		for _, capability := range s.Capabilities {
+			if !seen[capability] {
+				inherited = append(inherited, capability)
+				seen[capability] = true
+			}
+		}
+		s.Capabilities = inherited
 		s.Layer = layer
 		r.services[s.ID] = s // later layers override by id
 	}

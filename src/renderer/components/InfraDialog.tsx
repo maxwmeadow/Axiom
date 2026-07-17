@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useGraphStore } from '../store/graphStore'
 import { useRegistryStore } from '../store/registryStore'
-import { brandIcon, CATEGORY_GLYPHS } from '../canvas/nodes/infraIcons'
+import { brandIcon, CATEGORY_GLYPHS, officialServiceIcon } from '../canvas/nodes/infraIcons'
 import type { InfraService } from '../../shared/types'
 
 interface InfraDialogProps {
@@ -75,7 +75,7 @@ export function InfraDialog({ isOpen, onClose }: InfraDialogProps) {
   }
 
   return (
-    <div style={{
+    <div className="nowheel" onWheel={event => event.stopPropagation()} style={{
       position: 'fixed',
       inset: 0,
       background: 'rgba(5, 8, 15, 0.7)',
@@ -137,6 +137,7 @@ export function InfraDialog({ isOpen, onClose }: InfraDialogProps) {
                 <div style={{ padding: 14, fontSize: 12, color: 'var(--text-dim)' }}>No services match "{query}"</div>
               )}
               {filtered.map(svc => {
+                const officialIcon = officialServiceIcon(svc.id)
                 const icon = brandIcon(svc.brand.icon)
                 const accent = svc.brand.darkColor ?? svc.brand.color
                 const isSel = selected?.id === svc.id
@@ -158,7 +159,9 @@ export function InfraDialog({ isOpen, onClose }: InfraDialogProps) {
                       cursor: 'pointer',
                     }}
                   >
-                    {icon ? (
+                    {officialIcon ? (
+                      <img src={officialIcon} alt="" width={13} height={13} style={{ flexShrink: 0, objectFit: 'contain' }} />
+                    ) : icon ? (
                       <svg viewBox="0 0 24 24" width={13} height={13} style={{ flexShrink: 0 }}>
                         <path d={icon.path} fill={accent} />
                       </svg>

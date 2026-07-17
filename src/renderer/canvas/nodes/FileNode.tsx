@@ -1,36 +1,37 @@
 import React from 'react'
-import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react'
+import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { FileNodeData } from '../AxiomCanvas'
 import type { RuntimeNodeState } from '../../store/graphStore'
 import { useGraphStore } from '../../store/graphStore'
 import { ShapeBackdrop } from './NodeShell'
-import { siPython } from 'simple-icons'
-
-function getLangIconContent(lang: string): React.ReactNode {
-  switch (lang.toLowerCase()) {
-    case 'typescript':
-      return <><rect width="24" height="24" rx="2" fill="#3178c6" /><text x="20" y="19" fill="#fff" fontSize="10" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="end">TS</text></>
-    case 'tsx':
-      return <><rect width="24" height="24" rx="2" fill="#149eca" /><text x="20" y="19" fill="#fff" fontSize="8" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="end">TSX</text></>
-    case 'javascript':
-      return <><rect width="24" height="24" rx="2" fill="#f7df1e" /><text x="20" y="19" fill="#303030" fontSize="10" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="end">JS</text></>
-    case 'jsx':
-      return <><rect width="24" height="24" rx="2" fill="#e8b84b" /><text x="20" y="19" fill="#303030" fontSize="8" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="end">JSX</text></>
-    case 'python':
-      // The actual Python mark (two-snake plus), not a lettered chip.
-      return <path d={siPython.path} fill="#4B8BBE" />
-    case 'go':
-      return <><rect width="24" height="24" rx="2" fill="#00add8" /><text x="12" y="15.5" fill="#fff" fontSize="9" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="middle">GO</text></>
-    case 'rust':
-      return <><rect width="24" height="24" rx="2" fill="rgba(222,165,132,0.1)" stroke="#dea584" strokeWidth="1.2" /><text x="12" y="15.5" fill="#dea584" fontSize="9" fontWeight="bold" fontFamily="var(--font-mono)" textAnchor="middle">RS</text></>
-    case 'csharp':
-      return <><polygon points="12,2 22,7 22,17 12,22 2,17 2,7" fill="#178600" /><text x="12" y="15.5" fill="#fff" fontSize="9" fontWeight="900" fontFamily="var(--font-mono)" textAnchor="middle">C#</text></>
-    default:
-      return <><rect x="3" y="3" width="18" height="18" rx="1" fill="none" stroke="var(--text-secondary)" strokeWidth="2" /><path d="M9 17V7l7 5z" fill="none" stroke="var(--text-secondary)" strokeWidth="2" /></>
-  }
-}
+import { EditableNodeTitle } from './EditableNodeTitle'
+import { LanguagePicker } from '../languages'
+import { SourcePreviewDialog } from '../../components/SourcePreviewDialog'
+import { fitPresentationScale } from '../resizeGeometry'
+import { connectionHandleProps } from './connectionChrome'
+import { AxiomNodeResizer } from './AxiomNodeResizer'
 
 type SymbolTab = 'functions' | 'variables' | 'classes'
+
+const LEAF_DETAIL_REVEAL_THRESHOLD = (0.95 + 1.2) / 2
+
+function EditableSymbolName({ value, editable, onCommit }: { value: string; editable: boolean; onCommit: (value: string) => void }) {
+  const [editing, setEditing] = React.useState(false)
+  const [draft, setDraft] = React.useState(value)
+  React.useEffect(() => { if (!editing) setDraft(value) }, [value, editing])
+  if (!editable || !editing) return <span data-node-editable={editable ? 'true' : undefined} title={editable ? 'Double-click to edit' : value} onDoubleClick={editable ? event => {
+    event.stopPropagation(); setEditing(true)
+  } : undefined} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: editable ? 'text' : undefined, userSelect: 'none' }}>{value}</span>
+  const commit = () => {
+    const next = draft.trim()
+    setEditing(false)
+    if (next && next !== value) onCommit(next)
+  }
+  return <input autoFocus className="nodrag nopan" value={draft} onChange={event => setDraft(event.target.value)} onBlur={commit}
+    onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
+    onKeyDown={event => { event.stopPropagation(); if (event.key === 'Enter') commit(); if (event.key === 'Escape') setEditing(false) }}
+    style={{ width: '100%', minWidth: 0, border: 0, borderBottom: '1px solid var(--accent)', outline: 0, background: 'transparent', color: 'var(--text-primary)', font: 'inherit', padding: 0, userSelect: 'text' }} />
+}
 
 /** Which tab a symbol kind belongs to. Unknown kinds render as 'v' rows, so they live under variables. */
 function tabForKind(kind: string): SymbolTab {
@@ -99,7 +100,7 @@ function RuntimeTooltip({ runtime, color }: { runtime: RuntimeNodeState; color: 
   )
 }
 
-export function FileNode({ data, selected }: NodeProps) {
+export function FileNode({ data, selected, width, height, isConnectable }: NodeProps) {
   const d = data as unknown as FileNodeData
   const { onResizeStart, onResizeEnd } = d as any
   const [hovered, setHovered] = React.useState(false)
@@ -121,10 +122,10 @@ export function FileNode({ data, selected }: NodeProps) {
   // Content renders at base (depth-0) pixel sizes inside a div that is
   // 1/s times the node's box, then uniformly scaled down by s. Every file
   // node is therefore pixel-identical in its own frame at any depth.
-  const s = d.worldScale ?? 1
+  const s = fitPresentationScale(width, height, 220, 110, d.worldScale ?? 1)
   // Apparent zoom of this node on screen — a depth-2 node at viewport zoom 2
   // looks like a depth-0 node at zoom 0.5. Detail states gate on this.
-  const effZoom = d.currentZoom * s
+  const effZoom = d.currentZoom * (d.worldScale ?? 1)
   const churnColor = churn > 0.7 ? '#ef4444' : churn > 0.4 ? '#f59e0b' : 'transparent'
   // Unified shape vocabulary (Rev 2b): class-first header when the file IS its
   // class; cylinder/hexagon files get a shape backdrop over the same card.
@@ -169,20 +170,44 @@ export function FileNode({ data, selected }: NodeProps) {
   // Lazy-load symbols from archd when zoom crosses 1.2
   const currentProject = useGraphStore(s => s.currentProject)
   const workspaceId = currentProject?.id ?? 'demo'
-  const [symbols, setSymbols] = React.useState<any[] | null>(null)
+  const suppliedSymbols = d.symbols
+  const [symbols, setSymbols] = React.useState<any[] | null>(suppliedSymbols ?? null)
   const [symbolsLoading, setSymbolsLoading] = React.useState(false)
   const [activeTab, setActiveTab] = React.useState<SymbolTab>('functions')
+  const [previewSymbol, setPreviewSymbol] = React.useState<any | null>(null)
+  const symbolRequestRef = React.useRef(0)
+  const symbolNodeIdRef = React.useRef(d.id)
 
   React.useEffect(() => {
-    if (effZoom >= 1.2 && !symbols && !symbolsLoading) {
+    const request = ++symbolRequestRef.current
+    if (symbolNodeIdRef.current !== d.id) {
+      symbolNodeIdRef.current = d.id
+      setSymbols(suppliedSymbols ?? null)
+      setSymbolsLoading(false)
+      return
+    }
+    if (suppliedSymbols) {
+      setSymbols(suppliedSymbols)
+      setSymbolsLoading(false)
+      const first = (['functions', 'variables', 'classes'] as const).find(
+        tab => suppliedSymbols.some(sym => tabForKind(sym.kind) === tab)
+      )
+      if (first && !d.onSymbolsChange) setActiveTab(current =>
+        suppliedSymbols.some(sym => tabForKind(sym.kind) === current) ? current : first
+      )
+      return
+    }
+    if ((effZoom >= LEAF_DETAIL_REVEAL_THRESHOLD || d.onSymbolsChange) && !symbols) {
+      const controller = new AbortController()
       setSymbolsLoading(true)
-      fetch(`http://127.0.0.1:7744/api/files/${d.id}/symbols?workspace=${encodeURIComponent(workspaceId)}`)
+      fetch(`http://127.0.0.1:7744/api/files/${d.id}/symbols?workspace=${encodeURIComponent(workspaceId)}`, { signal: controller.signal })
         .then(res => {
           if (!res.ok) throw new Error()
           return res.json()
         })
         .then(data => {
-          const syms = data || []
+          if (symbolRequestRef.current !== request) return
+          const syms = Array.isArray(data) ? data : []
           setSymbols(syms)
           setSymbolsLoading(false)
           // Default to the first non-empty category so class-only files
@@ -190,20 +215,26 @@ export function FileNode({ data, selected }: NodeProps) {
           const first = (['functions', 'variables', 'classes'] as const).find(
             tab => syms.some((sym: any) => tabForKind(sym.kind) === tab)
           )
-          if (first) setActiveTab(first)
+          if (first && !d.onSymbolsChange) setActiveTab(current =>
+            syms.some((sym: any) => tabForKind(sym.kind) === current) ? current : first
+          )
         })
-        .catch(() => {
+        .catch(error => {
+          if (symbolRequestRef.current !== request) return
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            setSymbolsLoading(false)
+            return
+          }
           setSymbols([])
           setSymbolsLoading(false)
         })
+      return () => controller.abort()
     }
-  }, [effZoom, d.id, workspaceId, symbols, symbolsLoading])
+    setSymbolsLoading(false)
+  }, [effZoom, d.id, workspaceId, suppliedSymbols, symbols])
 
   const handleSymbolClick = (sym: any) => {
-    const fileObj = useGraphStore.getState().files.find(f => f.id === d.id)
-    if (fileObj && window.axiom) {
-      window.axiom.showInFolder(fileObj.path)
-    }
+    if (!editableSymbols && sym.lineStart > 0) setPreviewSymbol(sym)
   }
 
   // Filter symbols based on the active tab
@@ -212,6 +243,21 @@ export function FileNode({ data, selected }: NodeProps) {
 
     return symbols.filter(sym => tabForKind(sym.kind) === activeTab)
   }, [symbols, activeTab])
+  const editableSymbols = Boolean(d.onSymbolsChange)
+  const updateSymbols = (next: any[]) => {
+    setSymbols(next)
+    d.onSymbolsChange?.(next)
+  }
+  const addSymbolForActiveTab = () => {
+    const kind = activeTab === 'functions' ? 'function' : activeTab === 'classes' ? 'class' : 'variable'
+    const baseName = activeTab === 'functions' ? 'newFunction' : activeTab === 'classes' ? 'NewClass' : 'newVariable'
+    updateSymbols([...(symbols ?? []), { name: baseName, kind, lineStart: 0, lineEnd: 0 }])
+  }
+  const tabs: SymbolTab[] = d.umlKind === 'class' ? ['functions', 'variables'] : ['functions', 'variables', 'classes']
+  // Authoring capability must not bypass semantic zoom. Sheet leaves use the
+  // same identity/detail threshold as live Floor leaves; their controls become
+  // available once the detailed state has faded in.
+  const detailAlpha = effZoom >= LEAF_DETAIL_REVEAL_THRESHOLD ? 1 : 0
 
   const renderSymbolIcon = (kind: string) => {
     switch (kind.toLowerCase()) {
@@ -237,13 +283,14 @@ export function FileNode({ data, selected }: NodeProps) {
         width: '100%',
         height: '100%',
         position: 'relative',
-        cursor: 'pointer',
+        cursor: 'grab',
         transform: `translate(${translateX}px, ${translateY}px)`,
         transition: translateX !== 0 || translateY !== 0
           ? 'transform 0.22s cubic-bezier(0.25,1,0.5,1)'
           : 'opacity 0.3s ease',
         opacity: dimmed ? 0.22 : 1,
         filter: dimmed ? 'saturate(0.5)' : undefined,
+        userSelect: 'none',
       }}
     >
       {/* Content plane: laid out at base (depth-0) size, uniformly scaled to fit
@@ -268,24 +315,37 @@ export function FileNode({ data, selected }: NodeProps) {
         }}
       >
       <ShapeBackdrop shape={shellShape} stroke={perimeter} strokeWidth={perimeterW} />
+      <>
       {/* Name compartment: icon + filename left, line count right. Rule is
           INSET (not full-bleed) so it never collides with shaped silhouettes. */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 7,
         minWidth: 0,
         flexShrink: 0,
         paddingBottom: 5,
         paddingRight: 20,   // clears the corner line-count figure
         borderBottom: '1px solid var(--border-dim)',
+        opacity: detailAlpha,
+        transition: 'opacity 0.25s ease',
+        pointerEvents: detailAlpha > 0.8 ? 'auto' : 'none',
       }}>
         {/* Language icon ALWAYS — class-ness is expressed by the node SHAPE
             (chamfered classbox), never by hijacking the icon slot. */}
-        <svg viewBox="0 0 24 24" width={14} height={14} style={{ flexShrink: 0 }}>
-          {getLangIconContent(d.language ?? 'unknown')}
-        </svg>
-        <span style={{
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0,
+          flex: shellShape === 'cylinder' ? '0 1 auto' : 1,
+          maxWidth: shellShape === 'cylinder' ? 'calc(100% - 2px)' : '100%',
+          ...(shellShape === 'cylinder' ? {
+            // Content-sized mask: preserve the rim everywhere except behind
+            // the icon/title, with deliberate breathing room at both ends.
+            background: 'var(--bg-surface)',
+            padding: '2px 7px 2px 5px',
+            marginLeft: -5,
+          } : {}),
+        }}>
+        <LanguagePicker value={d.language ?? ''} onChange={d.onLanguageChange} />
+        <EditableNodeTitle value={classFirst ? d.displayName : d.label} onRename={d.onRename} title={d.relPath} style={{
           fontSize: 12,
           color: 'var(--text-primary)',
           fontWeight: 600,
@@ -293,14 +353,13 @@ export function FileNode({ data, selected }: NodeProps) {
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
-          flex: 1,
+          flex: shellShape === 'cylinder' ? '0 1 auto' : 1,
           minWidth: 0,
           fontFamily: 'var(--font-mono)',
-        }} title={d.relPath}>
+        }} />
+        </div>
           {/* class-first: the file IS its class — class name leads; the real
               filename lives in the hover tooltip, never cramped inline. */}
-          {classFirst ? d.displayName : d.label}
-        </span>
       </div>
       {/* Line count — a quiet figure tucked under the corner cut, not a badge
           shouting from the header. */}
@@ -314,25 +373,55 @@ export function FileNode({ data, selected }: NodeProps) {
           fontFamily: 'var(--font-mono)',
           letterSpacing: '0.04em',
           pointerEvents: 'none',
+          opacity: detailAlpha,
+          transition: 'opacity 0.25s ease',
         }}>{d.lineCount}</span>
       )}
 
-      {effZoom < 1.2 ? (
+      </>
+
+      {(
         /* State 1: Compact — line count lives in the header, only churn here */
-        churn > 0.4 ? (
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            fontSize: 10,
-            opacity: 0.8,
-            flexShrink: 0,
-          }}>
-            <span style={{ color: churnColor, fontFamily: 'var(--font-mono)' }}>
-              {churn > 0.7 ? 'hot' : 'active'}
-            </span>
-          </div>
-        ) : null
-      ) : (
+        <div style={{
+          position: 'absolute',
+          inset: shellShape === 'cylinder' ? '15px 14px 13px' : '10px 14px',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+          minWidth: 0,
+          textAlign: 'center',
+          opacity: 1 - detailAlpha,
+          transition: 'opacity 0.25s ease',
+          pointerEvents: detailAlpha < 0.2 ? 'auto' : 'none',
+        }}>
+          <LanguagePicker value={d.language ?? ''} onChange={d.onLanguageChange} iconSize={30} />
+          <EditableNodeTitle value={classFirst ? d.displayName : d.label} onRename={d.onRename} title={d.relPath} style={{
+            width: '100%',
+            minWidth: 0,
+            fontSize: 19,
+            lineHeight: 1.1,
+            color: 'var(--text-primary)',
+            fontWeight: 700,
+            letterSpacing: '-0.025em',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            textAlign: 'center',
+            fontFamily: 'var(--font-mono)',
+          }} />
+          {churn > 0.4 && <span style={{
+            position: 'absolute',
+            bottom: 0,
+            fontSize: 8,
+            color: churnColor,
+            fontFamily: 'var(--font-mono)',
+            opacity: 0.75,
+          }}>{churn > 0.7 ? 'hot' : 'active'}</span>}
+        </div>
+      )}
+      {(
         /* State 2 & 3: Scrollable Viewports */
         <div style={{
           display: 'flex',
@@ -341,7 +430,10 @@ export function FileNode({ data, selected }: NodeProps) {
           minHeight: 0,
           gap: 4,
           marginTop: 2,
-        }} className="nodrag nopan nowheel">
+          opacity: detailAlpha,
+          transition: 'opacity 0.25s ease',
+          pointerEvents: detailAlpha > 0.8 ? 'auto' : 'none',
+        }} className="nopan nowheel">
           {/* Scrollable symbols list viewport */}
           <div
             className="symbol-scroll"
@@ -370,7 +462,16 @@ export function FileNode({ data, selected }: NodeProps) {
                   <div
                     key={`${sym.name}-${idx}`}
                     onClick={() => handleSymbolClick(sym)}
-                    className="symbol-row"
+                    onKeyDown={event => {
+                      if (!editableSymbols && (event.key === 'Enter' || event.key === ' ')) {
+                        event.preventDefault()
+                        handleSymbolClick(sym)
+                      }
+                    }}
+                    className="symbol-row nodrag"
+                    role={!editableSymbols && sym.lineStart > 0 ? 'button' : undefined}
+                    tabIndex={!editableSymbols && sym.lineStart > 0 ? 0 : undefined}
+                    title={!editableSymbols && sym.lineStart > 0 ? `Open ${sym.name} in source` : undefined}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -381,6 +482,7 @@ export function FileNode({ data, selected }: NodeProps) {
                       padding: '1px 2px',
                       borderRadius: 0,
                       transition: 'background 0.1s ease',
+                      cursor: !editableSymbols && sym.lineStart > 0 ? 'pointer' : undefined,
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.background = 'var(--bg-raised)'
@@ -391,17 +493,23 @@ export function FileNode({ data, selected }: NodeProps) {
                   >
                     <div style={{ display: 'flex', alignItems: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {renderSymbolIcon(sym.kind)}
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sym.name}>
-                        {sym.name}
-                      </span>
+                      <EditableSymbolName value={sym.name} editable={editableSymbols} onCommit={name =>
+                        updateSymbols(symbols!.map(item => item === sym ? { ...item, name } : item))} />
                     </div>
-                    <span style={{ color: 'var(--text-dim)', fontSize: 7, flexShrink: 0, marginLeft: 4 }}>
-                      :{sym.lineStart}
-                    </span>
+                    {editableSymbols ? <button className="nodrag nopan" title="Remove symbol" onPointerDown={event => event.stopPropagation()}
+                      onClick={event => { event.stopPropagation(); updateSymbols(symbols!.filter(item => item !== sym)) }}
+                      style={{ border: 0, background: 'transparent', color: 'var(--text-dim)', padding: 0, cursor: 'pointer' }}>×</button>
+                      : <span style={{ color: 'var(--text-dim)', fontSize: 7, flexShrink: 0, marginLeft: 4 }}>: {sym.lineStart}</span>}
                   </div>
                 )
               })
             )}
+            {editableSymbols && <button className="nodrag nopan" title={`Add ${activeTab.slice(0, -1)}`}
+              onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); addSymbolForActiveTab() }}
+              style={{
+                width: '100%', minHeight: 14, marginTop: 2, border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--accent)', cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: '1px 4px', flexShrink: 0,
+              }}>+</button>}
           </div>
 
           {/* Vertical tab rail, flush right */}
@@ -412,7 +520,7 @@ export function FileNode({ data, selected }: NodeProps) {
             flexShrink: 0,
             marginLeft: 'auto',
           }}>
-              {(['functions', 'variables', 'classes'] as const).map(tab => (
+              {tabs.map(tab => (
                 <span
                   key={tab}
                   title={tab}
@@ -448,9 +556,9 @@ export function FileNode({ data, selected }: NodeProps) {
 
       {/* Everything below lives on the unscaled node frame so resize handles,
           status rings, and tooltips stay legible at any depth. */}
-      <NodeResizer isVisible={selected} minWidth={60} minHeight={30} color="var(--accent)"
-        onResizeStart={(_e: any, p: any) => onResizeStart?.(p.width, p.height)}
-        onResizeEnd={(_e: any, p: any) => onResizeEnd?.(p.width, p.height)} />
+      <AxiomNodeResizer nodeId={d.id} presentationScale={s} isVisible={selected}
+        minWidth={1} minHeight={1} color="var(--accent)"
+        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
       {d.agentTouched && (
         <div style={{
           position: 'absolute', inset: -3,
@@ -526,10 +634,17 @@ export function FileNode({ data, selected }: NodeProps) {
         <RuntimeTooltip runtime={runtime!} color={runtimeColor} />
       )}
 
-      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
-      <Handle type="target" position={Position.Top}    style={{ opacity: 0 }} />
-      <Handle type="source" position={Position.Right}  style={{ opacity: 0 }} />
-      <Handle type="target" position={Position.Left}   style={{ opacity: 0 }} />
+      {previewSymbol && <SourcePreviewDialog
+        fileId={d.id}
+        workspaceId={workspaceId}
+        symbol={previewSymbol}
+        onClose={() => setPreviewSymbol(null)}
+      />}
+
+      <Handle type="source" position={Position.Bottom} {...connectionHandleProps(isConnectable, s)} />
+      <Handle type="target" position={Position.Top}    {...connectionHandleProps(isConnectable, s)} />
+      <Handle type="source" position={Position.Right}  {...connectionHandleProps(isConnectable, s)} />
+      <Handle type="target" position={Position.Left}   {...connectionHandleProps(isConnectable, s)} />
     </div>
   )
 }

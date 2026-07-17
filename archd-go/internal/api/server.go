@@ -191,6 +191,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/infra/edge/", s.handleInfraEdge)
 	mux.HandleFunc("/api/infra/", s.handleInfraByID)
 	mux.HandleFunc("/api/registry/services", s.handleRegistryServices)
+	mux.HandleFunc("/api/layout/batch", s.handleFloorLayoutBatch)
 	s.registerSheetRoutes(mux)
 	mux.HandleFunc("/api/call-path", s.handleCallPath)
 	mux.HandleFunc("/api/function-body", s.handleFunctionBody)
@@ -537,6 +538,9 @@ func (s *Server) handleFileByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonOK(w, syms)
+
+	case r.Method == http.MethodGet && sub == "source":
+		s.handleFileSource(w, r, id)
 
 	default:
 		http.NotFound(w, r)

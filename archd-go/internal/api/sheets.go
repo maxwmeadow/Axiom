@@ -25,6 +25,20 @@ import (
 	"axiom.local/archd/internal/db"
 )
 
+func (s *Server) broadcastSheetLayoutState(sqlDB *sql.DB, sheetID string) ([]db.SheetElement, []db.PlannedNode, *db.Sheet) {
+	elements, _ := db.GetSheetElements(sqlDB, sheetID)
+	planned, _ := db.GetPlannedNodes(sqlDB, sheetID)
+	sheet, _ := db.GetSheet(sqlDB, sheetID)
+	s.broadcastPatch("sheet:elements", map[string]any{"sheetId": sheetID, "added": elements})
+	for _, node := range planned {
+		s.broadcastPatch("planned:upserted", node)
+	}
+	if sheet != nil {
+		s.broadcastPatch("sheet:upserted", sheet)
+	}
+	return elements, planned, sheet
+}
+
 func (s *Server) registerSheetRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sheets", s.handleSheets)
 	mux.HandleFunc("/api/sheets/", s.handleSheetByID)
@@ -41,13 +55,14 @@ func (s *Server) registerSheetRoutes(mux *http.ServeMux) {
 
 // sheetElementInput is the wire form for adding elements: exactly one ref.
 type sheetElementInput struct {
-	SystemID  *string  `json:"systemId"`
-	FileID    *string  `json:"fileId"`
-	InfraID   *string  `json:"infraId"`
-	SymbolRef *string  `json:"symbolRef"`
-	X         *float64 `json:"x"`
-	Y         *float64 `json:"y"`
-	AddedBy   string   `json:"addedBy"`
+	SystemID       *string  `json:"systemId"`
+	FileID         *string  `json:"fileId"`
+	InfraID        *string  `json:"infraId"`
+	SymbolRef      *string  `json:"symbolRef"`
+	X              *float64 `json:"x"`
+	Y              *float64 `json:"y"`
+	ParentSystemID *string  `json:"parentSystemId"`
+	AddedBy        string   `json:"addedBy"`
 }
 
 // resolveElement builds a SheetElement with its cached label from live data.
@@ -55,6 +70,7 @@ func resolveElement(sqlDB *sql.DB, sheetID string, in sheetElementInput) (*db.Sh
 	e := &db.SheetElement{
 		SheetID: sheetID, SystemID: in.SystemID, FileID: in.FileID,
 		InfraID: in.InfraID, SymbolRef: in.SymbolRef, AddedBy: in.AddedBy,
+		ParentSystemID: in.ParentSystemID,
 	}
 	if in.X != nil {
 		e.PositionX = *in.X
@@ -66,10 +82,16 @@ func resolveElement(sqlDB *sql.DB, sheetID string, in sheetElementInput) (*db.Sh
 	case in.FileID != nil:
 		if f, err := db.GetFileByID(sqlDB, *in.FileID); err == nil && f != nil {
 			e.Label = f.RelPath
+			if e.ParentSystemID == nil {
+				e.ParentSystemID = f.SystemID
+			}
 		}
 	case in.SystemID != nil:
 		if sys, err := db.GetSystem(sqlDB, *in.SystemID); err == nil && sys != nil {
 			e.Label = sys.Name
+			if e.ParentSystemID == nil {
+				e.ParentSystemID = sys.ParentID
+			}
 		}
 	case in.InfraID != nil:
 		if n, err := db.GetInfraNode(sqlDB, *in.InfraID); err == nil && n != nil {
@@ -220,6 +242,28 @@ func (s *Server) handleSheetByID(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]any{"sheetId": id, "buildSpec": spec})
 		return
 	}
+	if len(parts) == 3 && parts[1] == "layout" && parts[2] == "batch" && r.Method == http.MethodPost {
+		var body struct {
+			WorkspaceID string                 `json:"workspaceId"`
+			Layouts     []db.SheetLayoutUpdate `json:"layouts"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "bad request", 400)
+			return
+		}
+		sqlDB, err := s.dbFor(body.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		if err := db.UpdateSheetLayouts(sqlDB, id, body.Layouts); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		elements, planned, sheet := s.broadcastSheetLayoutState(sqlDB, id)
+		jsonOK(w, map[string]any{"sheet": sheet, "elements": elements, "planned": planned})
+		return
+	}
 
 	switch {
 	case r.Method == http.MethodGet && len(parts) == 2 && parts[1] == "asm":
@@ -368,6 +412,89 @@ func (s *Server) handleSheetElements(w http.ResponseWriter, r *http.Request, she
 		}
 		jsonOK(w, map[string]any{"id": rest[0], "x": body.X, "y": body.Y})
 
+	case r.Method == http.MethodPost && len(rest) == 2 && rest[1] == "parent":
+		var body struct {
+			WorkspaceID    string  `json:"workspaceId"`
+			ParentSystemID *string `json:"parentSystemId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "bad request", 400)
+			return
+		}
+		sqlDB, err := s.dbFor(body.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		if err := db.ValidateSheetElementParent(sqlDB, sheetID, rest[0], body.ParentSystemID); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		if err := db.UpdateSheetElementParent(sqlDB, rest[0], body.ParentSystemID); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.broadcastSheetLayoutState(sqlDB, sheetID)
+		jsonOK(w, map[string]any{"id": rest[0], "parentSystemId": body.ParentSystemID})
+
+	case r.Method == http.MethodPost && len(rest) == 2 && rest[1] == "metadata":
+		var body struct {
+			WorkspaceID string          `json:"workspaceId"`
+			Metadata    json.RawMessage `json:"metadata"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "bad request", 400)
+			return
+		}
+		sqlDB, err := s.dbFor(body.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		if err := db.UpdateSheetElementDesignMetadata(sqlDB, sheetID, rest[0], body.Metadata); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		if elements, err := db.GetSheetElements(sqlDB, sheetID); err == nil {
+			for _, element := range elements {
+				if element.ID == rest[0] {
+					s.broadcastPatch("sheet:elements", map[string]any{"sheetId": sheetID, "added": []db.SheetElement{element}})
+					break
+				}
+			}
+		}
+		jsonOK(w, map[string]any{"id": rest[0], "metadata": body.Metadata})
+
+	case r.Method == http.MethodPost && len(rest) == 2 && rest[1] == "layout":
+		var body struct {
+			WorkspaceID    string   `json:"workspaceId"`
+			X              float64  `json:"x"`
+			Y              float64  `json:"y"`
+			ParentSystemID *string  `json:"parentSystemId"`
+			Width          *float64 `json:"width"`
+			Height         *float64 `json:"height"`
+			Scale          *float64 `json:"scale"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "bad request", 400)
+			return
+		}
+		sqlDB, err := s.dbFor(body.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		if err := db.ValidateSheetElementParent(sqlDB, sheetID, rest[0], body.ParentSystemID); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		if err := db.UpdateSheetElementLayout(sqlDB, rest[0], body.X, body.Y, body.ParentSystemID, body.Width, body.Height, body.Scale); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.broadcastSheetLayoutState(sqlDB, sheetID)
+		jsonOK(w, map[string]any{"id": rest[0], "x": body.X, "y": body.Y, "parentSystemId": body.ParentSystemID})
+
 	default:
 		http.NotFound(w, r)
 	}
@@ -404,6 +531,71 @@ func (s *Server) handlePlannedByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonOK(w, map[string]any{"id": id})
+
+	case r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "parent":
+		var body struct {
+			WorkspaceID    string  `json:"workspaceId"`
+			ParentSystemID *string `json:"parentSystemId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "bad request", 400)
+			return
+		}
+		sqlDB, err := s.dbFor(body.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		planned, err := db.GetPlannedNode(sqlDB, id)
+		if err != nil || planned == nil {
+			jsonError(w, "planned node not found", 404)
+			return
+		}
+		if err := db.ValidatePlannedParent(sqlDB, id, body.ParentSystemID); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		if err := db.UpdatePlannedParent(sqlDB, id, body.ParentSystemID); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.broadcastSheetLayoutState(sqlDB, planned.SheetID)
+		jsonOK(w, map[string]any{"id": id, "parentSystemId": body.ParentSystemID})
+
+	case r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "layout":
+		var body struct {
+			WorkspaceID    string   `json:"workspaceId"`
+			X              float64  `json:"x"`
+			Y              float64  `json:"y"`
+			ParentSystemID *string  `json:"parentSystemId"`
+			Width          *float64 `json:"width"`
+			Height         *float64 `json:"height"`
+			Scale          *float64 `json:"scale"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "bad request", 400)
+			return
+		}
+		sqlDB, err := s.dbFor(body.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		planned, err := db.GetPlannedNode(sqlDB, id)
+		if err != nil || planned == nil {
+			jsonError(w, "planned node not found", 404)
+			return
+		}
+		if err := db.ValidatePlannedParent(sqlDB, id, body.ParentSystemID); err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		if err := db.UpdatePlannedLayout(sqlDB, id, body.X, body.Y, body.ParentSystemID, body.Width, body.Height, body.Scale); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		s.broadcastSheetLayoutState(sqlDB, planned.SheetID)
+		jsonOK(w, map[string]any{"id": id, "x": body.X, "y": body.Y, "parentSystemId": body.ParentSystemID})
 
 	case r.Method == http.MethodPut && len(parts) == 1:
 		var n db.PlannedNode
@@ -524,6 +716,19 @@ func (s *Server) handleCanvasSend(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, err.Error(), 404)
 		return
+	}
+	if m.SheetID != nil {
+		sheet, sheetErr := db.GetSheet(sqlDB, *m.SheetID)
+		if sheetErr != nil || sheet == nil || sheet.WorkspaceID != m.WorkspaceID {
+			jsonError(w, "sheet not found in workspace", 404)
+			return
+		}
+		context, contextErr := renderAgentSheetContext(sqlDB, sheet)
+		if contextErr != nil {
+			jsonError(w, contextErr.Error(), 500)
+			return
+		}
+		m.SheetContext = context
 	}
 	if err := db.EnqueueCanvasMessage(sqlDB, &m); err != nil {
 		jsonError(w, err.Error(), 500)

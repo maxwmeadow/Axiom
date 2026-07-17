@@ -31,6 +31,67 @@ type functionBodyMatch struct {
 	Body      string `json:"body"`
 }
 
+type fileSourceResponse struct {
+	FileID    string `json:"fileId"`
+	RelPath   string `json:"relPath"`
+	Language  string `json:"language"`
+	LineCount int    `json:"lineCount"`
+	Content   string `json:"content"`
+}
+
+// handleFileSource returns the complete current contents of an indexed file.
+// File resolution remains scoped to the requested workspace, so the renderer
+// never receives an arbitrary filesystem read primitive.
+func (s *Server) handleFileSource(w http.ResponseWriter, r *http.Request, fileID string) {
+	workspaceID := r.URL.Query().Get("workspace")
+	if workspaceID == "" {
+		jsonError(w, "workspace is required", 400)
+		return
+	}
+	sqlDB, err := s.dbFor(workspaceID)
+	if err != nil {
+		jsonError(w, err.Error(), 404)
+		return
+	}
+	file, err := db.FindFileByIDOrPath(sqlDB, workspaceID, fileID)
+	if err != nil {
+		jsonError(w, err.Error(), 500)
+		return
+	}
+	if file == nil {
+		jsonError(w, fmt.Sprintf("file %q not found in workspace", fileID), 404)
+		return
+	}
+	content, err := os.ReadFile(file.Path)
+	if err != nil {
+		jsonError(w, fmt.Sprintf("read %s: %v", file.RelPath, err), 500)
+		return
+	}
+	jsonOK(w, fileSourceResponse{
+		FileID:    file.ID,
+		RelPath:   file.RelPath,
+		Language:  file.Language,
+		LineCount: lineCount(content),
+		Content:   string(content),
+	})
+}
+
+func lineCount(content []byte) int {
+	if len(content) == 0 {
+		return 0
+	}
+	count := 1
+	for _, b := range content {
+		if b == '\n' {
+			count++
+		}
+	}
+	if content[len(content)-1] == '\n' {
+		count--
+	}
+	return count
+}
+
 func (s *Server) handleFunctionBody(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.NotFound(w, r)

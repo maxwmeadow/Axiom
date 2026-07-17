@@ -5,6 +5,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,9 +14,9 @@ import (
 
 // PlannedMember is one declared function/method in a planned node.
 type PlannedMember struct {
-	Signature string `json:"signature"`          // "login(email, password)"
-	Intent    string `json:"intent,omitempty"`   // one-line description
-	Realized  bool   `json:"realized"`           // set by reconciliation
+	Signature string `json:"signature"`        // "login(email, password)"
+	Intent    string `json:"intent,omitempty"` // one-line description
+	Realized  bool   `json:"realized"`         // set by reconciliation
 }
 
 type PlannedNode struct {
@@ -25,7 +26,8 @@ type PlannedNode struct {
 	Kind           string          `json:"kind"`
 	Name           string          `json:"name"`
 	DeclaredPath   string          `json:"declaredPath"`
-	Members        json.RawMessage `json:"members"` // []PlannedMember
+	Members        json.RawMessage `json:"members"`  // []PlannedMember
+	Metadata       json.RawMessage `json:"metadata"` // versioned kind-specific UML metadata
 	Status         string          `json:"status"`
 	RealizedFileID *string         `json:"realizedFileId"`
 	Notes          string          `json:"notes"`
@@ -33,6 +35,10 @@ type PlannedNode struct {
 	Color          string          `json:"color"` // curated accent hex; '' = default
 	PositionX      float64         `json:"positionX"`
 	PositionY      float64         `json:"positionY"`
+	Width          *float64        `json:"width"`
+	Height         *float64        `json:"height"`
+	Scale          float64         `json:"scale"`
+	ParentSystemID *string         `json:"parentSystemId"`
 	CreatedBy      string          `json:"createdBy"`
 	CreatedAt      int64           `json:"createdAt"`
 }
@@ -49,8 +55,8 @@ type PlannedEdge struct {
 	Note        string  `json:"note"`
 }
 
-const plannedCols = `id, sheet_id, workspace_id, kind, name, declared_path, members,
-       status, realized_file_id, notes, shape, color, position_x, position_y, created_by, created_at`
+const plannedCols = `id, sheet_id, workspace_id, kind, name, declared_path, members, metadata,
+       status, realized_file_id, notes, shape, color, position_x, position_y, width, height, scale, parent_system_id, created_by, created_at`
 
 func UpsertPlannedNode(db *sql.DB, n *PlannedNode) error {
 	if n.ID == "" {
@@ -65,23 +71,32 @@ func UpsertPlannedNode(db *sql.DB, n *PlannedNode) error {
 	if len(n.Members) == 0 {
 		n.Members = json.RawMessage("[]")
 	}
+	if len(n.Metadata) == 0 {
+		n.Metadata = json.RawMessage(`{"version":1}`)
+	}
+	if !json.Valid(n.Metadata) || strings.TrimSpace(string(n.Metadata))[0] != '{' {
+		return fmt.Errorf("planned node metadata must be a JSON object")
+	}
 	if n.CreatedBy == "" {
 		n.CreatedBy = "user"
 	}
 	if n.CreatedAt == 0 {
 		n.CreatedAt = time.Now().UnixMilli()
 	}
+	n.Scale = normalizedScale(n.Scale)
 	_, err := db.Exec(`
 		INSERT INTO planned_nodes (`+plannedCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			kind=excluded.kind, name=excluded.name, declared_path=excluded.declared_path,
-			members=excluded.members, status=excluded.status,
+			members=excluded.members, metadata=excluded.metadata, status=excluded.status,
 			realized_file_id=excluded.realized_file_id, notes=excluded.notes,
 			shape=excluded.shape, color=excluded.color,
-			position_x=excluded.position_x, position_y=excluded.position_y`,
-		n.ID, n.SheetID, n.WorkspaceID, n.Kind, n.Name, n.DeclaredPath, string(n.Members),
-		n.Status, n.RealizedFileID, n.Notes, n.Shape, n.Color, n.PositionX, n.PositionY, n.CreatedBy, n.CreatedAt)
+			position_x=excluded.position_x, position_y=excluded.position_y,
+			width=excluded.width, height=excluded.height, scale=excluded.scale,
+			parent_system_id=excluded.parent_system_id`,
+		n.ID, n.SheetID, n.WorkspaceID, n.Kind, n.Name, n.DeclaredPath, string(n.Members), string(n.Metadata),
+		n.Status, n.RealizedFileID, n.Notes, n.Shape, n.Color, n.PositionX, n.PositionY, n.Width, n.Height, n.Scale, n.ParentSystemID, n.CreatedBy, n.CreatedAt)
 	if err == nil {
 		_ = TouchSheet(db, n.SheetID)
 	}
@@ -92,13 +107,14 @@ func scanPlanned(rows *sql.Rows) ([]PlannedNode, error) {
 	var out []PlannedNode
 	for rows.Next() {
 		var n PlannedNode
-		var members string
+		var members, metadata string
 		if err := rows.Scan(&n.ID, &n.SheetID, &n.WorkspaceID, &n.Kind, &n.Name,
-			&n.DeclaredPath, &members, &n.Status, &n.RealizedFileID, &n.Notes,
-			&n.Shape, &n.Color, &n.PositionX, &n.PositionY, &n.CreatedBy, &n.CreatedAt); err != nil {
+			&n.DeclaredPath, &members, &metadata, &n.Status, &n.RealizedFileID, &n.Notes,
+			&n.Shape, &n.Color, &n.PositionX, &n.PositionY, &n.Width, &n.Height, &n.Scale, &n.ParentSystemID, &n.CreatedBy, &n.CreatedAt); err != nil {
 			return nil, err
 		}
 		n.Members = json.RawMessage(members)
+		n.Metadata = json.RawMessage(metadata)
 		out = append(out, n)
 	}
 	return out, rows.Err()
@@ -111,6 +127,19 @@ func GetPlannedNodes(db *sql.DB, sheetID string) ([]PlannedNode, error) {
 	}
 	defer rows.Close()
 	return scanPlanned(rows)
+}
+
+func GetPlannedNode(db *sql.DB, id string) (*PlannedNode, error) {
+	rows, err := db.Query(`SELECT `+plannedCols+` FROM planned_nodes WHERE id=?`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	nodes, err := scanPlanned(rows)
+	if err != nil || len(nodes) == 0 {
+		return nil, err
+	}
+	return &nodes[0], nil
 }
 
 // GetOpenPlannedNodes returns unrealized planned nodes across all sheets —
@@ -133,6 +162,25 @@ func DeletePlannedNode(db *sql.DB, id string) error {
 func UpdatePlannedPosition(db *sql.DB, id string, x, y float64) error {
 	_, err := db.Exec(`UPDATE planned_nodes SET position_x=?, position_y=? WHERE id=?`, x, y, id)
 	return err
+}
+
+func UpdatePlannedParent(db *sql.DB, id string, parentSystemID *string) error {
+	var x, y float64
+	if err := db.QueryRow(`SELECT position_x, position_y FROM planned_nodes WHERE id=?`, id).Scan(&x, &y); err != nil {
+		return err
+	}
+	return UpdatePlannedLayout(db, id, x, y, parentSystemID, nil, nil, nil)
+}
+
+func UpdatePlannedLayout(db *sql.DB, id string, x, y float64, parentSystemID *string, width, height, scale *float64) error {
+	var sheetID string
+	if err := db.QueryRow(`SELECT sheet_id FROM planned_nodes WHERE id=?`, id).Scan(&sheetID); err != nil {
+		return err
+	}
+	return UpdateSheetLayouts(db, sheetID, []SheetLayoutUpdate{{
+		Kind: "planned", ID: id, X: x, Y: y, ParentSystemID: parentSystemID,
+		Width: width, Height: height, Scale: scale,
+	}})
 }
 
 func UpsertPlannedEdge(db *sql.DB, e *PlannedEdge) error {
