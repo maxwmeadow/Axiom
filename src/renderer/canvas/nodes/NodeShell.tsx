@@ -89,26 +89,52 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed }: {
   dashed?: boolean
 }) {
   const ref = useRef<SVGSVGElement>(null)
-  const [size, setSize] = useState({ w: 180, h: 72 })
+  const pathRef = useRef<SVGPathElement>(null)
+  const rimRef = useRef<SVGPathElement>(null)
   useLayoutEffect(() => {
-    const el = ref.current?.parentElement
-    if (!el) return
-    const ro = new ResizeObserver(() => setSize({ w: el.offsetWidth, h: el.offsetHeight }))
+    const svg = ref.current
+    const el = svg?.parentElement
+    if (!svg || !el) return
+
+    const update = (width: number, height: number) => {
+      const w = Number.isFinite(width) && width > 0 ? width : 1
+      const h = Number.isFinite(height) && height > 0 ? height : 1
+      svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
+      pathRef.current?.setAttribute('d', shellPath(shape, w, h))
+      rimRef.current?.setAttribute('d', cylinderRimPath(w))
+    }
+    const computed = getComputedStyle(el)
+    update(Number.parseFloat(computed.width), Number.parseFloat(computed.height))
+
+    const ro = new ResizeObserver(entries => {
+      const entry = entries[0]
+      const borderBox = Array.isArray(entry?.borderBoxSize)
+        ? entry.borderBoxSize[0]
+        : entry?.borderBoxSize
+      update(
+        borderBox?.inlineSize ?? entry?.contentRect.width ?? 1,
+        borderBox?.blockSize ?? entry?.contentRect.height ?? 1,
+      )
+    })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
-  const { w, h } = size
+  }, [shape])
+
   return (
     <svg
       ref={ref}
-      width={w} height={h}
+      width="100%" height="100%"
+      viewBox="0 0 180 72"
+      preserveAspectRatio="none"
       // zIndex -1: the parent's transform creates a stacking context, so this
       // sits behind the card's static content but still inside the node.
       // zIndex 0 painted the filled path OVER the content (empty-card bug).
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'visible', zIndex: -1 }}
     >
       <path
-        d={shellPath(shape, w, h)}
+        ref={pathRef}
+        className="axiom-shape-backdrop-path"
+        d={shellPath(shape, 180, 72)}
         fill="var(--bg-surface)"
         stroke={stroke}
         strokeWidth={strokeWidth}
@@ -116,7 +142,7 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed }: {
         style={{ filter: CARD_SHADOW, transition: 'stroke 0.2s ease' }}
       />
       {shape === 'cylinder' && (
-        <path d={cylinderRimPath(w)} fill="none" stroke={stroke} strokeWidth={strokeWidth}
+        <path ref={rimRef} d={cylinderRimPath(180)} fill="none" stroke={stroke} strokeWidth={strokeWidth}
           strokeDasharray={dashed ? '6 4' : undefined} style={{ transition: 'stroke 0.2s ease' }} />
       )}
     </svg>

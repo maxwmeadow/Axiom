@@ -142,12 +142,11 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
     : d.shape === 'cylinder' || d.shape === 'hexagon' ? d.shape : 'box' as const
   // Perimeter stroke = accent + heat in one channel (design spec): quiet
   // hairline by default, activity heat and states shift the whole silhouette.
-  const perimeter = selected ? 'var(--accent)'
-    : d.agentTouched ? 'var(--agent-color)'
+  const perimeter = d.agentTouched ? 'var(--agent-color)'
     : churn > 0.7 ? '#ff453a'
     : churn > 0.4 ? '#ff9f0a'
     : 'var(--border)'
-  const perimeterW = selected || churn > 0.4 ? 1.6 : 1
+  const perimeterW = churn > 0.4 ? 1.6 : 1
 
   const previewOffset = (d as any).previewOffset as { x: number; y: number } | null | undefined
   const translateX = previewOffset?.x ?? 0
@@ -441,10 +440,10 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
           opacity: detailAlpha,
           transition: 'opacity 0.25s ease',
           pointerEvents: detailAlpha > 0.8 ? 'auto' : 'none',
-        }} className="nopan nowheel">
+        }} className="nodrag nopan">
           {/* Scrollable symbols list viewport */}
           <div
-            className="symbol-scroll"
+            className="symbol-scroll nodrag"
             style={{
               flex: 1,
               overflowY: 'auto',
@@ -638,7 +637,8 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       )}
       </div>
 
-      <AxiomNodeResizer nodeId={d.id} presentationScale={s} isVisible={selected}
+      <AxiomNodeResizer nodeId={d.id} presentationScale={s} nodeWidth={width} nodeHeight={height} isVisible={selected}
+        isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
         minWidth={1} minHeight={1} color="var(--accent)"
         onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
 

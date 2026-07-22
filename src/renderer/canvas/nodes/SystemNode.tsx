@@ -295,8 +295,8 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
 
   const dimmed = !!(d as any).dimmed
 
-  const strokeColor = isDropTarget || selected ? color : 'var(--border)'
-  const strokeW = isDropTarget ? 2.5 : selected ? 2 : 1
+  const strokeColor = isDropTarget ? color : 'var(--border)'
+  const strokeW = isDropTarget ? 2.5 : 1
   const deploymentCorner = Math.max(7, Math.min(18, shellSize.w * 0.035, shellSize.h * 0.09))
   const shellPath = isDeploymentBoundary
     // Hosting is a deployment chassis, not a UML package. It deliberately
@@ -396,7 +396,8 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
         }} />
       )}
       </div>
-      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} isVisible={selected}
+      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
+        isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
         minWidth={d.minResizeWidth ?? 1}
         minHeight={d.minResizeHeight ?? 1} color={color}
         onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />

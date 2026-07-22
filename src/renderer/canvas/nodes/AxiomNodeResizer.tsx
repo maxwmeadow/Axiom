@@ -1,6 +1,13 @@
-import { useCallback, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
-import { useStoreApi, type NodeChange } from '@xyflow/react'
-import { floatingResizeGeometry, type FloatingResizeDirection, type NodeResizeParams } from '../resizeGeometry'
+import { useCallback, useEffect, useLayoutEffect, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useStore, useStoreApi, type NodeChange } from '@xyflow/react'
+import {
+  authoritativeResizeDimension,
+  clientPointToFlow,
+  floatingResizeGeometry,
+  resizeChromeGeometry,
+  type FloatingResizeDirection,
+  type NodeResizeParams,
+} from '../resizeGeometry'
 import { traceResizeEnd, traceResizeStart, traceResizeStep } from './resizeChrome'
 
 type HorizontalSide = 'left' | 'right' | null
@@ -10,20 +17,20 @@ interface ResizeDirection extends FloatingResizeDirection {
   name: string
   horizontal: HorizontalSide
   vertical: VerticalSide
-  left: string
-  top: string
+  xFactor: number
+  yFactor: number
   cursor: CSSProperties['cursor']
 }
 
 const DIRECTIONS: readonly ResizeDirection[] = [
-  { name: 'top-left',     horizontal: 'left',  vertical: 'top',    left: '0%',   top: '0%',   cursor: 'nwse-resize' },
-  { name: 'top',          horizontal: null,    vertical: 'top',    left: '50%',  top: '0%',   cursor: 'ns-resize' },
-  { name: 'top-right',    horizontal: 'right', vertical: 'top',    left: '100%', top: '0%',   cursor: 'nesw-resize' },
-  { name: 'right',        horizontal: 'right', vertical: null,     left: '100%', top: '50%',  cursor: 'ew-resize' },
-  { name: 'bottom-right', horizontal: 'right', vertical: 'bottom', left: '100%', top: '100%', cursor: 'nwse-resize' },
-  { name: 'bottom',       horizontal: null,    vertical: 'bottom', left: '50%',  top: '100%', cursor: 'ns-resize' },
-  { name: 'bottom-left',  horizontal: 'left',  vertical: 'bottom', left: '0%',   top: '100%', cursor: 'nesw-resize' },
-  { name: 'left',         horizontal: 'left',  vertical: null,     left: '0%',   top: '50%',  cursor: 'ew-resize' },
+  { name: 'top-left',     horizontal: 'left',  vertical: 'top',    xFactor: 0,   yFactor: 0,   cursor: 'nwse-resize' },
+  { name: 'top',          horizontal: null,    vertical: 'top',    xFactor: 0.5, yFactor: 0,   cursor: 'ns-resize' },
+  { name: 'top-right',    horizontal: 'right', vertical: 'top',    xFactor: 1,   yFactor: 0,   cursor: 'nesw-resize' },
+  { name: 'right',        horizontal: 'right', vertical: null,     xFactor: 1,   yFactor: 0.5, cursor: 'ew-resize' },
+  { name: 'bottom-right', horizontal: 'right', vertical: 'bottom', xFactor: 1,   yFactor: 1,   cursor: 'nwse-resize' },
+  { name: 'bottom',       horizontal: null,    vertical: 'bottom', xFactor: 0.5, yFactor: 1,   cursor: 'ns-resize' },
+  { name: 'bottom-left',  horizontal: 'left',  vertical: 'bottom', xFactor: 0,   yFactor: 1,   cursor: 'nesw-resize' },
+  { name: 'left',         horizontal: 'left',  vertical: null,     xFactor: 0,   yFactor: 0.5, cursor: 'ew-resize' },
 ]
 
 interface ResizeSession {
@@ -31,17 +38,28 @@ interface ResizeSession {
   direction: ResizeDirection
   startClientX: number
   startClientY: number
+  startFlowX: number
+  startFlowY: number
+  usesFlowCoordinates: boolean
   zoom: number
   start: NodeResizeParams
   last: NodeResizeParams
   childStarts: Map<string, { x: number; y: number }>
+  handle: SVGGElement
+  nodeElement: HTMLElement | null
+  lastPointerEvent: PointerEvent
+  cleanup: () => void
+  cancel: () => void
 }
 
 export interface AxiomNodeResizerProps {
   nodeId: string
   isVisible: boolean
   presentationScale: number
+  nodeWidth?: number | null
+  nodeHeight?: number | null
   color: string
+  isResizable?: boolean
   minWidth?: number
   minHeight?: number
   maxWidth?: number
@@ -50,21 +68,31 @@ export interface AxiomNodeResizerProps {
   onResizeEnd?: (params: NodeResizeParams) => void
 }
 
-const safePositive = (value: number | undefined, fallback: number): number =>
+const safePositive = (value: number | undefined | null, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback
 
-function traceEvent(event: ReactPointerEvent<HTMLElement>, target: HTMLElement): unknown {
-  const native = event.nativeEvent
+const geometryChanged = (left: NodeResizeParams, right: NodeResizeParams): boolean =>
+  left.x !== right.x || left.y !== right.y || left.width !== right.width || left.height !== right.height
+
+function findNodeElement(root: HTMLElement | null | undefined, nodeId: string): HTMLElement | null {
+  if (!root) return null
+  for (const element of root.querySelectorAll<HTMLElement>('.react-flow__node')) {
+    if (element.dataset.id === nodeId) return element
+  }
+  return null
+}
+
+function traceEvent(event: PointerEvent, target: Element): unknown {
   return {
     sourceEvent: {
       clientX: event.clientX,
       clientY: event.clientY,
-      movementX: native.movementX,
-      movementY: native.movementY,
-      pointerType: native.pointerType,
+      movementX: event.movementX,
+      movementY: event.movementY,
+      pointerType: event.pointerType,
       target,
-      getCoalescedEvents: typeof native.getCoalescedEvents === 'function'
-        ? () => native.getCoalescedEvents()
+      getCoalescedEvents: typeof event.getCoalescedEvents === 'function'
+        ? () => event.getCoalescedEvents()
         : undefined,
     },
   }
@@ -73,16 +101,19 @@ function traceEvent(event: ReactPointerEvent<HTMLElement>, target: HTMLElement):
 /**
  * Floating-point replacement for XYFlow's NodeResizer.
  *
- * XYFlow floors pointer deltas in flow space. At 100x zoom that quantizes
- * every resize to 100 browser pixels. This controller performs the inverse
- * viewport transform without rounding and emits ordinary public NodeChange
- * records, preserving Axiom's controlled-node and persistence pipeline.
+ * Pointer tracking is owned for the full window lifetime of the gesture. This
+ * avoids orphaned sessions when a selected node rerenders, capture is lost, or
+ * Chromium cancels a pointer. Geometry remains in floating-point flow units,
+ * preserving one-screen-pixel precision at 100x zoom.
  */
 export function AxiomNodeResizer({
   nodeId,
   isVisible,
   presentationScale,
+  nodeWidth,
+  nodeHeight,
   color,
+  isResizable = true,
   minWidth = 1,
   minHeight = 1,
   maxWidth = Number.MAX_VALUE,
@@ -92,16 +123,40 @@ export function AxiomNodeResizer({
 }: AxiomNodeResizerProps) {
   const store = useStoreApi()
   const sessionRef = useRef<ResizeSession | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const diagnosticSignatureRef = useRef('')
   const scale = safePositive(presentationScale, 1)
-  const handleSize = 5 * scale
-  const lineThickness = 1 * scale
+  const viewportZoom = useStore(state => state.transform[2])
+  const chrome = resizeChromeGeometry()
+  const inverseViewportZoom = 1 / safePositive(viewportZoom, 1)
+
+  const flowPointForClient = useCallback((clientX: number, clientY: number): { x: number; y: number } | null => {
+    const state = store.getState()
+    const rect = state.domNode?.getBoundingClientRect()
+    if (!rect) return null
+    const zoom = safePositive(state.transform[2], 1)
+    return clientPointToFlow(
+      { x: clientX, y: clientY },
+      {
+        viewportX: state.transform[0],
+        viewportY: state.transform[1],
+        zoom,
+        paneLeft: rect.left,
+        paneTop: rect.top,
+      },
+    )
+  }, [store])
 
   const geometryForPointer = useCallback((session: ResizeSession, clientX: number, clientY: number): NodeResizeParams => {
+    const currentFlow = session.usesFlowCoordinates ? flowPointForClient(clientX, clientY) : null
+    const delta = currentFlow
+      ? { x: currentFlow.x - session.startFlowX, y: currentFlow.y - session.startFlowY }
+      : { x: clientX - session.startClientX, y: clientY - session.startClientY }
     return floatingResizeGeometry(
       session.start,
       session.direction,
-      { x: clientX - session.startClientX, y: clientY - session.startClientY },
-      session.zoom,
+      delta,
+      currentFlow ? 1 : session.zoom,
       {
         minWidth: safePositive(minWidth, 1),
         minHeight: safePositive(minHeight, 1),
@@ -109,7 +164,7 @@ export function AxiomNodeResizer({
         maxHeight: safePositive(maxHeight, Number.MAX_VALUE),
       },
     )
-  }, [maxHeight, maxWidth, minHeight, minWidth])
+  }, [flowPointForClient, maxHeight, maxWidth, minHeight, minWidth])
 
   const emitGeometry = useCallback((session: ResizeSession, next: NodeResizeParams, resizing: boolean) => {
     const changes: NodeChange[] = []
@@ -139,136 +194,289 @@ export function AxiomNodeResizer({
     session.last = next
   }, [nodeId, store])
 
-  const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>, direction: ResizeDirection) => {
-    if (event.button !== 0) return
+  const onPointerDown = useCallback((event: ReactPointerEvent<SVGGElement>, direction: ResizeDirection) => {
+    if (!isResizable || event.button !== 0 || sessionRef.current) return
     const state = store.getState()
     const node = state.nodeLookup.get(nodeId)
     if (!node) return
+
+    // React Flow's ResizeObserver records offsetWidth/offsetHeight in
+    // `measured`, which are integer CSS layout units. At extreme canvas zoom,
+    // starting from those integers makes the first pointer sample jump from the
+    // visible controlled size to the rounded measured size. The controlled
+    // dimensions are the geometry actually painted by NodeWrapper; measured is
+    // only a fallback for nodes that do not author an explicit size.
+    const width = authoritativeResizeDimension({
+      controlled: node.width,
+      styled: Number(node.style?.width),
+      rendered: nodeWidth,
+      measured: node.measured.width,
+    })
+    const height = authoritativeResizeDimension({
+      controlled: node.height,
+      styled: Number(node.style?.height),
+      rendered: nodeHeight,
+      measured: node.measured.height,
+    })
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return
+
     event.preventDefault()
     event.stopPropagation()
-    event.currentTarget.setPointerCapture(event.pointerId)
-    // The idle width/height ease would lag every emitted step and smear
-    // ghost outlines; freeze it for the duration of the interaction.
-    event.currentTarget.closest('.react-flow__node')?.classList.add('axiom-resizing')
+
+    const handle = event.currentTarget
+    const nodeElement = findNodeElement(state.domNode, nodeId)
     const start: NodeResizeParams = {
-      x: node.position.x,
-      y: node.position.y,
-      width: node.measured.width ?? Number(node.style?.width ?? 0),
-      height: node.measured.height ?? Number(node.style?.height ?? 0),
+      x: Number.isFinite(node.position.x) ? node.position.x : 0,
+      y: Number.isFinite(node.position.y) ? node.position.y : 0,
+      width,
+      height,
     }
     const childStarts = new Map<string, { x: number; y: number }>()
     for (const [candidateId, candidate] of state.nodeLookup) {
       if (candidate.parentId === nodeId) childStarts.set(candidateId, { ...candidate.position })
     }
+
+    const startFlow = flowPointForClient(event.clientX, event.clientY)
     const session: ResizeSession = {
       pointerId: event.pointerId,
       direction,
       startClientX: event.clientX,
       startClientY: event.clientY,
+      startFlowX: startFlow?.x ?? event.clientX / safePositive(state.transform[2], 1),
+      startFlowY: startFlow?.y ?? event.clientY / safePositive(state.transform[2], 1),
+      usesFlowCoordinates: !!startFlow,
       zoom: safePositive(state.transform[2], 1),
       start,
       last: start,
       childStarts,
+      handle,
+      nodeElement,
+      lastPointerEvent: event.nativeEvent,
+      cleanup: () => {},
+      cancel: () => {},
     }
-    sessionRef.current = session
-    traceResizeStart(traceEvent(event, event.currentTarget), start, nodeId, scale)
-    onResizeStart?.(start)
-  }, [nodeId, onResizeStart, scale, store])
 
-  const onPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const session = sessionRef.current
-    if (!session || session.pointerId !== event.pointerId) return
-    // A mouse reuses one pointerId for its whole lifetime, so an orphaned
-    // session (lost capture, missed pointerup) would otherwise resume
-    // resizing from a plain hover. No held primary button — no session.
-    if ((event.buttons & 1) === 0) {
+    const finish = (pointerEvent: PointerEvent, usePointerGeometry: boolean) => {
+      if (sessionRef.current !== session) return
+      session.lastPointerEvent = pointerEvent
+      const next = usePointerGeometry
+        ? geometryForPointer(session, pointerEvent.clientX, pointerEvent.clientY)
+        : session.last
+
+      // Tear down first: triggerNodeChanges can synchronously rerender or
+      // unmount the node, and no listener may survive that state transition.
       sessionRef.current = null
-      event.currentTarget.closest('.react-flow__node')?.classList.remove('axiom-resizing')
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId)
+      session.cleanup()
+      nodeElement?.classList.remove('axiom-resizing')
+      if (handle.hasPointerCapture(session.pointerId)) {
+        try { handle.releasePointerCapture(session.pointerId) } catch { /* capture was already revoked */ }
       }
-      onResizeEnd?.(session.last)
-      return
-    }
-    event.preventDefault()
-    event.stopPropagation()
-    const next = geometryForPointer(session, event.clientX, event.clientY)
-    traceResizeStep(traceEvent(event, event.currentTarget), next, nodeId)
-    if (next.x !== session.last.x || next.y !== session.last.y ||
-        next.width !== session.last.width || next.height !== session.last.height) {
-      emitGeometry(session, next, true)
-    }
-  }, [emitGeometry, geometryForPointer, nodeId, onResizeEnd])
 
-  const finishResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
-    const session = sessionRef.current
-    if (!session || session.pointerId !== event.pointerId) return
-    event.preventDefault()
-    event.stopPropagation()
-    const next = geometryForPointer(session, event.clientX, event.clientY)
-    if (next.x !== session.last.x || next.y !== session.last.y ||
-        next.width !== session.last.width || next.height !== session.last.height) {
-      emitGeometry(session, next, true)
+      if (geometryChanged(session.last, next)) emitGeometry(session, next, true)
+      // Always emit the terminal false state, including pointercancel, blur,
+      // and a press/release with no movement.
+      emitGeometry(session, next, false)
+      traceResizeEnd(traceEvent(pointerEvent, handle), next, nodeId)
+      onResizeEnd?.(next)
     }
-    emitGeometry(session, next, false)
-    traceResizeEnd(traceEvent(event, event.currentTarget), next, nodeId)
-    sessionRef.current = null
-    event.currentTarget.closest('.react-flow__node')?.classList.remove('axiom-resizing')
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
+
+    const onPointerMove = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== session.pointerId || sessionRef.current !== session) return
+      session.lastPointerEvent = pointerEvent
+      if (pointerEvent.pointerType !== 'touch' && (pointerEvent.buttons & 1) === 0) {
+        finish(pointerEvent, false)
+        return
+      }
+      pointerEvent.preventDefault()
+      const next = geometryForPointer(session, pointerEvent.clientX, pointerEvent.clientY)
+      traceResizeStep(traceEvent(pointerEvent, handle), next, nodeId)
+      if (geometryChanged(session.last, next)) emitGeometry(session, next, true)
     }
-    onResizeEnd?.(next)
-  }, [emitGeometry, geometryForPointer, nodeId, onResizeEnd])
+    const onPointerUp = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId === session.pointerId) finish(pointerEvent, true)
+    }
+    const onPointerCancel = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId === session.pointerId) finish(pointerEvent, false)
+    }
+    const onLostPointerCapture = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId === session.pointerId) finish(pointerEvent, false)
+    }
+    const onWindowBlur = () => finish(session.lastPointerEvent, false)
+
+    session.cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove, true)
+      window.removeEventListener('pointerup', onPointerUp, true)
+      window.removeEventListener('pointercancel', onPointerCancel, true)
+      window.removeEventListener('blur', onWindowBlur)
+      handle.removeEventListener('lostpointercapture', onLostPointerCapture)
+    }
+    session.cancel = () => finish(session.lastPointerEvent, false)
+    sessionRef.current = session
+
+    window.addEventListener('pointermove', onPointerMove, { capture: true, passive: false })
+    window.addEventListener('pointerup', onPointerUp, true)
+    window.addEventListener('pointercancel', onPointerCancel, true)
+    window.addEventListener('blur', onWindowBlur)
+    handle.addEventListener('lostpointercapture', onLostPointerCapture)
+    nodeElement?.classList.add('axiom-resizing')
+    try { handle.setPointerCapture(event.pointerId) } catch { /* window listeners remain authoritative */ }
+
+    traceResizeStart(traceEvent(event.nativeEvent, handle), start, nodeId, scale)
+    onResizeStart?.(start)
+  }, [emitGeometry, flowPointForClient, geometryForPointer, isResizable, nodeHeight, nodeId, nodeWidth, onResizeEnd, onResizeStart, scale, store])
+
+  useEffect(() => () => sessionRef.current?.cancel(), [])
+  useEffect(() => {
+    if (!isVisible || !isResizable) sessionRef.current?.cancel()
+  }, [isResizable, isVisible])
+
+  useLayoutEffect(() => {
+    if (!isVisible) return
+    const frame = requestAnimationFrame(() => {
+      const root = rootRef.current
+      const handle = root?.querySelector<SVGGElement>('.axiom-floating-resize-handle')
+      const visual = handle?.firstElementChild as SVGGraphicsElement | null
+      const nodeElement = findNodeElement(store.getState().domNode, nodeId)
+      if (!root || !handle || !visual || !nodeElement) return
+      const rootRect = root.getBoundingClientRect()
+      const handleRect = handle.getBoundingClientRect()
+      const visualRect = visual.getBoundingClientRect()
+      const nodeRect = nodeElement.getBoundingClientRect()
+      const internal = store.getState().nodeLookup.get(nodeId)
+      const signature = [
+        viewportZoom.toFixed(4), nodeRect.width.toFixed(2), nodeRect.height.toFixed(2),
+        handleRect.width.toFixed(2), visualRect.width.toFixed(2),
+      ].join('|')
+      if (signature === diagnosticSignatureRef.current) return
+      diagnosticSignatureRef.current = signature
+      const suspicious = visualRect.width < 4 || visualRect.width > 24 ||
+        handleRect.width < 10 || handleRect.width > 36 ||
+        Math.abs(rootRect.width - nodeRect.width) > 1 || Math.abs(rootRect.height - nodeRect.height) > 1
+      if (!suspicious) return
+      console.warn(
+        `[AxiomResizeChromeSummary] node=${nodeId} zoom=${viewportZoom} ` +
+        `node=${nodeRect.width.toFixed(2)}x${nodeRect.height.toFixed(2)} ` +
+        `visual=${visualRect.width.toFixed(2)}x${visualRect.height.toFixed(2)} ` +
+        `hit=${handleRect.width.toFixed(2)}x${handleRect.height.toFixed(2)}`,
+      )
+      console.warn('[AxiomResizeChromeDiagnostic]', {
+        nodeId,
+        viewportZoom,
+        presentationScale,
+        nodeProps: { width: nodeWidth, height: nodeHeight },
+        localChrome: chrome,
+        expectedScreenPx: { outline: 1, handle: 8, hitTarget: 18 },
+        screenRects: {
+          node: { x: nodeRect.x, y: nodeRect.y, width: nodeRect.width, height: nodeRect.height },
+          root: { x: rootRect.x, y: rootRect.y, width: rootRect.width, height: rootRect.height },
+          hitTarget: { x: handleRect.x, y: handleRect.y, width: handleRect.width, height: handleRect.height },
+          visualHandle: { x: visualRect.x, y: visualRect.y, width: visualRect.width, height: visualRect.height },
+        },
+        inlineStyles: {
+          node: nodeElement.getAttribute('style'),
+          hitTarget: handle.getAttribute('style'),
+          visualHandle: visual.getAttribute('style'),
+        },
+        computedStyles: {
+          node: { width: getComputedStyle(nodeElement).width, height: getComputedStyle(nodeElement).height, transform: getComputedStyle(nodeElement).transform },
+          hitTarget: { width: getComputedStyle(handle).width, height: getComputedStyle(handle).height, minWidth: getComputedStyle(handle).minWidth, minHeight: getComputedStyle(handle).minHeight },
+          visualHandle: { width: getComputedStyle(visual).width, height: getComputedStyle(visual).height, minWidth: getComputedStyle(visual).minWidth, minHeight: getComputedStyle(visual).minHeight },
+        },
+        reactFlowNode: internal ? {
+          measured: internal.measured,
+          position: internal.position,
+          style: internal.style,
+          width: internal.width,
+          height: internal.height,
+        } : null,
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [chrome, isVisible, nodeHeight, nodeId, nodeWidth, presentationScale, store, viewportZoom])
 
   if (!isVisible) return null
 
-  const lineBase: CSSProperties = {
-    position: 'absolute',
-    zIndex: 20,
-    background: color,
-    pointerEvents: 'none',
-  }
+  const hitSize = chrome.hitSize * inverseViewportZoom
+  const handleSize = chrome.handleSize * inverseViewportZoom
+  const handleInset = handleSize * 0.22
+  const innerHandleSize = handleSize - handleInset * 2
 
   return (
-    <div aria-hidden="true" style={{ position: 'absolute', inset: 0, zIndex: 20, pointerEvents: 'none' }}>
-      <div style={{ ...lineBase, left: 0, top: 0, width: '100%', height: `${lineThickness}px`, transform: 'translateY(-50%)' }} />
-      <div style={{ ...lineBase, left: 0, bottom: 0, width: '100%', height: `${lineThickness}px`, transform: 'translateY(50%)' }} />
-      <div style={{ ...lineBase, left: 0, top: 0, width: `${lineThickness}px`, height: '100%', transform: 'translateX(-50%)' }} />
-      <div style={{ ...lineBase, right: 0, top: 0, width: `${lineThickness}px`, height: '100%', transform: 'translateX(50%)' }} />
-      {DIRECTIONS.map(direction => (
-        <div
-          key={direction.name}
-          className={`axiom-floating-resize-handle nodrag nopan ${direction.vertical ?? ''} ${direction.horizontal ?? ''}`}
-          data-resize-direction={direction.name}
-          onPointerDown={event => onPointerDown(event, direction)}
-          onPointerMove={onPointerMove}
-          onPointerUp={finishResize}
-          onPointerCancel={finishResize}
-          style={{
-            position: 'absolute',
-            zIndex: 21,
-            left: direction.left,
-            top: direction.top,
-            // Presentation scale can be stale or coarse (e.g. unmeasured
-            // fallback of 1) — never let a handle rival the node itself.
-            width: `min(${handleSize}px, 26%)`,
-            height: `min(${handleSize}px, 26%)`,
-            minWidth: 0,
-            minHeight: 0,
-            padding: 0,
-            border: 0,
-            borderRadius: '18%',
-            background: '#fff',
-            boxSizing: 'border-box',
-            transform: 'translate(-50%, -50%)',
-            cursor: direction.cursor,
-            pointerEvents: 'all',
-            touchAction: 'none',
-          }}
-        >
-          <span style={{ position: 'absolute', inset: '20%', borderRadius: '12%', background: color, pointerEvents: 'none' }} />
-        </div>
-      ))}
+    <div
+      ref={rootRef}
+      className="axiom-node-resizer"
+      data-viewport-zoom={viewportZoom}
+      data-node-id={nodeId}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 4,
+        pointerEvents: 'none',
+      }}
+    >
+      {/* A single SVG stroke cannot open seams at the corners like four
+          independently rounded and rasterized HTML lines can. */}
+      <svg
+        aria-hidden="true"
+        width="100%"
+        height="100%"
+        style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}
+      >
+        <rect
+          x="0"
+          y="0"
+          width="100%"
+          height="100%"
+          fill="none"
+          stroke={color}
+          strokeWidth={chrome.strokeWidth * inverseViewportZoom}
+          shapeRendering="geometricPrecision"
+        />
+        {isResizable && DIRECTIONS.map(direction => {
+          const anchorX = `${direction.xFactor * 100}%`
+          const anchorY = `${direction.yFactor * 100}%`
+          return (
+            <g
+              key={direction.name}
+              className={`axiom-floating-resize-handle nodrag nopan ${direction.vertical ?? ''} ${direction.horizontal ?? ''}`}
+              data-resize-direction={direction.name}
+              onPointerDown={event => onPointerDown(event, direction)}
+              onClick={event => { event.preventDefault(); event.stopPropagation() }}
+              style={{ cursor: direction.cursor, pointerEvents: 'all', touchAction: 'none' }}
+            >
+              <rect
+                x={anchorX}
+                y={anchorY}
+                width={handleSize}
+                height={handleSize}
+                rx={handleSize * 0.18}
+                fill="#fff"
+                transform={`translate(${-handleSize / 2} ${-handleSize / 2})`}
+                pointerEvents="none"
+              />
+              <rect
+                x={anchorX}
+                y={anchorY}
+                width={innerHandleSize}
+                height={innerHandleSize}
+                rx={innerHandleSize * 0.12}
+                fill={color}
+                transform={`translate(${-innerHandleSize / 2} ${-innerHandleSize / 2})`}
+                pointerEvents="none"
+              />
+              <rect
+                x={anchorX}
+                y={anchorY}
+                width={hitSize}
+                height={hitSize}
+                fill="transparent"
+                transform={`translate(${-hitSize / 2} ${-hitSize / 2})`}
+                pointerEvents="all"
+              />
+            </g>
+          )
+        })}
+      </svg>
     </div>
   )
 }

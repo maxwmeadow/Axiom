@@ -29,7 +29,73 @@ export interface FloatingResizeBounds {
   maxHeight: number
 }
 
+export interface ResizeChromeGeometry {
+  /** Desired composed screen width of the SVG outline. */
+  strokeWidth: number
+  /** Whole-pixel base size counter-scaled against the canvas transform. */
+  handleSize: number
+  /** Whole-pixel base hit target counter-scaled against the canvas transform. */
+  hitSize: number
+}
+
+export interface ResizeDimensionSources {
+  controlled?: number | null
+  styled?: number | null
+  rendered?: number | null
+  measured?: number | null
+}
+
+export const RESIZE_OUTLINE_SCREEN_PX = 1
+export const RESIZE_HANDLE_SCREEN_PX = 8
+export const RESIZE_HIT_TARGET_SCREEN_PX = 18
+
+export interface ClientToFlowTransform {
+  viewportX: number
+  viewportY: number
+  zoom: number
+  paneLeft: number
+  paneTop: number
+}
+
 const safeScale = (value: number): number => Number.isFinite(value) && value > 0 ? value : 1
+
+/**
+ * Choose the exact controlled node dimension before React Flow's DOM
+ * measurement. XYFlow measures with offsetWidth/offsetHeight, which discard
+ * fractions and are unsuitable as a resize baseline at extreme zoom.
+ */
+export function authoritativeResizeDimension(sources: ResizeDimensionSources, fallback = 1): number {
+  for (const value of [sources.controlled, sources.styled, sources.rendered, sources.measured]) {
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+  }
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : 1
+}
+
+/**
+ * Selection chrome rides the node's own DOM transform so it updates on the
+ * exact same compositor frame. Its fixed-size pieces are counter-scaled by
+ * the viewport zoom, making these values literal composed browser pixels.
+ */
+export function resizeChromeGeometry(): ResizeChromeGeometry {
+  return {
+    strokeWidth: RESIZE_OUTLINE_SCREEN_PX,
+    handleSize: RESIZE_HANDLE_SCREEN_PX,
+    hitSize: RESIZE_HIT_TARGET_SCREEN_PX,
+  }
+}
+
+/** Convert a browser client point into React Flow coordinates without rounding. */
+export function clientPointToFlow(
+  point: { x: number; y: number },
+  transform: ClientToFlowTransform,
+): { x: number; y: number } {
+  const zoom = safeScale(transform.zoom)
+  const finite = (value: number): number => Number.isFinite(value) ? value : 0
+  return {
+    x: (finite(point.x) - finite(transform.paneLeft) - finite(transform.viewportX)) / zoom,
+    y: (finite(point.y) - finite(transform.paneTop) - finite(transform.viewportY)) / zoom,
+  }
+}
 
 /**
  * Apply a screen-space pointer delta to a flow-space rectangle without
@@ -45,8 +111,8 @@ export function floatingResizeGeometry(
   bounds: FloatingResizeBounds,
 ): NodeResizeParams {
   const viewportZoom = safeScale(zoom)
-  const deltaX = screenDelta.x / viewportZoom
-  const deltaY = screenDelta.y / viewportZoom
+  const deltaX = (Number.isFinite(screenDelta.x) ? screenDelta.x : 0) / viewportZoom
+  const deltaY = (Number.isFinite(screenDelta.y) ? screenDelta.y : 0) / viewportZoom
   const minWidth = Math.max(0, bounds.minWidth)
   const minHeight = Math.max(0, bounds.minHeight)
   const maxWidth = Math.max(minWidth, bounds.maxWidth)

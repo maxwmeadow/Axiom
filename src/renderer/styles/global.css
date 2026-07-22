@@ -206,16 +206,11 @@ a { color: var(--accent); text-decoration: none; }
 
 /* ─── Xyflow overrides ──────────────────────────────────────────────────── */
 
-/* Animate container size changes from the layout engine.
-   Only width/height are transitioned — NOT transform (position).
-   React Flow's hit-testing uses positionAbsolute (stored state, not CSS-animated),
-   so animating `transform` causes a mismatch between the visual node location and
-   where React Flow thinks the node is, breaking clicks and drop detection. */
+/* Node geometry is authoritative interaction state. CSS interpolation makes
+   the visible selection box lag behind React Flow's measured hit box during
+   resize and persistence rebuilds. Tidy animation is explicitly scoped below. */
 .react-flow__node {
-  transition: width 0.25s ease-out, height 0.25s ease-out;
-}
-.react-flow__node.dragging {
-  transition: none !important;
+  transition: none;
 }
 
 /* Drafting-paper grid: fine minor lines with a stronger major line every 5th */
@@ -383,42 +378,15 @@ a { color: var(--accent); text-decoration: none; }
     height 500ms cubic-bezier(0.16, 1, 0.3, 1),
     opacity 400ms ease-in-out;
 }
-/* An interactive resize emits geometry every frame; the idle width/height
-   ease would perpetually lag those steps and smear ghost outlines. Placed
-   after .layout-transition so it wins while a resize is live. */
+/* A resize can begin while a tidy animation is winding down. */
+.react-flow__node.dragging,
 .react-flow__node.axiom-resizing {
   transition: none !important;
 }
 
-/* Resize selection chrome belongs to the node's presentation coordinate
-   system. React Flow's fixed canvas-pixel defaults explode at high zoom. */
-.react-flow__resize-control.handle.axiom-resize-handle {
-  /* Exact dimensions are inline because Chromium cannot multiply 5px by a
-     unitless custom property. This class remains the stable style hook. */
-}
-
-.react-flow__resize-control.line.axiom-resize-line.left,
-.react-flow__resize-control.line.axiom-resize-line.right {
-  width: var(--axiom-resize-stroke, 1px);
-}
-
-.react-flow__resize-control.line.axiom-resize-line.left {
-  border-left-width: var(--axiom-resize-stroke, 1px);
-}
-
-.react-flow__resize-control.line.axiom-resize-line.right {
-  border-right-width: var(--axiom-resize-stroke, 1px);
-}
-
-.react-flow__resize-control.line.axiom-resize-line.top,
-.react-flow__resize-control.line.axiom-resize-line.bottom {
-  height: var(--axiom-resize-stroke, 1px);
-}
-
-.react-flow__resize-control.line.axiom-resize-line.top {
-  border-top-width: var(--axiom-resize-stroke, 1px);
-}
-
-.react-flow__resize-control.line.axiom-resize-line.bottom {
-  border-bottom-width: var(--axiom-resize-stroke, 1px);
+/* Chromium can retain the previous filtered SVG surface while its backing
+   geometry is resized. The shadow returns immediately at pointer-up; keeping
+   the live resize path unfiltered prevents a stale larger shell from ghosting. */
+.react-flow__node.axiom-resizing .axiom-shape-backdrop-path {
+  filter: none !important;
 }

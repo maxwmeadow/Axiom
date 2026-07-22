@@ -1,8 +1,23 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { childPositionAfterParentResize, fitPresentationScale, floatingResizeGeometry, minimumContainerSize, resizeChanged, toCanonicalResizeGeometry } from './resizeGeometry.ts'
+import { authoritativeResizeDimension, childPositionAfterParentResize, clientPointToFlow, fitPresentationScale, floatingResizeGeometry, minimumContainerSize, resizeChanged, resizeChromeGeometry, toCanonicalResizeGeometry } from './resizeGeometry.ts'
 
 const unlimitedBounds = { minWidth: 1, minHeight: 1, maxWidth: Number.MAX_VALUE, maxHeight: Number.MAX_VALUE }
+
+test('uses fractional controlled dimensions instead of integer DOM measurements', () => {
+  assert.equal(authoritativeResizeDimension({
+    controlled: 12.3407,
+    styled: 12.3407,
+    rendered: 12.3407,
+    measured: 12,
+  }), 12.3407)
+  assert.equal(authoritativeResizeDimension({
+    controlled: undefined,
+    styled: 3.20394,
+    rendered: 3,
+    measured: 3,
+  }), 3.20394)
+})
 
 test('preserves floating-point resize precision at 100x zoom', () => {
   const result = floatingResizeGeometry(
@@ -24,6 +39,49 @@ test('does not asymmetrically floor a one-pixel negative resize', () => {
     unlimitedBounds,
   )
   assert.equal(result.width, 3.99)
+})
+
+test('ignores non-finite pointer samples instead of corrupting node geometry', () => {
+  const result = floatingResizeGeometry(
+    { x: 10, y: 20, width: 40, height: 30 },
+    { horizontal: 'right', vertical: 'bottom' },
+    { x: Number.NaN, y: Number.POSITIVE_INFINITY },
+    100,
+    unlimitedBounds,
+  )
+  assert.deepEqual(result, { x: 10, y: 20, width: 40, height: 30 })
+})
+
+test('resize chrome has stable browser-pixel geometry at ordinary zoom', () => {
+  assert.deepEqual(resizeChromeGeometry(), {
+    strokeWidth: 1,
+    handleSize: 8,
+    hitSize: 18,
+  })
+})
+
+test('screen-space resize chrome is independent of canvas zoom', () => {
+  const expected = resizeChromeGeometry()
+  for (const _zoom of [0.02, 0.1, 1, 10, 100]) {
+    assert.deepEqual(resizeChromeGeometry(), expected)
+  }
+})
+
+test('client-to-flow conversion stays exact through extreme zoom and viewport movement', () => {
+  assert.deepEqual(
+    clientPointToFlow(
+      { x: 850, y: 540 },
+      { viewportX: -150, viewportY: 40, zoom: 100, paneLeft: 0, paneTop: 0 },
+    ),
+    { x: 10, y: 5 },
+  )
+  assert.deepEqual(
+    clientPointToFlow(
+      { x: 850, y: 540 },
+      { viewportX: 340, viewportY: 150, zoom: 25, paneLeft: 10, paneTop: 15 },
+    ),
+    { x: 20, y: 15 },
+  )
 })
 
 test('left and top minimum clamps preserve the opposite edges', () => {

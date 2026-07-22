@@ -2350,6 +2350,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       data: {
         ...n.data,
         onResizeStart: readOnly ? undefined : (params: NodeResizeParams) => {
+          // Resize geometry must never compete with a sheet/layout morph.
+          // Otherwise the previous larger frame remains composited behind the
+          // live frame and reads as a resize ghost.
+          setIsTransitioningLayout(false)
           resizingNodeIdRef.current = n.id
           draggingNodeIdRef.current = null
           dragPositionRef.current.delete(n.id)
@@ -3252,6 +3256,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           data: {
             ...n.data,
             onResizeStart: readOnly ? undefined : (params: NodeResizeParams) => {
+              setIsTransitioningLayout(false)
               resizingNodeIdRef.current = n.id
               draggingNodeIdRef.current = null
               dragPositionRef.current.delete(n.id)
@@ -3301,12 +3306,97 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     })
   }, [selectionMode, overlaySheetId, readOnly])
 
+  const traceCanvasHit = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.altKey) return
+    const point = { x: event.clientX, y: event.clientY }
+    const stack = document.elementsFromPoint(point.x, point.y).slice(0, 12).map(element => {
+      const html = element as HTMLElement
+      return {
+        tag: html.tagName.toLowerCase(),
+        id: html.id || null,
+        className: typeof html.className === 'string' ? html.className : null,
+        dataId: html.dataset?.id ?? null,
+        resizeDirection: html.dataset?.resizeDirection ?? null,
+        pointerEvents: getComputedStyle(html).pointerEvents,
+      }
+    })
+    const claimingNodes = [...(canvasRootRef.current?.querySelectorAll<HTMLElement>('.react-flow__node') ?? [])]
+      .filter(element => {
+        const rect = element.getBoundingClientRect()
+        return point.x >= rect.left && point.x <= rect.right && point.y >= rect.top && point.y <= rect.bottom
+      })
+      .map(element => {
+        const id = element.dataset.id ?? ''
+        const rect = element.getBoundingClientRect()
+        const node = displayNodesRef.current.find(candidate => candidate.id === id)
+        const resizer = [...(canvasRootRef.current?.querySelectorAll<HTMLElement>('.axiom-node-resizer') ?? [])]
+          .find(candidate => candidate.dataset.nodeId === id) ?? null
+        const handles = resizer ? [...resizer.querySelectorAll<HTMLElement>('.axiom-floating-resize-handle')] : []
+        return {
+          id,
+          selected: element.classList.contains('selected'),
+          rectX: rect.x,
+          rectY: rect.y,
+          rectWidth: rect.width,
+          rectHeight: rect.height,
+          pointerEvents: getComputedStyle(element).pointerEvents,
+          inlineStyle: element.getAttribute('style'),
+          modelWidth: node?.width ?? null,
+          modelHeight: node?.height ?? null,
+          modelStyleWidth: node?.style?.width ?? null,
+          modelStyleHeight: node?.style?.height ?? null,
+          resizerRect: resizer ? (() => {
+            const value = resizer.getBoundingClientRect()
+            return { x: value.x, y: value.y, width: value.width, height: value.height }
+          })() : null,
+          handleRects: handles.map(handle => {
+            const value = handle.getBoundingClientRect()
+            return { direction: handle.dataset.resizeDirection, x: value.x, y: value.y, width: value.width, height: value.height }
+          }),
+        }
+      })
+    const payload = {
+      point,
+      viewport: getViewport(),
+      target: stack[0] ?? null,
+      elementStack: stack,
+      claimingNodes,
+    }
+    const flatNodes = claimingNodes.map(node => {
+      const handles = node.handleRects.map(handle =>
+        `${handle.direction}:${handle.width.toFixed(1)}x${handle.height.toFixed(1)}`).join(',') || 'none'
+      return `${node.id}[selected=${node.selected},rect=${node.rectWidth.toFixed(1)}x${node.rectHeight.toFixed(1)},handles=${handles}]`
+    }).join(' | ') || 'none'
+    console.warn(
+      `[AxiomHitTraceSummary] point=${point.x},${point.y} zoom=${payload.viewport.zoom} ` +
+      `target=${payload.target?.className ?? payload.target?.tag ?? 'none'} claiming=${flatNodes}`,
+    )
+    console.warn('[AxiomHitTrace]', payload)
+    window.setTimeout(() => {
+      const selected = [...(canvasRootRef.current?.querySelectorAll<HTMLElement>('.react-flow__node.selected') ?? [])]
+        .map(element => {
+          const rect = element.getBoundingClientRect()
+          const resizer = [...(canvasRootRef.current?.querySelectorAll<HTMLElement>('.axiom-node-resizer') ?? [])]
+            .find(candidate => candidate.dataset.nodeId === element.dataset.id)
+          const firstHandle = resizer?.querySelector<HTMLElement>('.axiom-floating-resize-handle') ?? null
+          const firstVisual = firstHandle?.firstElementChild as HTMLElement | null
+          const hitRect = firstHandle?.getBoundingClientRect()
+          const visualRect = firstVisual?.getBoundingClientRect()
+          return `${element.dataset.id}[node=${rect.width.toFixed(1)}x${rect.height.toFixed(1)},` +
+            `hit=${hitRect ? `${hitRect.width.toFixed(1)}x${hitRect.height.toFixed(1)}` : 'none'},` +
+            `visual=${visualRect ? `${visualRect.width.toFixed(1)}x${visualRect.height.toFixed(1)}` : 'none'}]`
+        })
+      console.warn(`[AxiomPostClickSummary] selected=${selected.join(' | ') || 'none'}`)
+    }, 100)
+  }, [getViewport])
+
   return (
     <div
       ref={canvasRootRef}
       className={isTransitioningLayout ? 'layout-transition' : undefined}
       onDragOverCapture={onOverlayDragOver}
       onDropCapture={onOverlayDrop}
+      onPointerDownCapture={traceCanvasHit}
       onPointerMoveCapture={traceSuspiciousCursor}
       style={{ width: '100%', height: '100%', position: 'relative' }}
     >

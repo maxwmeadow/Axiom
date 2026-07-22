@@ -11,7 +11,7 @@ type ResizeTraceSession = {
   presentationScale: number
   direction: string
   root: HTMLElement | null
-  target: HTMLElement | null
+  target: Element | null
   startClientX: number
   startClientY: number
   previousClientX: number
@@ -19,6 +19,8 @@ type ResizeTraceSession = {
   start: NodeResizeParams
   previous: NodeResizeParams
   rows: ResizeTraceRow[]
+  frameRows: ResizeTraceRow[]
+  frameRafId: number | null
 }
 
 let nextResizeTraceId = 0
@@ -53,7 +55,8 @@ function sourcePointer(event: unknown): {
   movementX: number | null
   movementY: number | null
   coalescedEvents: number
-  target: HTMLElement | null
+  altKey: boolean
+  target: Element | null
   d3X: number | null
   d3Y: number | null
   d3Dx: number | null
@@ -71,6 +74,7 @@ function sourcePointer(event: unknown): {
       movementY?: number
       target?: EventTarget | null
       getCoalescedEvents?: () => unknown[]
+      altKey?: boolean
       touches?: ArrayLike<{ clientX: number; clientY: number }>
     }
   }
@@ -82,7 +86,8 @@ function sourcePointer(event: unknown): {
     movementX: typeof source?.movementX === 'number' ? source.movementX : null,
     movementY: typeof source?.movementY === 'number' ? source.movementY : null,
     coalescedEvents: typeof source?.getCoalescedEvents === 'function' ? source.getCoalescedEvents().length : 0,
-    target: source?.target instanceof HTMLElement ? source.target : null,
+    altKey: source?.altKey === true,
+    target: source?.target instanceof Element ? source.target : null,
     d3X: typeof drag.x === 'number' ? drag.x : null,
     d3Y: typeof drag.y === 'number' ? drag.y : null,
     d3Dx: typeof drag.dx === 'number' ? drag.dx : null,
@@ -106,9 +111,74 @@ function viewportZoom(root: HTMLElement | null): number {
   }
 }
 
-function resizeDirection(target: HTMLElement | null): string {
+function resizeDirection(target: Element | null): string {
   if (!target) return 'unknown'
   return ['top', 'right', 'bottom', 'left'].filter(direction => target.classList.contains(direction)).join('-') || 'unknown'
+}
+
+function renderedFrame(session: ResizeTraceSession, timestamp: number): void {
+  const node = session.target?.closest<HTMLElement>('.react-flow__node') ?? null
+  const chrome = session.target?.closest<HTMLElement>('.axiom-node-resizer') ?? null
+  const handle = session.target
+  if (!node || !chrome || !handle) return
+
+  const nodeRect = node.getBoundingClientRect()
+  const chromeRect = chrome.getBoundingClientRect()
+  const handleRect = handle.getBoundingClientRect()
+  const computed = getComputedStyle(node)
+  const previous = session.frameRows.at(-1)
+  const zoom = viewportZoom(session.root)
+  const handleCenterX = handleRect.left + handleRect.width / 2
+  const handleCenterY = handleRect.top + handleRect.height / 2
+  const expectedHandleX = session.direction.includes('left')
+    ? nodeRect.left
+    : session.direction.includes('right') ? nodeRect.right : nodeRect.left + nodeRect.width / 2
+  const expectedHandleY = session.direction.includes('top')
+    ? nodeRect.top
+    : session.direction.includes('bottom') ? nodeRect.bottom : nodeRect.top + nodeRect.height / 2
+  const previousNumber = (key: string): number | null => {
+    const value = previous?.[key]
+    return typeof value === 'number' ? value : null
+  }
+  const previousTime = previousNumber('tMs')
+  const previousX = previousNumber('nodeScreenX')
+  const previousY = previousNumber('nodeScreenY')
+  const previousWidth = previousNumber('nodeScreenWidth')
+  const previousHeight = previousNumber('nodeScreenHeight')
+
+  session.frameRows.push({
+    frame: session.frameRows.length + 1,
+    tMs: timestamp - session.startedAt,
+    frameGapMs: previousTime === null ? 0 : timestamp - session.startedAt - previousTime,
+    latestPointerSample: session.rows.length,
+    zoom,
+    requestedXFlow: session.previous.x,
+    requestedYFlow: session.previous.y,
+    requestedWidthFlow: session.previous.width,
+    requestedHeightFlow: session.previous.height,
+    computedNodeWidthFlow: Number.parseFloat(computed.width),
+    computedNodeHeightFlow: Number.parseFloat(computed.height),
+    offsetNodeWidthIntegerFlow: node.offsetWidth,
+    offsetNodeHeightIntegerFlow: node.offsetHeight,
+    inlineNodeWidth: node.style.width || null,
+    inlineNodeHeight: node.style.height || null,
+    nodeScreenX: nodeRect.left,
+    nodeScreenY: nodeRect.top,
+    nodeScreenWidth: nodeRect.width,
+    nodeScreenHeight: nodeRect.height,
+    nodeScreenStepX: previousX === null ? 0 : nodeRect.left - previousX,
+    nodeScreenStepY: previousY === null ? 0 : nodeRect.top - previousY,
+    nodeScreenStepWidth: previousWidth === null ? 0 : nodeRect.width - previousWidth,
+    nodeScreenStepHeight: previousHeight === null ? 0 : nodeRect.height - previousHeight,
+    chromeLeftErrorScreen: chromeRect.left - nodeRect.left,
+    chromeTopErrorScreen: chromeRect.top - nodeRect.top,
+    chromeRightErrorScreen: chromeRect.right - nodeRect.right,
+    chromeBottomErrorScreen: chromeRect.bottom - nodeRect.bottom,
+    handleCenterX,
+    handleCenterY,
+    handleEdgeErrorXScreen: handleCenterX - expectedHandleX,
+    handleEdgeErrorYScreen: handleCenterY - expectedHandleY,
+  })
 }
 
 export function traceResizeStart(
@@ -118,6 +188,10 @@ export function traceResizeStart(
   presentationScale: number,
 ): void {
   const pointer = sourcePointer(event)
+  // Continuous DOM measurement is deliberately opt-in: getBoundingClientRect
+  // on every animation frame forces layout and can itself make a resize feel
+  // less fluid. Hold Alt while beginning a resize when a trace is needed.
+  if (!pointer.altKey) return
   const target = pointer.target
   const root = target?.closest<HTMLElement>('.react-flow') ?? null
   const zoom = viewportZoom(root)
@@ -138,8 +212,16 @@ export function traceResizeStart(
     start: { ...params },
     previous: { ...params },
     rows: [],
+    frameRows: [],
+    frameRafId: null,
   }
   resizeTraceSessions.set(nodeId, session)
+  const sampleFrame = (timestamp: number) => {
+    if (resizeTraceSessions.get(nodeId) !== session) return
+    renderedFrame(session, timestamp)
+    session.frameRafId = requestAnimationFrame(sampleFrame)
+  }
+  session.frameRafId = requestAnimationFrame(sampleFrame)
   requestAnimationFrame(() => {
     const computed = target ? window.getComputedStyle(target) : null
     const rect = target?.getBoundingClientRect()
@@ -260,41 +342,74 @@ export function traceResizeEnd(event: unknown, params: NodeResizeParams, nodeId:
   const session = resizeTraceSessions.get(nodeId)
   if (!session) return
   traceResizeStep(event, params, nodeId)
-  const zoom = viewportZoom(session.root)
   const pointer = sourcePointer(event)
-  const numericSteps = (key: string) => session.rows
-    .map(row => typeof row[key] === 'number' ? Math.abs(row[key] as number) : 0)
-    .filter(value => value > Number.EPSILON)
-  const flowSteps = [...numericSteps('xStepFlow'), ...numericSteps('yStepFlow'), ...numericSteps('widthStepFlow'), ...numericSteps('heightStepFlow')]
-  const screenSteps = [...numericSteps('xStepScreen'), ...numericSteps('yStepScreen'), ...numericSteps('widthStepScreen'), ...numericSteps('heightStepScreen')]
-  const summary = {
-    nodeId,
-    direction: session.direction,
-    elapsedMs: performance.now() - session.startedAt,
-    zoomAtEnd: zoom,
-    browserCssPixelsPerFlowUnit: zoom,
-    flowUnitsPerBrowserCssPixel: 1 / zoom,
-    devicePixelRatio: window.devicePixelRatio,
-    samples: session.rows.length,
-    smallestGeometryStepFlowUnits: flowSteps.length ? Math.min(...flowSteps) : 0,
-    smallestGeometryStepBrowserCssPixels: screenSteps.length ? Math.min(...screenSteps) : 0,
-    startPointerCss: { x: session.startClientX, y: session.startClientY },
-    endPointerCss: { x: pointer.clientX, y: pointer.clientY },
-    totalPointerCss: { x: pointer.clientX - session.startClientX, y: pointer.clientY - session.startClientY },
-    startGeometryFlowUnits: session.start,
-    endGeometryFlowUnits: params,
-    geometryDeltaFlowUnits: {
-      x: params.x - session.start.x,
-      y: params.y - session.start.y,
-      width: params.width - session.start.width,
-      height: params.height - session.start.height,
-    },
-  }
-  console.groupCollapsed(`[AxiomResizeTrace #${session.id}] COMPLETE — ${nodeId} — ${session.direction}`)
-  console.info('Summary and unit conversion', summary)
-  console.info('Every React Flow resize sample — pointer input compared with rectangle output')
-  console.table(session.rows)
-  console.log('Copyable raw resize trace', { summary, samples: session.rows })
-  console.groupEnd()
-  resizeTraceSessions.delete(nodeId)
+  if (session.frameRafId !== null) cancelAnimationFrame(session.frameRafId)
+
+  // Capture the controlled React update and one subsequent paint before
+  // reporting. Immediate pointer-up logging misses the exact frame where a
+  // stale controlled node or persistence rebuild can snap the visuals.
+  requestAnimationFrame(timestamp => {
+    renderedFrame(session, timestamp)
+    requestAnimationFrame(finalTimestamp => {
+      renderedFrame(session, finalTimestamp)
+      const zoom = viewportZoom(session.root)
+      const numericSteps = (rows: ResizeTraceRow[], key: string) => rows
+        .map(row => typeof row[key] === 'number' ? Math.abs(row[key] as number) : 0)
+        .filter(value => value > Number.EPSILON)
+      const flowSteps = [
+        ...numericSteps(session.rows, 'xStepFlow'), ...numericSteps(session.rows, 'yStepFlow'),
+        ...numericSteps(session.rows, 'widthStepFlow'), ...numericSteps(session.rows, 'heightStepFlow'),
+      ]
+      const requestedScreenSteps = [
+        ...numericSteps(session.rows, 'xStepScreen'), ...numericSteps(session.rows, 'yStepScreen'),
+        ...numericSteps(session.rows, 'widthStepScreen'), ...numericSteps(session.rows, 'heightStepScreen'),
+      ]
+      const paintedScreenSteps = [
+        ...numericSteps(session.frameRows, 'nodeScreenStepX'), ...numericSteps(session.frameRows, 'nodeScreenStepY'),
+        ...numericSteps(session.frameRows, 'nodeScreenStepWidth'), ...numericSteps(session.frameRows, 'nodeScreenStepHeight'),
+      ]
+      const chromeErrors = [
+        ...numericSteps(session.frameRows, 'chromeLeftErrorScreen'), ...numericSteps(session.frameRows, 'chromeTopErrorScreen'),
+        ...numericSteps(session.frameRows, 'chromeRightErrorScreen'), ...numericSteps(session.frameRows, 'chromeBottomErrorScreen'),
+      ]
+      const frameGaps = numericSteps(session.frameRows, 'frameGapMs')
+      const summary = {
+        nodeId,
+        direction: session.direction,
+        elapsedMs: performance.now() - session.startedAt,
+        zoomAtEnd: zoom,
+        browserCssPixelsPerFlowUnit: zoom,
+        flowUnitsPerBrowserCssPixel: 1 / zoom,
+        devicePixelRatio: window.devicePixelRatio,
+        pointerSamples: session.rows.length,
+        paintedFrames: session.frameRows.length,
+        largestPaintFrameGapMs: frameGaps.length ? Math.max(...frameGaps) : 0,
+        smallestGeometryStepFlowUnits: flowSteps.length ? Math.min(...flowSteps) : 0,
+        smallestRequestedStepBrowserCssPixels: requestedScreenSteps.length ? Math.min(...requestedScreenSteps) : 0,
+        smallestPaintedStepBrowserCssPixels: paintedScreenSteps.length ? Math.min(...paintedScreenSteps) : 0,
+        largestPaintedStepBrowserCssPixels: paintedScreenSteps.length ? Math.max(...paintedScreenSteps) : 0,
+        largestChromeToNodeErrorBrowserCssPixels: chromeErrors.length ? Math.max(...chromeErrors) : 0,
+        startPointerCss: { x: session.startClientX, y: session.startClientY },
+        endPointerCss: { x: pointer.clientX, y: pointer.clientY },
+        totalPointerCss: { x: pointer.clientX - session.startClientX, y: pointer.clientY - session.startClientY },
+        startGeometryFlowUnits: session.start,
+        endGeometryFlowUnits: params,
+        geometryDeltaFlowUnits: {
+          x: params.x - session.start.x,
+          y: params.y - session.start.y,
+          width: params.width - session.start.width,
+          height: params.height - session.start.height,
+        },
+      }
+      console.groupCollapsed(`[AxiomResizeFrameTrace #${session.id}] COMPLETE — ${nodeId} — ${session.direction}`)
+      console.info('Frame/pointer summary', summary)
+      console.info('Pointer events and requested floating-point geometry')
+      console.table(session.rows)
+      console.info('Every painted animation frame: requested geometry vs actual node/chrome DOM')
+      console.table(session.frameRows)
+      console.log('[AxiomResizeFrameTraceRaw]', { summary, pointerSamples: session.rows, paintedFrames: session.frameRows })
+      console.groupEnd()
+      resizeTraceSessions.delete(nodeId)
+    })
+  })
 }

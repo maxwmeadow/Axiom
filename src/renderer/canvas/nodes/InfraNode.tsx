@@ -28,7 +28,8 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
   if (!svc) return <div style={{
     width: '100%', height: '100%', position: 'relative', userSelect: 'none', cursor: 'grab',
   }}>
-    <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} isVisible={selected}
+    <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
+      isResizable={typeof d.onResizeStart === 'function' && typeof d.onResizeEnd === 'function'}
       minWidth={1} minHeight={1} color="var(--accent)"
       onResizeStart={d.onResizeStart} onResizeEnd={d.onResizeEnd} />
     <div style={{
@@ -37,7 +38,7 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       gap: 9, padding: '12px 28px',
     }}>
-      <ShapeBackdrop shape="hexagon" stroke={selected ? 'var(--accent)' : 'var(--border)'} strokeWidth={selected ? 1.8 : 1} />
+      <ShapeBackdrop shape="hexagon" stroke="var(--border)" strokeWidth={1} />
       <EditableNodeTitle value={d.name} onRename={d.onRename} style={{
         color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
         textAlign: 'center', maxWidth: '78%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -68,7 +69,8 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       cursor: 'grab',
       userSelect: 'none',
     }}>
-      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} isVisible={selected}
+      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
+        isResizable={typeof d.onResizeStart === 'function' && typeof d.onResizeEnd === 'function'}
         minWidth={1} minHeight={1} color={accent}
         onResizeStart={d.onResizeStart} onResizeEnd={d.onResizeEnd} />
       <div style={{
@@ -88,7 +90,7 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       transition: 'border-color 0.15s ease, opacity 0.15s ease',
       boxShadow: 'none',
     }}>
-      <ShapeBackdrop shape={shape} stroke={selected ? accent : 'var(--border)'} strokeWidth={selected ? 1.8 : 1} dashed={proposed} />
+      <ShapeBackdrop shape={shape} stroke="var(--border)" strokeWidth={1} dashed={proposed} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         {officialIcon ? (
           <img src={officialIcon} width={14} height={14} alt="" style={{ flexShrink: 0 }} />
