@@ -37,6 +37,10 @@ test.beforeEach(async () => {
   await expect(page.getByText('Axiom Canvas Fixture')).toBeVisible()
   await expect(page.locator('.react-flow__node[data-id="file_canvas"]')).toBeVisible()
   await expect(page.getByText(/Zoom: \d+\.\d{2}x/)).toBeVisible()
+  // Initial sheet chrome and fitView animations run for 500ms and 400ms.
+  // Measure interactions only after both have reached their authored frame.
+  await expect(page.locator('.layout-transition')).toHaveCount(0)
+  await page.waitForTimeout(600)
 })
 
 test.afterEach(async () => {
@@ -73,6 +77,27 @@ test('keeps resize chrome screen-sized and attached while resizing', async () =>
   expect(resizedNode!.y).toBeCloseTo(initialNode.y, 0)
   expect(resizedNode!.width).toBeGreaterThan(initialNode.width + 25)
   expect(resizedNode!.height).toBeGreaterThan(initialNode.height + 15)
+})
+
+test('supports click, pane deselection, and partial lasso selection', async () => {
+  const node = page.locator('.react-flow__node[data-id="infra_mcp_proto"]')
+  await node.click()
+  await expect(node).toHaveClass(/selected/)
+
+  await page.locator('.react-flow__pane').click({ position: { x: 1000, y: 650 } })
+  await expect(node).not.toHaveClass(/selected/)
+
+  await page.getByRole('button', { name: 'Lasso Select' }).click()
+  await expect(page.getByRole('button', { name: 'Lasso Active' })).toBeVisible()
+  const box = await node.boundingBox()
+  expect(box).not.toBeNull()
+  if (!box) return
+
+  await page.mouse.move(box.x - 8, box.y - 8)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 8 })
+  await page.mouse.up()
+  await expect(node).toHaveClass(/selected/)
 })
 
 test('wheel zoom continues over revealed file content through 100x', async () => {

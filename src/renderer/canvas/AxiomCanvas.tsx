@@ -64,6 +64,7 @@ import { resizeChanged, type NodeResizeParams } from './resizeGeometry'
 import { planFloorResize, planSheetResize, replaceFloorLayouts, type ResizeSessionStart } from './resizePersistence'
 import { projectFloorNodes, type FloorSceneDescriptor } from './floorSceneProjection'
 import { easeViewportTowardZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, nextWheelZoomTarget, ZOOM_SNAP_EPSILON, zoomViewportAroundPoint } from './viewportMath'
+import { emptySelection, selectionAfterNodeChanges, singleNodeSelection, stampSelection } from './selectionController'
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
@@ -2209,10 +2210,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       },
     }))
     const withZoom = applyZoomVisibility(layoutWithCallbacks, currentZoomRef.current)
-    const fixed = withZoom.map(node => ({
-      ...node,
-      selected: selectedIdsRef.current.has(node.id) || node.id === selectedNodeId,
-    }))
+    const fixed = stampSelection(withZoom, selectedIdsRef.current, selectedNodeId)
     setRfNodes(fixed)
     setRfEdges(newEdges)
     // Signal overlay effects (runtime / focus / trace) to restamp their
@@ -2549,13 +2547,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           if (x !== null && y !== null) moveTrace.previousChangeByNodeId.set(change.id, { x, y })
         }
       }
-      for (const change of changes) {
-        if (change.type !== 'select') continue
-        const next = new Set(selectedIdsRef.current)
-        if (change.selected) next.add(change.id)
-        else next.delete(change.id)
-        selectedIdsRef.current = next
-      }
+      selectedIdsRef.current = selectionAfterNodeChanges(selectedIdsRef.current, changes)
       // North/west resize handles change the frame origin as well as its
       // dimensions. Apply the complete React Flow change set so the edge under
       // the pointer remains under the pointer and child compensation stays live.
@@ -2578,7 +2570,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   )
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
-    selectedIdsRef.current = new Set([node.id])
+    selectedIdsRef.current = singleNodeSelection(node.id)
     setSelectedNode(node.id)
     const target = event.target as HTMLElement | null
     if (!target?.closest('input, textarea, select, button, [contenteditable="true"], [data-node-editable="true"]')) {
@@ -2594,7 +2586,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [setSelectedNode, setInspectedNode])
 
   const onPaneClick = useCallback(() => {
-    selectedIdsRef.current = new Set()
+    selectedIdsRef.current = emptySelection()
     setSelectedNode(null)
     setInspectedNode(null)
   }, [setSelectedNode, setInspectedNode])
