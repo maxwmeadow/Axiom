@@ -8,6 +8,7 @@ import type { ProjectConfig, WsMessage } from '../src/shared/types'
 // electron-vite sets VITE_DEV_SERVER_URL in dev/preview mode only
 const IS_DEV = !!process.env.VITE_DEV_SERVER_URL
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
+const IS_E2E = process.env.AXIOM_E2E === '1'
 const CONFIG_DIR = join(os.homedir(), '.axiom')
 const PROJECTS_FILE = join(CONFIG_DIR, 'projects.json')
 const DATA_DIR = join(os.homedir(), '.axiom', 'data')
@@ -154,10 +155,15 @@ function createWindow(): void {
   })
 
   if (IS_DEV && DEV_SERVER_URL) {
-    mainWindow.loadURL(DEV_SERVER_URL)
-    mainWindow.webContents.openDevTools({ mode: 'detach' })
+    const rendererUrl = new URL(DEV_SERVER_URL)
+    if (IS_E2E) rendererUrl.searchParams.set('e2e', '1')
+    mainWindow.loadURL(rendererUrl.toString())
+    if (!IS_E2E) mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(
+      join(__dirname, '../renderer/index.html'),
+      IS_E2E ? { query: { e2e: '1' } } : undefined,
+    )
   }
 
   // Show as soon as the renderer is usable. ready-to-show alone is NOT
@@ -302,7 +308,7 @@ function setupIPC(): void {
 app.whenReady().then(() => {
   createWindow()
   setupIPC()
-  startArchd()
+  if (!IS_E2E) startArchd()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

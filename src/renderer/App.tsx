@@ -23,9 +23,20 @@ import { useShallow } from 'zustand/react/shallow'
 import { demoSnapshot } from './demo/demoGraph'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
+const E2E_MODE = new URLSearchParams(window.location.search).get('e2e') === '1'
+const E2E_PROJECT: ProjectConfig = {
+  id: 'demo',
+  name: 'Axiom Canvas Fixture',
+  rootPath: '/axiom-e2e',
+  ignoredPaths: [],
+  languageOverrides: {},
+  layoutPreferences: { zoom: 1, panX: 0, panY: 0 },
+  openedAt: 0,
+}
+
 export default function App() {
   const [searchOpen, setSearchOpen] = useState(false)
-  const [currentProject, setCurrentProject] = useState<ProjectConfig | null>(null)
+  const [currentProject, setCurrentProject] = useState<ProjectConfig | null>(E2E_MODE ? E2E_PROJECT : null)
   // Pending project awaiting setup configuration before indexing starts
   const [pendingSetup, setPendingSetup] = useState<ProjectConfig | null>(null)
   const [reviewActive, setReviewActive] = useState(false)
@@ -40,12 +51,18 @@ export default function App() {
 
   // In browser mode, connect to archd WebSocket on mount
   useEffect(() => {
+    if (E2E_MODE) {
+      setStoreProject(E2E_PROJECT)
+      setConnectionStatus('connected')
+      applySnapshot(demoSnapshot)
+      return
+    }
     if (!window.axiom) {
       connectToArchd()
     }
     // Infra service registry — one fetch, shared by canvas nodes and dialogs
     void useRegistryStore.getState().fetchRegistry()
-  }, [])
+  }, [applySnapshot, setConnectionStatus, setStoreProject])
 
   // Keyboard shortcuts
   useEffect(() => {

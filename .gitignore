@@ -3,6 +3,8 @@ dist/
 dist-electron/
 release/
 out/
+test-results/
+playwright-report/
 .axiom/
 *.sqlite
 *.sqlite-wal
