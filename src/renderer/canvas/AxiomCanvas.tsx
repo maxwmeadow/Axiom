@@ -58,13 +58,14 @@ import { plannedMembers, plannedMetadata, sheetElementMetadata, useSheetStore } 
 import type { PlannedNodeKind, PlannedNodeMetadata, SheetLayoutMutation } from '../store/sheetStore'
 import { filenameForLanguage, languageFromFilename } from './languages'
 import { apiUpdateSystem, apiSaveNodePosition, apiSaveFloorLayouts } from './arcdApi'
-import { boundsOf, contentRect, findUnscaledIncomingPlacement, fitReferenceFrame, FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, frameHeaderAllowance, highestSelectedRoots, localScaleAfterWorldFit, normalizeGeometry, transformReferencePoint } from './frameGeometry'
+import { contentRect, FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, frameHeaderAllowance, normalizeGeometry } from './frameGeometry'
 import { packFrame, placeIncoming } from './packing'
 import { resizeChanged, type NodeResizeParams } from './resizeGeometry'
 import { planFloorResize, planSheetResize, replaceFloorLayouts, type ResizeSessionStart } from './resizePersistence'
 import { projectFloorNodes, type FloorSceneDescriptor } from './floorSceneProjection'
 import { easeViewportTowardZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, nextWheelZoomTarget, ZOOM_SNAP_EPSILON, zoomViewportAroundPoint } from './viewportMath'
 import { emptySelection, selectionAfterNodeChanges, singleNodeSelection, stampSelection } from './selectionController'
+import { planFloorDrop, planSheetDrop } from './dropPersistence'
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
@@ -2863,110 +2864,37 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       const graph = useGraphStore.getState()
       const workspaceId = graph.currentProject?.id
       const all = displayNodesRef.current
-      const parentById = new Map(all.map(candidate => [candidate.id, candidate.parentId ?? null]))
-      const selected = all.filter(candidate => candidate.selected).map(candidate => candidate.id)
-      if (!selected.includes(node.id)) selected.push(node.id)
-      const roots = highestSelectedRoots(selected, parentById)
-        .map(id => all.find(candidate => candidate.id === id))
-        .filter((candidate): candidate is Node => !!candidate)
-      const targetNode = prevTarget ? all.find(candidate => candidate.id === prevTarget) : null
-      const changesParent = !!targetNode && roots.some(root => root.parentId !== targetNode.id)
-      // Reparenting changes the destination frame for the entire sibling set.
-      // Include the target's current direct children so the existing contents
-      // and the incoming selection are fitted as one group, without resizing
-      // the target container itself.
-      const incomingIds = new Set(roots.map(root => root.id))
-      const layoutRoots = changesParent && targetNode
-        ? [
-            ...all.filter(candidate => candidate.parentId === targetNode.id && !incomingIds.has(candidate.id)),
-            ...roots,
-          ]
-        : roots
-      const rootRects = layoutRoots.map(root => {
-        const absolute = getInternalNode(root.id)?.internals.positionAbsolute ?? root.position
-        return {
-          id: root.id, x: absolute.x, y: absolute.y,
-          width: Number(root.measured?.width ?? root.style?.width ?? 1),
-          height: Number(root.measured?.height ?? root.style?.height ?? 1),
-        }
+      const absolutePositions = new Map(all.map(candidate => [
+        candidate.id,
+        getInternalNode(candidate.id)?.internals.positionAbsolute ?? candidate.position,
+      ]))
+      const plan = planFloorDrop({
+        workspaceId: workspaceId ?? null,
+        draggedNodeId: node.id,
+        targetNodeId: prevTarget,
+        allNodes: all,
+        absolutePositions,
+        systemIds: new Set(graph.systems.map(system => system.id)),
+        fileIds: new Set(graph.files.map(file => file.id)),
+        infraIds: new Set(graph.infraNodes.map(infra => infra.id)),
+        floorLayouts: graph.floorLayouts,
       })
-      const targetAbsolute = targetNode
-        ? (getInternalNode(targetNode.id)?.internals.positionAbsolute ?? { x: 0, y: 0 })
-        : { x: 0, y: 0 }
-      const targetWorldScale = targetNode ? Number((targetNode.data as any).worldScale ?? 1) : 1
-      const targetContent = targetNode ? contentRect({
-        width: Number(targetNode.style?.width ?? targetNode.measured?.width ?? 1) / Math.max(0.0001, targetWorldScale),
-        height: Number(targetNode.style?.height ?? targetNode.measured?.height ?? 1) / Math.max(0.0001, targetWorldScale),
-      }) : null
-      const destination = targetContent ? {
-        x: targetAbsolute.x + targetContent.x * targetWorldScale,
-        y: targetAbsolute.y + targetContent.y * targetWorldScale,
-        width: targetContent.width * targetWorldScale,
-        height: targetContent.height * targetWorldScale,
-      } : null
-      // Preserve the authored reference frame. Existing siblings and incoming
-      // roots may overlap; a drop must never repack or otherwise rearrange
-      // them. If their combined bounds exceed the destination, the entire
-      // frame is translated/scaled uniformly below.
-      const placementRects = rootRects
-      const groupBounds = boundsOf(placementRects)
-      const incomingBounds = boundsOf(rootRects.filter(rect => incomingIds.has(rect.id)))
-      const occupiedRects = rootRects.filter(rect => !incomingIds.has(rect.id))
-      const incomingOffset = changesParent && destination && incomingBounds
-        ? findUnscaledIncomingPlacement(incomingBounds, destination, occupiedRects)
-        : null
-      const frameTransform = changesParent && !incomingOffset && groupBounds && destination && incomingBounds
-        ? fitReferenceFrame(groupBounds, destination, incomingBounds)
-        : null
-      const fit = frameTransform?.scale ?? 1
 
-      if (workspaceId && groupBounds) {
-        const updates: Omit<FloorLayout, 'workspaceId' | 'updatedAt'>[] = layoutRoots.map(root => {
-          const nodeType: FloorNodeType = graph.systems.some(system => system.id === root.id)
-            ? 'system' : graph.files.some(file => file.id === root.id) ? 'file' : 'infra'
-          const previous = graph.floorLayouts.find(layout => layout.nodeId === root.id && layout.nodeType === nodeType)
-          const rect = placementRects.find(candidate => candidate.id === root.id)!
-          const nextWorld = frameTransform
-            ? transformReferencePoint(rect, frameTransform)
-            : incomingIds.has(rect.id) && incomingOffset
-              ? { x: rect.x + incomingOffset.x, y: rect.y + incomingOffset.y }
-              : { x: rect.x, y: rect.y }
-          const oldWorldScale = Number((root.data as any).worldScale ?? previous?.scale ?? 1)
-          // A legacy/unpersisted container may have been auto-fitted around its
-          // children. Preserve that materialized frame on its first move rather
-          // than falling back to the smaller semantic/default dimensions.
-          const materializedWidth = Number(root.style?.width ?? rect.width) / Math.max(0.0001, oldWorldScale)
-          const materializedHeight = Number(root.style?.height ?? rect.height) / Math.max(0.0001, oldWorldScale)
-          const parentNodeType = targetNode
-            ? (graph.infraNodes.some(candidate => candidate.id === targetNode.id) ? 'infra' : 'system')
-            : null
-          return {
-            nodeId: root.id, nodeType, parentNodeId: targetNode?.id ?? null, parentNodeType,
-            containmentKind: parentNodeType === 'infra' ? 'hosted_by' : parentNodeType === 'system' ? 'part_of' : 'root',
-            positionX: targetNode ? (nextWorld.x - targetAbsolute.x) / targetWorldScale : nextWorld.x,
-            positionY: targetNode ? (nextWorld.y - targetAbsolute.y) / targetWorldScale : nextWorld.y,
-            width: previous?.width ?? materializedWidth,
-            height: previous?.height ?? materializedHeight,
-            scale: localScaleAfterWorldFit(oldWorldScale, fit, targetNode ? targetWorldScale : 1),
-          }
-        })
-        const changedKeys = new Set(updates.map(update => update.nodeType + ':' + update.nodeId))
-        const previousLayouts = graph.floorLayouts.filter(layout => changedKeys.has(layout.nodeType + ':' + layout.nodeId))
-        const optimistic = updates.map(update => ({ ...update, workspaceId, updatedAt: Date.now() }))
+      if (workspaceId && plan.updates.length > 0) {
         useGraphStore.setState(state => ({
-          floorLayouts: [...state.floorLayouts.filter(layout => !changedKeys.has(layout.nodeType + ':' + layout.nodeId)), ...optimistic],
+          floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.optimisticLayouts, plan.changedKeys),
         }))
-        void apiSaveFloorLayouts(workspaceId, updates).catch(error => {
+        void apiSaveFloorLayouts(workspaceId, plan.updates).catch(error => {
           console.error('[AxiomCanvas] floor group drop failed', error)
           useGraphStore.setState(state => ({
-            floorLayouts: [...state.floorLayouts.filter(layout => !changedKeys.has(layout.nodeType + ':' + layout.nodeId)), ...previousLayouts],
+            floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.previousLayouts, plan.changedKeys),
           }))
         })
       }
-      selectedIdsRef.current = new Set(selected)
+      selectedIdsRef.current = new Set(plan.selectedIds)
       updateInteractiveNodes(current => current.map(candidate => ({
         ...candidate,
-        selected: selected.includes(candidate.id),
+        selected: plan.selectedIds.includes(candidate.id),
         data: { ...candidate.data, isDropTarget: false, snapPreview: null, previewOffset: null },
       })))
       return
@@ -2976,86 +2904,27 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     const sheetId = sheetState.activeSheetId
     if (sheetId) {
       const all = displayNodesRef.current
-      const parentById = new Map(all.map(candidate => [candidate.id, candidate.parentId ?? null]))
-      const selected = all.filter(candidate => candidate.selected && activeNodeIds.has(candidate.id)).map(candidate => candidate.id)
-      if (!selected.includes(node.id)) selected.push(node.id)
-      const roots = highestSelectedRoots(selected, parentById)
-        .map(id => all.find(candidate => candidate.id === id))
-        .filter((candidate): candidate is Node => !!candidate)
-      const target = prevTarget ? all.find(candidate => candidate.id === prevTarget) : null
-      const changesParent = !!target && roots.some(root => root.parentId !== target.id)
-      const incomingIds = new Set(roots.map(root => root.id))
-      const layoutRoots = changesParent && target
-        ? [
-            ...all.filter(candidate => candidate.parentId === target.id && activeNodeIds.has(candidate.id) && !incomingIds.has(candidate.id)),
-            ...roots,
-          ]
-        : roots
-      const rects = layoutRoots.map(root => {
-        const absolute = getInternalNode(root.id)?.internals.positionAbsolute ?? root.position
-        return { id: root.id, x: absolute.x, y: absolute.y,
-          width: Number(root.measured?.width ?? root.style?.width ?? 1),
-          height: Number(root.measured?.height ?? root.style?.height ?? 1) }
+      const absolutePositions = new Map(all.map(candidate => [
+        candidate.id,
+        getInternalNode(candidate.id)?.internals.positionAbsolute ?? candidate.position,
+      ]))
+      const plan = planSheetDrop({
+        draggedNodeId: node.id,
+        targetNodeId: prevTarget,
+        allNodes: all,
+        absolutePositions,
+        activeNodeIds,
+        elements: sheetState.elements,
+        planned: sheetState.planned,
       })
-      const targetAbsolute = target ? (getInternalNode(target.id)?.internals.positionAbsolute ?? { x: 0, y: 0 }) : { x: 0, y: 0 }
-      const targetScale = target ? Number((target.data as any).worldScale ?? 1) : 1
-      const targetBox = target ? contentRect({
-        width: Number(target.style?.width ?? target.measured?.width ?? 1) / Math.max(0.0001, targetScale),
-        height: Number(target.style?.height ?? target.measured?.height ?? 1) / Math.max(0.0001, targetScale),
-      }) : null
-      const destination = targetBox ? {
-        x: targetAbsolute.x + targetBox.x * targetScale,
-        y: targetAbsolute.y + targetBox.y * targetScale,
-        width: targetBox.width * targetScale,
-        height: targetBox.height * targetScale,
-      } : null
-      // Sheet drops follow the same reference-frame rule as the Floor: keep
-      // every existing relative position, allow overlap, and fit only the
-      // combined bounds when they cross the parent's content border.
-      const placementRects = rects
-      const group = boundsOf(placementRects)
-      const incomingBounds = boundsOf(rects.filter(rect => incomingIds.has(rect.id)))
-      const occupiedRects = rects.filter(rect => !incomingIds.has(rect.id))
-      const incomingOffset = changesParent && target && destination && incomingBounds
-        ? findUnscaledIncomingPlacement(incomingBounds, destination, occupiedRects)
-        : null
-      const frameTransform = changesParent && target && !incomingOffset && group && destination && incomingBounds
-        ? fitReferenceFrame(group, destination, incomingBounds)
-        : null
-      const fit = frameTransform?.scale ?? 1
-      const mutations: SheetLayoutMutation[] = []
-      if (group) {
-        for (const root of layoutRoots) {
-          const element = sheetState.elements.find(item => (item.systemId ?? item.fileId ?? item.infraId) === root.id)
-          const planned = root.id.startsWith('planned:') ? sheetState.planned.find(item => item.id === root.id.slice(8)) : undefined
-          if (!element && !planned) continue
-          const rect = placementRects.find(item => item.id === root.id)!
-          const world = frameTransform
-            ? transformReferencePoint(rect, frameTransform)
-            : incomingIds.has(rect.id) && incomingOffset
-              ? { x: rect.x + incomingOffset.x, y: rect.y + incomingOffset.y }
-              : { x: rect.x, y: rect.y }
-          const oldScale = Number((root.data as any).worldScale ?? element?.scale ?? planned?.scale ?? 1)
-          mutations.push({
-            kind: element ? 'element' : 'planned',
-            id: element?.id ?? planned!.id,
-            x: target ? (world.x - targetAbsolute.x) / targetScale : world.x,
-            y: target ? (world.y - targetAbsolute.y) / targetScale : world.y,
-            parentSystemId: target?.id ?? null,
-            width: Number(element?.width ?? planned?.width ?? root.style?.width ?? (root.type === 'file' ? BASE_FILE_W : 620)),
-            height: Number(element?.height ?? planned?.height ?? root.style?.height ?? (root.type === 'file' ? BASE_FILE_H : 420)),
-            scale: localScaleAfterWorldFit(oldScale, fit, target ? targetScale : 1),
-          })
-        }
+      if (plan.mutations.length > 0) {
+        void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetId, plan.mutations).catch(() => {})
       }
-      if (mutations.length > 0) {
-        void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetId, mutations).catch(() => {})
-      }
-      selectedIdsRef.current = new Set(selected)
+      selectedIdsRef.current = new Set(plan.selectedIds)
       setSheetInteractionNodes(null)
       updateInteractiveNodes(current => current.map(candidate => ({
         ...candidate,
-        selected: selected.includes(candidate.id),
+        selected: plan.selectedIds.includes(candidate.id),
         data: { ...candidate.data, isDropTarget: false, snapPreview: null, previewOffset: null },
       })))
       return

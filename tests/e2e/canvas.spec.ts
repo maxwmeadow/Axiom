@@ -100,6 +100,50 @@ test('supports click, pane deselection, and partial lasso selection', async () =
   await expect(node).toHaveClass(/selected/)
 })
 
+test('drags a root node fluidly and keeps its persisted final frame', async () => {
+  const node = page.locator('.react-flow__node[data-id="infra_mcp_proto"]')
+  const before = await node.boundingBox()
+  expect(before).not.toBeNull()
+  if (!before) return
+
+  const start = { x: before.x + before.width / 2, y: before.y + before.height / 2 }
+  await page.mouse.move(start.x, start.y)
+  await page.mouse.down()
+  await page.mouse.move(start.x + 48, start.y + 32, { steps: 12 })
+  await page.mouse.up()
+
+  const after = await node.boundingBox()
+  expect(after).not.toBeNull()
+  expect(after!.x).toBeGreaterThan(before.x + 35)
+  expect(after!.y).toBeGreaterThan(before.y + 20)
+  await expect(node).toHaveClass(/selected/)
+})
+
+test('persists a container reparenting drop as one layout batch', async () => {
+  let persistedParent: string | null | undefined
+  page.on('request', request => {
+    if (!request.url().includes('/api/layout/batch') || request.method() !== 'POST') return
+    const payload = request.postDataJSON() as { layouts?: Array<{ nodeId: string; parentNodeId: string | null }> }
+    const moved = payload.layouts?.find(layout => layout.nodeId === 'infra_mcp_proto')
+    if (moved) persistedParent = moved.parentNodeId
+  })
+
+  const source = page.locator('.react-flow__node[data-id="infra_mcp_proto"]')
+  const target = page.locator('.react-flow__node[data-id="sys_canvas"]')
+  const sourceBox = await source.boundingBox()
+  const targetBox = await target.boundingBox()
+  expect(sourceBox).not.toBeNull()
+  expect(targetBox).not.toBeNull()
+  if (!sourceBox || !targetBox) return
+
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(targetBox.x + 20, targetBox.y + 20, { steps: 16 })
+  await page.mouse.up()
+
+  await expect.poll(() => persistedParent).toBe('sys_canvas')
+})
+
 test('wheel zoom continues over revealed file content through 100x', async () => {
   const node = page.locator('.react-flow__node[data-id="file_canvas"]')
   await node.click({ position: { x: 12, y: 12 } })
