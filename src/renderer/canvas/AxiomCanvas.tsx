@@ -60,7 +60,8 @@ import { filenameForLanguage, languageFromFilename } from './languages'
 import { apiUpdateSystem, apiSaveNodePosition, apiSaveFloorLayouts } from './arcdApi'
 import { boundsOf, contentRect, findUnscaledIncomingPlacement, fitReferenceFrame, FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, frameHeaderAllowance, highestSelectedRoots, localScaleAfterWorldFit, normalizeGeometry, transformReferencePoint } from './frameGeometry'
 import { packFrame, placeIncoming } from './packing'
-import { childPositionAfterParentResize, resizeChanged, toCanonicalResizeGeometry, type NodeResizeParams } from './resizeGeometry'
+import { resizeChanged, type NodeResizeParams } from './resizeGeometry'
+import { planFloorResize, planSheetResize, replaceFloorLayouts, type ResizeSessionStart } from './resizePersistence'
 import { projectFloorNodes, type FloorSceneDescriptor } from './floorSceneProjection'
 import { easeViewportTowardZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, nextWheelZoomTarget, ZOOM_SNAP_EPSILON, zoomViewportAroundPoint } from './viewportMath'
 
@@ -2037,7 +2038,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const initialFloorPersistRef = useRef<string | null>(null)
   const heldKeysRef       = useRef<Set<string>>(new Set())
   const wasdRafRef        = useRef<number | null>(null)
-  const resizeStartRef    = useRef<Map<string, NodeResizeParams & { children: Map<string, { x: number; y: number }> }>>(new Map())
+  const resizeStartRef    = useRef<Map<string, ResizeSessionStart>>(new Map())
   const resizingNodeIdRef = useRef<string | null>(null)
   const rfNodesRef        = useRef<Node[]>([])
   const dropTargetRef     = useRef<string | null>(null)
@@ -2090,41 +2091,19 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       return
     }
 
-    const parentId = node.parentId
-    const ownScale = Number((node.data as any).frameScale ?? 1)
-    const worldScale = Number((node.data as any).worldScale ?? ownScale)
-    const canonical = toCanonicalResizeGeometry(end, worldScale, ownScale, !!parentId)
-
     // Sheets already store canonical local geometry. Resizing is intentionally
     // freeform: no grid units and no sibling displacement.
     if (sheetState.activeSheetId) {
-      const sheetId = sheetState.activeSheetId
-      const mutationFor = (
-        renderedId: string,
-        x: number,
-        y: number,
-        parentSystemId: string | null,
-        size?: { width: number; height: number; scale: number },
-      ): SheetLayoutMutation | null => {
-        const member = sheetState.elements.find(item => (item.systemId ?? item.fileId ?? item.infraId) === renderedId)
-        if (member) return { kind: 'element', id: member.id, x, y, parentSystemId, ...size }
-        const plannedNode = renderedId.startsWith('planned:')
-          ? sheetState.planned.find(item => item.id === renderedId.slice(8))
-          : undefined
-        return plannedNode ? { kind: 'planned', id: plannedNode.id, x, y, parentSystemId, ...size } : null
-      }
-      const parentMutation = mutationFor(nodeId, canonical.x, canonical.y, parentId ?? null, {
-        width: canonical.width,
-        height: canonical.height,
-        scale: ownScale,
+      const mutations = planSheetResize({
+        nodeId,
+        node,
+        start,
+        end,
+        elements: sheetState.elements,
+        planned: sheetState.planned,
       })
-      const childMutations = [...start.children].flatMap(([childId, childStart]) => {
-        const position = childPositionAfterParentResize(childStart, start, end, worldScale)
-        const mutation = mutationFor(childId, position.x, position.y, nodeId)
-        return mutation ? [mutation] : []
-      })
-      if (sheetId && parentMutation) {
-        void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetId, [parentMutation, ...childMutations]).catch(() => {})
+      if (mutations) {
+        void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetState.activeSheetId, mutations).catch(() => {})
       }
       setSheetInteractionNodes(null)
       return
@@ -2133,52 +2112,25 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     const graph = useGraphStore.getState()
     const workspaceId = graph.currentProject?.id
     if (!workspaceId) return
-    const nodeType: FloorNodeType = graph.systems.some(system => system.id === nodeId)
-      ? 'system' : graph.files.some(file => file.id === nodeId) ? 'file' : 'infra'
-    const previous = graph.floorLayouts.find(layout => layout.nodeId === nodeId && layout.nodeType === nodeType)
-    const parentType = parentId ? (graph.infraNodes.some(infra => infra.id === parentId) ? 'infra' : 'system') : null
-    const nextLayout: Omit<FloorLayout, 'workspaceId' | 'updatedAt'> = {
-      nodeId, nodeType, parentNodeId: parentId ?? null, parentNodeType: parentType,
-      containmentKind: parentType === 'infra' ? 'hosted_by' : parentType === 'system' ? 'part_of' : 'root',
-      positionX: canonical.x,
-      positionY: canonical.y,
-      width: canonical.width,
-      height: canonical.height,
-      scale: ownScale,
-    }
-    const childLayouts: Omit<FloorLayout, 'workspaceId' | 'updatedAt'>[] = [...start.children].flatMap(([childId, childStart]) => {
-      const childNode = rfNodesRef.current.find(candidate => candidate.id === childId)
-      if (!childNode) return []
-      const childType: FloorNodeType = graph.systems.some(system => system.id === childId)
-        ? 'system' : graph.files.some(file => file.id === childId) ? 'file' : 'infra'
-      const childPrevious = graph.floorLayouts.find(layout => layout.nodeId === childId && layout.nodeType === childType)
-      const childOwnScale = childPrevious?.scale ?? Number((childNode.data as any).frameScale ?? 1)
-      const childWorldScale = Number((childNode.data as any).worldScale ?? worldScale * childOwnScale)
-      const position = childPositionAfterParentResize(childStart, start, end, worldScale)
-      return [{
-        nodeId: childId,
-        nodeType: childType,
-        parentNodeId: nodeId,
-        parentNodeType: nodeType === 'infra' ? 'infra' : 'system',
-        containmentKind: nodeType === 'infra' ? 'hosted_by' : 'part_of',
-        positionX: position.x,
-        positionY: position.y,
-        width: childPrevious?.width ?? Number(childNode.style?.width ?? childNode.measured?.width ?? 1) / Math.max(0.0001, childWorldScale),
-        height: childPrevious?.height ?? Number(childNode.style?.height ?? childNode.measured?.height ?? 1) / Math.max(0.0001, childWorldScale),
-        scale: childOwnScale,
-      }]
+    const plan = planFloorResize({
+      workspaceId,
+      nodeId,
+      node,
+      start,
+      end,
+      nodes: rfNodesRef.current,
+      systemIds: new Set(graph.systems.map(system => system.id)),
+      fileIds: new Set(graph.files.map(file => file.id)),
+      infraIds: new Set(graph.infraNodes.map(infra => infra.id)),
+      floorLayouts: graph.floorLayouts,
     })
-    const updates = [nextLayout, ...childLayouts]
-    const changed = new Set(updates.map(layout => `${layout.nodeType}:${layout.nodeId}`))
-    const previousLayouts = graph.floorLayouts.filter(layout => changed.has(`${layout.nodeType}:${layout.nodeId}`))
-    const optimistic = updates.map(layout => ({ ...layout, workspaceId, updatedAt: Date.now() }))
     useGraphStore.setState(state => ({
-      floorLayouts: [...state.floorLayouts.filter(layout => !changed.has(`${layout.nodeType}:${layout.nodeId}`)), ...optimistic],
+      floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.optimisticLayouts, plan.changedKeys),
     }))
-    void apiSaveFloorLayouts(workspaceId, updates).catch(error => {
+    void apiSaveFloorLayouts(workspaceId, plan.updates).catch(error => {
       console.error('[AxiomCanvas] floor resize failed', error)
       useGraphStore.setState(state => ({
-        floorLayouts: [...state.floorLayouts.filter(layout => !changed.has(`${layout.nodeType}:${layout.nodeId}`)), ...previousLayouts],
+        floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.previousLayouts, plan.changedKeys),
       }))
     })
     return
