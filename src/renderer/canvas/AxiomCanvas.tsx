@@ -58,8 +58,9 @@ import { plannedMembers, plannedMetadata, sheetElementMetadata, useSheetStore } 
 import type { PlannedNodeKind, PlannedNodeMetadata, SheetLayoutMutation } from '../store/sheetStore'
 import { filenameForLanguage, languageFromFilename } from './languages'
 import { apiUpdateSystem, apiSaveNodePosition, apiSaveFloorLayouts } from './arcdApi'
-import { boundsOf, contentRect, findUnscaledIncomingPlacement, fitReferenceFrame, FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, highestSelectedRoots, localScaleAfterWorldFit, normalizeGeometry, transformReferencePoint } from './frameGeometry'
+import { boundsOf, contentRect, findUnscaledIncomingPlacement, fitReferenceFrame, FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, frameHeaderAllowance, highestSelectedRoots, localScaleAfterWorldFit, normalizeGeometry, transformReferencePoint } from './frameGeometry'
 import { countDirectChildren } from './directChildCounts'
+import { packFrame, placeIncoming } from './packing'
 import { childPositionAfterParentResize, minimumContainerSize, resizeChanged, toCanonicalResizeGeometry, type NodeResizeParams } from './resizeGeometry'
 
 // ─── Node type registry ────────────────────────────────────────────────────
@@ -143,15 +144,14 @@ function renderedNodeRect(nodeId: string): DOMRect | null {
 }
 
 // ─── Zoom thresholds ───────────────────────────────────────────────────────
-// Consistent zoom thresholds per parent node depth.
-// Children are revealed when parent's zoom level exceeds these thresholds.
-// Match these with depths defined in useLayerZoom.ts:
-//   - depth 0 (root parent reveals depth 1 children): zoom >= 0.45
-//   - depth 1 (depth 1 parent reveals depth 2 children): zoom >= 0.90
-//   - depth 2 (depth 2 parent reveals depth 3 children): zoom >= 1.35
-//   - depth 3+ (depth 3 parent reveals depth 4 children): zoom >= 1.80
-const REVEAL_THRESHOLDS = [0.45, 0.9, 1.35, 1.8]
-const FADE_RANGE_RATIO = 0.3
+// Reveal is size-driven, not depth-driven. A node opens its contents once the
+// node itself is rendered large enough on screen, so arbitrarily sized and
+// scaled frames each get their own reveal point. Children are always
+// physically smaller than their parent, so reveal cascades outward-in.
+// This one constant tunes the entire progression: the on-screen size
+// (geometric mean of rendered width and height, in pixels) at which a node
+// reveals what it contains.
+const REVEAL_CONTAINER_PX = 480
 const MIN_CANVAS_ZOOM = 0.02
 const MAX_CANVAS_ZOOM = 100
 
@@ -533,6 +533,34 @@ function runAlternateAxisLayout(
           temp *= cooling
         }
 
+        // Compact the settled cloud toward an even spread. Dependency chains
+        // elongate the simulation into a strip; squeezing the long axis back
+        // to the cloud's geometric-mean spread (never stretching the short
+        // one) keeps neighborhoods intact while the overlap resolver below
+        // re-spreads nodes isotropically into a boxy cluster.
+        if (N > 2) {
+          let meanX = 0, meanY = 0
+          positions.forEach(pos => { meanX += pos.x; meanY += pos.y })
+          meanX /= N
+          meanY /= N
+          let varX = 0, varY = 0
+          positions.forEach(pos => {
+            varX += (pos.x - meanX) ** 2
+            varY += (pos.y - meanY) ** 2
+          })
+          const spreadX = Math.sqrt(varX / N)
+          const spreadY = Math.sqrt(varY / N)
+          if (spreadX > 1 && spreadY > 1) {
+            const target = Math.sqrt(spreadX * spreadY)
+            const squeezeX = Math.max(0.35, Math.min(1, target / spreadX))
+            const squeezeY = Math.max(0.35, Math.min(1, target / spreadY))
+            positions.forEach(pos => {
+              pos.x = meanX + (pos.x - meanX) * squeezeX
+              pos.y = meanY + (pos.y - meanY) * squeezeY
+            })
+          }
+        }
+
         // Bounding-box overlap resolution
         const overlapPadding = BASE_FILE_W * 0.8
         for (let pass = 0; pass < 50; pass++) {
@@ -605,7 +633,6 @@ function runAlternateAxisLayout(
       ...childFiles.map(f => ({ id: f.id, type: 'file'   as const, w: 0, h: 0, wUnits: 1, hUnits: 1 })),
     ].sort((a, b) => getSortKey(a.id) - getSortKey(b.id))
 
-    let totalArea = 0, maxItemW = 1
     for (const item of items) {
       if (item.type === 'system') {
         const sz = computedSizes.get(item.id) ?? { w: containerW(1, d + 1), h: containerH(1, d + 1) }
@@ -619,8 +646,6 @@ function runAlternateAxisLayout(
         item.wUnits = 1
         item.hUnits = 1
       }
-      totalArea += item.wUnits * item.hUnits
-      maxItemW = Math.max(maxItemW, item.wUnits)
     }
 
     if (!isTidy) {
@@ -725,23 +750,18 @@ function runAlternateAxisLayout(
       const totalH = containerH(maxRowUsed, d)
       computedSizes.set(systemId, { w: totalW, h: totalH })
     } else {
-      // 2. Auto packing (row-by-row fill)
-      const cols = Math.max(maxItemW, Math.round(Math.sqrt(totalArea)))
-      let curCol = 0, curRow = 0, rowMaxH = 0
+      // 2. Auto packing: organic cluster with per-item breathing room.
+      const gap = gridGap(d)
+      const packed = packFrame(
+        items.map(item => ({ id: item.id, width: item.w, height: item.h })),
+        { baseGap: gap },
+      )
       for (const item of items) {
-        if (curCol + item.wUnits > cols) {
-          curRow += rowMaxH; curCol = 0; rowMaxH = 0
-        }
-        computedPositions.set(item.id, { x: cellX(curCol, d), y: cellY(curRow, d), w: item.w, h: item.h })
+        const position = packed.positions.get(item.id)!
+        computedPositions.set(item.id, { x: gap + position.x, y: gap + position.y, w: item.w, h: item.h })
         if (item.type === 'system') computedSizes.set(item.id, { w: item.w, h: item.h })
-        curCol += item.wUnits
-        rowMaxH = Math.max(rowMaxH, item.hUnits)
       }
-
-      const totalRows = curRow + rowMaxH
-      const totalW = containerW(cols, d)
-      const totalH = containerH(totalRows, d)
-      computedSizes.set(systemId, { w: totalW, h: totalH })
+      computedSizes.set(systemId, { w: packed.width + gap * 2, h: packed.height + gap * 2 })
     }
   }
 
@@ -846,9 +866,10 @@ export interface InfraNodeData {
 }
 
 // ─── Zoom visibility (continuous fade) ─────────────────────────────────────
-// Each node flips at the midpoint of its former reveal range. CSS completes
-// the fade after that flip, independently of continued zoom movement.
-// Computed node-by-node top-down so nested frames retain local thresholds.
+// A node's contents flip visible once the node is rendered large enough on
+// screen (REVEAL_CONTAINER_PX). CSS completes the fade after that flip,
+// independently of continued zoom movement. Computed node-by-node top-down so
+// a child can never show before every ancestor has opened.
 
 function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
   // Sort nodes by depth so parent visibility is computed before children
@@ -861,7 +882,6 @@ function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
   const childrenVisibleMap = new Map<string, number>()
 
   const updatedNodes = sortedNodes.map(node => {
-    const depth = (node.data as any).depth ?? 0
     const parentId = node.parentId
 
     // Parent visibility drives child visibility
@@ -870,17 +890,15 @@ function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
       selfT = childrenVisibleMap.get(parentId) ?? 0
     }
 
-    // Semantic zoom is frame-relative: a subtree scaled to 25% must be zoomed
-    // four times farther before its details appear. Depth alone cannot express
-    // this once every container is freely resizable.
-    const worldScale = Number((node.data as any).worldScale ?? 1)
-    const effectiveZoom = zoom * worldScale
-    const threshold = 0.55
-    const fadeRange = threshold * FADE_RANGE_RATIO
-    // Trigger at the midpoint of the former reveal range. The CSS transition
-    // completes after this state flip; zoom no longer controls fade progress.
-    const revealThreshold = threshold - fadeRange / 2
-    const childT = selfT * (effectiveZoom >= revealThreshold ? 1 : 0)
+    // Semantic zoom is size-relative: contents appear once this node is
+    // rendered REVEAL_CONTAINER_PX across. style dimensions are world-space
+    // (canonical × worldScale), so screen size is style × zoom. Nodes with no
+    // measurable size never hide their contents.
+    const worldW = Number(node.style?.width ?? node.measured?.width ?? 0)
+    const worldH = Number(node.style?.height ?? node.measured?.height ?? 0)
+    const measurable = worldW > 0 && worldH > 0
+    const renderedSize = Math.sqrt(worldW * worldH) * zoom
+    const childT = selfT * (!measurable || renderedSize >= REVEAL_CONTAINER_PX ? 1 : 0)
 
     childrenVisibleMap.set(node.id, childT)
 
@@ -992,6 +1010,62 @@ function buildFloorFrameLayout(
     const infra = infraById.get(id)
     return infra?.category === 'platform' ? { width: 760, height: 520 } : { width: 260, height: 160 }
   }
+
+  // A genuinely fresh Floor is packed bottom-up: deepest frames first, each
+  // frame sized from its packed contents, so a parent can never be smaller
+  // than what it holds and post-hoc growth never creates sibling overlap.
+  const freshPackPositions = new Map<string, { x: number; y: number }>()
+  const freshPackSizes = new Map<string, { width: number; height: number }>()
+  if (initialGraphLayout) {
+    const sizeOf = (id: string) => freshPackSizes.get(id) ?? defaultSize(id)
+    const depthCache = new Map<string, number>()
+    const depthOf = (id: string): number => {
+      const cached = depthCache.get(id)
+      if (cached !== undefined) return cached
+      const parentId = parentById.get(id) ?? null
+      const value = parentId ? depthOf(parentId) + 1 : 0
+      depthCache.set(id, value)
+      return value
+    }
+    const packedFrames = new Set<string>()
+    const packContainer = (containerId: string) => {
+      if (packedFrames.has(containerId)) return
+      packedFrames.add(containerId)
+      const children = siblingsByParent.get(containerId) ?? []
+      for (const childId of children) if (siblingsByParent.has(childId)) packContainer(childId)
+      if (children.length === 0) return
+      const packed = packFrame(
+        children.map(childId => ({ id: childId, ...sizeOf(childId) })),
+        { baseGap: 36 },
+      )
+      // The title chrome scales with the frame's presentation scale, and the
+      // frame's size depends on the header in turn — iterate to the fixed
+      // point so children never start under the rendered title band.
+      const base = defaultSize(containerId)
+      const depth = depthOf(containerId)
+      let header = FRAME_HEADER_HEIGHT
+      for (let round = 0; round < 4; round++) {
+        const width = Math.max(320, packed.width + FRAME_CONTENT_PADDING * 2)
+        const height = Math.max(220, packed.height + header + FRAME_CONTENT_PADDING)
+        header = frameHeaderAllowance(width, height, depth, base.width, base.height)
+      }
+      for (const childId of children) {
+        const position = packed.positions.get(childId)!
+        freshPackPositions.set(childId, {
+          x: FRAME_CONTENT_PADDING + position.x,
+          y: header + position.y,
+        })
+      }
+      freshPackSizes.set(containerId, {
+        width: Math.max(320, packed.width + FRAME_CONTENT_PADDING * 2),
+        height: Math.max(220, packed.height + header + FRAME_CONTENT_PADDING),
+      })
+    }
+    for (const parentKey of siblingsByParent.keys()) {
+      if (parentKey) packContainer(parentKey)
+    }
+  }
+
   for (const [id, parentId] of parentById) {
     const layout = layoutsById.get(id)
     const fallback = defaultSize(id)
@@ -1001,22 +1075,30 @@ function buildFloorFrameLayout(
     let y = layout?.positionY ?? initialPosition?.y ?? semantic?.positionY ?? 0
     const occupied = occupiedByParent.get(parentId) ?? []
     if (!layout && x === 0 && y === 0) {
-      const siblings = siblingsByParent.get(parentId) ?? [id]
-      const columns = Math.max(1, Math.ceil(Math.sqrt(siblings.length)))
-      const gapX = parentId ? 300 : 760
-      const gapY = parentId ? 190 : 560
-      let index = Math.max(0, siblings.indexOf(id))
-      do {
-        x = (parentId ? 42 : 80) + (index % columns) * gapX
-        y = (parentId ? 76 : 80) + Math.floor(index / columns) * gapY
-        index++
-      } while (occupied.some(rect => x < rect.x + rect.width + 20 && x + fallback.width + 20 > rect.x &&
-        y < rect.y + rect.height + 20 && y + fallback.height + 20 > rect.y))
+      const fresh = freshPackPositions.get(id)
+      if (fresh) {
+        x = fresh.x
+        y = fresh.y
+      } else {
+        // A node indexed after the initial layout was persisted clusters in
+        // beside its siblings instead of landing on a blind grid.
+        const spot = placeIncoming(
+          { id, width: fallback.width, height: fallback.height },
+          occupied,
+          {
+            baseGap: parentId ? 36 : 96,
+            origin: parentId ? { x: FRAME_CONTENT_PADDING, y: FRAME_HEADER_HEIGHT } : { x: 80, y: 80 },
+          },
+        )
+        x = spot.x
+        y = spot.y
+      }
     }
+    const freshSize = freshPackSizes.get(id)
     const geometry = normalizeGeometry({
       x, y,
-      width: layout?.width ?? fallback.width,
-      height: layout?.height ?? fallback.height,
+      width: layout?.width ?? freshSize?.width ?? fallback.width,
+      height: layout?.height ?? freshSize?.height ?? fallback.height,
       scale: layout?.scale ?? 1,
     }, fallback)
     geometryById.set(id, geometry)
@@ -1981,23 +2063,30 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         width: Number(selectedContainer.style?.width ?? selectedContainer.measured?.width ?? 1) / parentScale,
         height: Number(selectedContainer.style?.height ?? selectedContainer.measured?.height ?? 1) / parentScale,
       } : { width: 2600, height: 1800 }
-      const content = scopeId ? contentRect(parentCanonical) : { x: 80, y: 80, width: parentCanonical.width - 160, height: parentCanonical.height - 160 }
-      const gap = 42
-      let x = content.x
-      let y = content.y
-      let rowHeight = 0
+      const containerData = selectedContainer?.data as Record<string, unknown> | undefined
+      const headerAllowance = frameHeaderAllowance(
+        parentCanonical.width,
+        parentCanonical.height,
+        Number(containerData?.depth ?? 0),
+        containerData?.presentationBaseWidth != null ? Number(containerData.presentationBaseWidth) / parentScale : 620,
+        containerData?.presentationBaseHeight != null ? Number(containerData.presentationBaseHeight) / parentScale : 420,
+      )
+      const content = scopeId ? contentRect(parentCanonical, FRAME_CONTENT_PADDING, headerAllowance) : { x: 80, y: 80, width: parentCanonical.width - 160, height: parentCanonical.height - 160 }
+      const packed = packFrame(
+        children.map(child => ({
+          id: child.id,
+          width: Number(child.style?.width ?? child.measured?.width ?? BASE_FILE_W) / parentScale,
+          height: Number(child.style?.height ?? child.measured?.height ?? BASE_FILE_H) / parentScale,
+        })),
+        {
+          baseGap: 42,
+          aspect: content.width / Math.max(1, content.height),
+        },
+      )
       const positions = new Map<string, { x: number; y: number }>()
       for (const child of children) {
-        const width = Number(child.style?.width ?? child.measured?.width ?? BASE_FILE_W) / parentScale
-        const height = Number(child.style?.height ?? child.measured?.height ?? BASE_FILE_H) / parentScale
-        if (x > content.x && x + width > content.x + content.width) {
-          x = content.x
-          y += rowHeight + gap
-          rowHeight = 0
-        }
-        positions.set(child.id, { x, y })
-        x += width + gap
-        rowHeight = Math.max(rowHeight, height)
+        const position = packed.positions.get(child.id)!
+        positions.set(child.id, { x: content.x + position.x, y: content.y + position.y })
       }
 
       const sheet = useSheetStore.getState()

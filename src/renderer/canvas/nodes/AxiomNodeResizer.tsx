@@ -94,7 +94,6 @@ export function AxiomNodeResizer({
   const sessionRef = useRef<ResizeSession | null>(null)
   const scale = safePositive(presentationScale, 1)
   const handleSize = 5 * scale
-  const handleInset = 1 * scale
   const lineThickness = 1 * scale
 
   const geometryForPointer = useCallback((session: ResizeSession, clientX: number, clientY: number): NodeResizeParams => {
@@ -148,6 +147,9 @@ export function AxiomNodeResizer({
     event.preventDefault()
     event.stopPropagation()
     event.currentTarget.setPointerCapture(event.pointerId)
+    // The idle width/height ease would lag every emitted step and smear
+    // ghost outlines; freeze it for the duration of the interaction.
+    event.currentTarget.closest('.react-flow__node')?.classList.add('axiom-resizing')
     const start: NodeResizeParams = {
       x: node.position.x,
       y: node.position.y,
@@ -176,6 +178,18 @@ export function AxiomNodeResizer({
   const onPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const session = sessionRef.current
     if (!session || session.pointerId !== event.pointerId) return
+    // A mouse reuses one pointerId for its whole lifetime, so an orphaned
+    // session (lost capture, missed pointerup) would otherwise resume
+    // resizing from a plain hover. No held primary button — no session.
+    if ((event.buttons & 1) === 0) {
+      sessionRef.current = null
+      event.currentTarget.closest('.react-flow__node')?.classList.remove('axiom-resizing')
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      onResizeEnd?.(session.last)
+      return
+    }
     event.preventDefault()
     event.stopPropagation()
     const next = geometryForPointer(session, event.clientX, event.clientY)
@@ -184,7 +198,7 @@ export function AxiomNodeResizer({
         next.width !== session.last.width || next.height !== session.last.height) {
       emitGeometry(session, next, true)
     }
-  }, [emitGeometry, geometryForPointer, nodeId])
+  }, [emitGeometry, geometryForPointer, nodeId, onResizeEnd])
 
   const finishResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     const session = sessionRef.current
@@ -199,6 +213,7 @@ export function AxiomNodeResizer({
     emitGeometry(session, next, false)
     traceResizeEnd(traceEvent(event, event.currentTarget), next, nodeId)
     sessionRef.current = null
+    event.currentTarget.closest('.react-flow__node')?.classList.remove('axiom-resizing')
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
@@ -234,13 +249,15 @@ export function AxiomNodeResizer({
             zIndex: 21,
             left: direction.left,
             top: direction.top,
-            width: `${handleSize}px`,
-            height: `${handleSize}px`,
+            // Presentation scale can be stale or coarse (e.g. unmeasured
+            // fallback of 1) — never let a handle rival the node itself.
+            width: `min(${handleSize}px, 26%)`,
+            height: `min(${handleSize}px, 26%)`,
             minWidth: 0,
             minHeight: 0,
             padding: 0,
             border: 0,
-            borderRadius: `${scale}px`,
+            borderRadius: '18%',
             background: '#fff',
             boxSizing: 'border-box',
             transform: 'translate(-50%, -50%)',
@@ -249,7 +266,7 @@ export function AxiomNodeResizer({
             touchAction: 'none',
           }}
         >
-          <span style={{ position: 'absolute', inset: `${handleInset}px`, borderRadius: `${0.25 * scale}px`, background: color, pointerEvents: 'none' }} />
+          <span style={{ position: 'absolute', inset: '20%', borderRadius: '12%', background: color, pointerEvents: 'none' }} />
         </div>
       ))}
     </div>

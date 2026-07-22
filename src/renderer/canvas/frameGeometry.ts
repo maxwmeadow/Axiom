@@ -46,6 +46,33 @@ export const DEFAULT_FRAME_SCALE = 1
 export const FRAME_CONTENT_PADDING = 28
 export const FRAME_HEADER_HEIGHT = 54
 
+/** World-space title font sizes per depth — fixed, no counter-scaling. */
+export const DEPTH_TITLE_PX = [24, 14, 10, 8]
+
+/**
+ * The header band a system/platform frame's chrome actually occupies, in the
+ * frame's canonical space. Mirrors SystemNode's tab + title-band formula
+ * (which scales with the frame's presentation scale), so layout code can
+ * reserve exactly the room the chrome will render into. SystemNode derives
+ * its chrome from the same constants; keep the two in lockstep.
+ */
+export function frameHeaderAllowance(
+  canonicalWidth: number,
+  canonicalHeight: number,
+  depth: number,
+  baseWidth = 620,
+  baseHeight = 420,
+): number {
+  const scale = Math.max(0.0001, Math.min(
+    canonicalWidth / Math.max(1, baseWidth),
+    canonicalHeight / Math.max(1, baseHeight),
+  ))
+  const depthIndex = Math.max(0, Math.min(depth, DEPTH_TITLE_PX.length - 1))
+  const titlePx = DEPTH_TITLE_PX[depthIndex] * scale
+  const padY = Math.round(titlePx * 0.55)
+  return Math.max(FRAME_HEADER_HEIGHT, Math.round(padY * 2 + titlePx * 1.25))
+}
+
 export function finiteOr(value: number | null | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }

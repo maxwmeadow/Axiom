@@ -284,15 +284,23 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
         height: '100%',
         position: 'relative',
         cursor: 'grab',
-        transform: `translate(${translateX}px, ${translateY}px)`,
-        transition: translateX !== 0 || translateY !== 0
-          ? 'transform 0.22s cubic-bezier(0.25,1,0.5,1)'
-          : 'opacity 0.3s ease',
+        transition: 'opacity 0.3s ease',
         opacity: dimmed ? 0.22 : 1,
         filter: dimmed ? 'saturate(0.5)' : undefined,
         userSelect: 'none',
       }}
     >
+      {/* Preview plane: node visuals ride the predicted post-drop offset.
+          Interaction chrome (resizer, connection handles) stays outside on
+          the raw node frame so selection outlines never shift or teleport. */}
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        transform: `translate(${translateX}px, ${translateY}px)`,
+        transition: translateX !== 0 || translateY !== 0
+          ? 'transform 0.22s cubic-bezier(0.25,1,0.5,1)'
+          : undefined,
+      }}>
       {/* Content plane: laid out at base (depth-0) size, uniformly scaled to fit
           the node box so every file node looks identical in its own frame. */}
       <div
@@ -554,11 +562,6 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
 
       </div>
 
-      {/* Everything below lives on the unscaled node frame so resize handles,
-          status rings, and tooltips stay legible at any depth. */}
-      <AxiomNodeResizer nodeId={d.id} presentationScale={s} isVisible={selected}
-        minWidth={1} minHeight={1} color="var(--accent)"
-        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
       {d.agentTouched && (
         <div style={{
           position: 'absolute', inset: -3,
@@ -633,6 +636,11 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       {hovered && hasTooltip && (
         <RuntimeTooltip runtime={runtime!} color={runtimeColor} />
       )}
+      </div>
+
+      <AxiomNodeResizer nodeId={d.id} presentationScale={s} isVisible={selected}
+        minWidth={1} minHeight={1} color="var(--accent)"
+        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
 
       {previewSymbol && <SourcePreviewDialog
         fileId={d.id}

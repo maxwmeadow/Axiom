@@ -7,9 +7,7 @@ import { brandIcon, CATEGORY_GLYPHS, officialServiceIcon } from './infraIcons'
 import { fitPresentationScale } from '../resizeGeometry'
 import { connectionHandleProps } from './connectionChrome'
 import { AxiomNodeResizer } from './AxiomNodeResizer'
-
-// World-space font sizes per depth — fixed, no counter-scaling.
-const DEPTH_TITLE_PX = [24, 14, 10, 8]
+import { DEPTH_TITLE_PX } from '../frameGeometry'
 
 // Drop-target feedback: renders the cell grid only while a node is being
 // dragged over this container (green = free, amber = displaced, red = occupied).
@@ -311,25 +309,24 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
       `L ${shellSize.w - 1} ${tabH} L ${shellSize.w - 1} ${shellSize.h - 1} Z`
 
   return (
-    <div ref={shellRef} style={{
-      width: '100%', height: '100%',
-      // The folder SVG owns ALL chrome — a rect background/border here would
-      // fill the tab notch and fight the silhouette (the "two systems" bug).
-      background: 'transparent',
-      transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
-      filter: blur > 0.1 ? `blur(${blur}px)` : undefined,
-      opacity: dimmed ? 0.3 : 1,
-      transformOrigin: 'center center',
-      transition: 'transform 0.22s cubic-bezier(0.25,1,0.5,1), filter 0.18s ease-out, opacity 0.3s ease',
-      position: 'relative',
-      overflow: 'hidden',
-      userSelect: 'none',
-      cursor: 'grab',
-    }}>
-      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} isVisible={selected}
-        minWidth={d.minResizeWidth ?? 1}
-        minHeight={d.minResizeHeight ?? 1} color={color}
-        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
+    <div style={{ width: '100%', height: '100%', position: 'relative', userSelect: 'none', cursor: 'grab' }}>
+      {/* Shell plane: the silhouette and contents ride preview translate,
+          reveal scale, and blur. Interaction chrome (resizer, connection
+          handles) lives outside on the raw node frame so selection outlines
+          never shift, teleport, or get clipped by the shell's overflow. */}
+      <div ref={shellRef} style={{
+        position: 'absolute',
+        inset: 0,
+        // The folder SVG owns ALL chrome — a rect background/border here would
+        // fill the tab notch and fight the silhouette (the "two systems" bug).
+        background: 'transparent',
+        transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
+        filter: blur > 0.1 ? `blur(${blur}px)` : undefined,
+        opacity: dimmed ? 0.3 : 1,
+        transformOrigin: 'center center',
+        transition: 'transform 0.22s cubic-bezier(0.25,1,0.5,1), filter 0.18s ease-out, opacity 0.3s ease',
+        overflow: 'hidden',
+      }}>
       {/* Semantic systems use a package outline; hosting uses a compute chassis. */}
       <svg
         width={shellSize.w} height={shellSize.h}
@@ -398,6 +395,11 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
           pointerEvents: 'none',
         }} />
       )}
+      </div>
+      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} isVisible={selected}
+        minWidth={d.minResizeWidth ?? 1}
+        minHeight={d.minResizeHeight ?? 1} color={color}
+        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
       {handles}
     </div>
   )
