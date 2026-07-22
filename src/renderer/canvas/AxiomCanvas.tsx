@@ -62,6 +62,7 @@ import { boundsOf, contentRect, findUnscaledIncomingPlacement, fitReferenceFrame
 import { packFrame, placeIncoming } from './packing'
 import { childPositionAfterParentResize, resizeChanged, toCanonicalResizeGeometry, type NodeResizeParams } from './resizeGeometry'
 import { projectFloorNodes, type FloorSceneDescriptor } from './floorSceneProjection'
+import { easeViewportTowardZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, nextWheelZoomTarget, ZOOM_SNAP_EPSILON, zoomViewportAroundPoint } from './viewportMath'
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
@@ -152,8 +153,6 @@ function renderedNodeRect(nodeId: string): DOMRect | null {
 // (geometric mean of rendered width and height, in pixels) at which a node
 // reveals what it contains.
 const REVEAL_CONTAINER_PX = 480
-const MIN_CANVAS_ZOOM = 0.02
-const MAX_CANVAS_ZOOM = 100
 
 // ─── World-space sizing ────────────────────────────────────────────────────
 // One scale factor halves the cell size per depth level.
@@ -2497,13 +2496,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       targetZoomRef.current = currentViewport.zoom
     }
 
-    // Accumulate the zoom target based on scroll direction
-    const factor = 1.15
-    if (e.deltaY < 0) {
-      targetZoomRef.current = Math.min(MAX_CANVAS_ZOOM, targetZoomRef.current * factor)
-    } else {
-      targetZoomRef.current = Math.max(MIN_CANVAS_ZOOM, targetZoomRef.current / factor)
-    }
+    targetZoomRef.current = nextWheelZoomTarget(targetZoomRef.current, e.deltaY)
 
     // Start the animation loop if it's not already running
     if (smoothZoomRafRef.current === null) {
@@ -2517,28 +2510,14 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           return
         }
 
-        const step = 0.15
-        const newZ = vp.zoom + (tz - vp.zoom) * step
-
-        // Compute coordinate under the mouse cursor relative to current viewport
-        const cx = (mouse.mx - vp.x) / vp.zoom
-        const cy = (mouse.my - vp.y) / vp.zoom
-
-        // Compute new viewport position matching this new zoom
-        const newX = mouse.mx - cx * newZ
-        const newY = mouse.my - cy * newZ
-
-        setViewport({ x: newX, y: newY, zoom: newZ })
+        const nextViewport = easeViewportTowardZoom(vp, { x: mouse.mx, y: mouse.my }, tz)
+        setViewport(nextViewport)
 
         // Stop the animation if we are very close to target zoom
-        if (Math.abs(newZ - tz) < 0.005) {
+        if (Math.abs(nextViewport.zoom - tz) < ZOOM_SNAP_EPSILON) {
           // Final snap
           const finalVp = getViewport()
-          const finalCx = (mouse.mx - finalVp.x) / finalVp.zoom
-          const finalCy = (mouse.my - finalVp.y) / finalVp.zoom
-          const finalX = mouse.mx - finalCx * tz
-          const finalY = mouse.my - finalCy * tz
-          setViewport({ x: finalX, y: finalY, zoom: tz })
+          setViewport(zoomViewportAroundPoint(finalVp, { x: mouse.mx, y: mouse.my }, tz))
 
           targetZoomRef.current = null
           smoothZoomRafRef.current = null
