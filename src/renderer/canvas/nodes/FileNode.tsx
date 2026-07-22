@@ -1,6 +1,6 @@
 import React from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import type { FileNodeData } from '../AxiomCanvas'
+import type { FileNodeData } from '../sceneTypes'
 import type { RuntimeNodeState } from '../../store/graphStore'
 import { useGraphStore } from '../../store/graphStore'
 import { ShapeBackdrop } from './NodeShell'

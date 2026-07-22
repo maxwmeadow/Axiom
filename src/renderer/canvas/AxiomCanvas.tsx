@@ -59,9 +59,9 @@ import type { PlannedNodeKind, PlannedNodeMetadata, SheetLayoutMutation } from '
 import { filenameForLanguage, languageFromFilename } from './languages'
 import { apiUpdateSystem, apiSaveNodePosition, apiSaveFloorLayouts } from './arcdApi'
 import { boundsOf, contentRect, findUnscaledIncomingPlacement, fitReferenceFrame, FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, frameHeaderAllowance, highestSelectedRoots, localScaleAfterWorldFit, normalizeGeometry, transformReferencePoint } from './frameGeometry'
-import { countDirectChildren } from './directChildCounts'
 import { packFrame, placeIncoming } from './packing'
-import { childPositionAfterParentResize, minimumContainerSize, resizeChanged, toCanonicalResizeGeometry, type NodeResizeParams } from './resizeGeometry'
+import { childPositionAfterParentResize, resizeChanged, toCanonicalResizeGeometry, type NodeResizeParams } from './resizeGeometry'
+import { projectFloorNodes, type FloorSceneDescriptor } from './floorSceneProjection'
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
@@ -230,22 +230,6 @@ function snappedH(hUnits: number, parentDepth: number): number {
   const { h: ch } = fileNodeSize(parentDepth)
   const gap = gridGap(parentDepth)
   return hUnits * (ch + gap) - gap
-}
-
-// ─── Color palette ─────────────────────────────────────────────────────────
-
-// Muted technical accents, one per nesting depth — matches --depth-0..3 in global.css
-const PALETTE = ['#5B8A9A','#C4956A','#7A9E7E','#A07B8A']
-
-function systemColor(depth: number): string {
-  return PALETTE[depth % PALETTE.length]
-}
-
-function hexToRgb(hex: string): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `${r}, ${g}, ${b}`
 }
 
 // ─── Alternate Axis Layout Algorithm ──────────────────────────────────────────
@@ -938,15 +922,6 @@ function makeFullyVisible(n: Node): Node {
 
 // ─── Layout engine ─────────────────────────────────────────────────────────
 
-interface FloorDescriptor {
-  id: string
-  nodeType: FloorNodeType
-  parentId: string | null
-  depth: number
-  geometry: ReturnType<typeof normalizeGeometry>
-  worldScale: number
-}
-
 /**
  * Materialize the Floor as nested coordinate frames. Unlike the legacy layout,
  * this never quantizes authored positions, displaces siblings, or derives
@@ -1178,105 +1153,21 @@ function buildFloorFrameLayout(
     return result
   }
 
-  const descriptors: FloorDescriptor[] = [...parentById.keys()].map(id => {
+  const descriptors: FloorSceneDescriptor[] = [...parentById.keys()].map(id => {
     const resolved = resolveFrame(id)
     return { id, nodeType: nodeTypes.get(id)!, parentId: parentById.get(id) ?? null, geometry: geometryById.get(id)!, ...resolved }
   }).sort((a, b) => a.depth - b.depth || a.id.localeCompare(b.id))
 
-  // The badge represents rendered direct children, not separate semantic
-  // categories. One authoritative count prevents a descriptor from belonging
-  // to overlapping buckets (the old generic child count also included files,
-  // despite being passed to SystemNode as `childSystemCount`).
-  const directChildCounts = countDirectChildren(descriptors)
-  const resizeMinimumFor = (id: string, geometry: ReturnType<typeof normalizeGeometry>, worldScale: number) => {
-    const childRects = (siblingsByParent.get(id) ?? []).flatMap(childId => {
-      const child = geometryById.get(childId)
-      return child ? [{
-        x: child.x,
-        y: child.y,
-        width: child.width * child.scale,
-        height: child.height * child.scale,
-      }] : []
-    })
-    const minimum = minimumContainerSize(
-      { width: geometry.width, height: geometry.height },
-      childRects,
-      { left: FRAME_CONTENT_PADDING, right: FRAME_CONTENT_PADDING, top: FRAME_HEADER_HEIGHT, bottom: FRAME_CONTENT_PADDING },
-      { width: 1, height: 1 },
-    )
-    return { width: minimum.width * worldScale, height: minimum.height * worldScale }
-  }
-
-  const rfNodes: Node[] = descriptors.map(descriptor => {
-    const { id, parentId, geometry, worldScale, depth } = descriptor
-    const parentWorldScale = parentId ? (worldScaleById.get(parentId) ?? 1) : 1
-    const position = { x: geometry.x * parentWorldScale, y: geometry.y * parentWorldScale }
-    const style = { width: geometry.width * worldScale, height: geometry.height * worldScale }
-    if (descriptor.nodeType === 'system') {
-      const system = systemsById.get(id)!
-      const color = system.color ?? systemColor(depth)
-      const resizeMinimum = resizeMinimumFor(id, geometry, worldScale)
-      const presentationBase = defaultSize(id)
-      return {
-        id, type: 'system', parentId: parentId ?? undefined, position, style,
-        data: {
-          id, name: system.name, source: system.source, color, colorRgb: hexToRgb(color),
-          description: system.description, agentNotes: system.agentNotes, depth,
-          directChildCount: directChildCounts.get(id) ?? 0, agentTouched: agentTouchedIds.has(id),
-          currentZoom, isChild: !!parentId, childrenVisible: 0, nodeW: style.width,
-          nodeH: style.height, frameScale: geometry.scale, worldScale,
-          minResizeWidth: resizeMinimum.width, minResizeHeight: resizeMinimum.height,
-          presentationBaseWidth: presentationBase.width * worldScale,
-          presentationBaseHeight: presentationBase.height * worldScale,
-        } as unknown as Record<string, unknown>,
-        draggable: true, selectable: true,
-      }
-    }
-    if (descriptor.nodeType === 'file') {
-      const file = filesById.get(id)!
-      return {
-        id, type: 'file', parentId: parentId ?? undefined, position, style,
-        data: {
-          id, label: file.relPath.split('/').pop() ?? file.relPath, relPath: file.relPath,
-          language: file.language, lineCount: file.lineCount, churnScore: file.churnScore,
-          shape: (file.shapeOverride || file.shape || '') as FileNodeData['shape'],
-          displayName: file.displayName ?? '', agentTouched: agentTouchedIds.has(id), depth,
-          currentZoom, childrenVisible: 0, frameScale: geometry.scale, worldScale,
-        } satisfies FileNodeData as unknown as Record<string, unknown>,
-        draggable: true, selectable: true,
-      }
-    }
-    const infra = infraById.get(id)!
-    if (infra.category === 'platform') {
-      const color = '#6b8afd'
-      const resizeMinimum = resizeMinimumFor(id, geometry, worldScale)
-      const presentationBase = defaultSize(id)
-      return {
-        id, type: 'system', parentId: parentId ?? undefined, position, style,
-        data: {
-          id, name: infra.name, source: 'user', color, colorRgb: hexToRgb(color),
-          description: null, agentNotes: null, depth,
-          directChildCount: directChildCounts.get(id) ?? 0, agentTouched: agentTouchedIds.has(id),
-          currentZoom, isChild: !!parentId, childrenVisible: 0, nodeW: style.width,
-          nodeH: style.height, frameScale: geometry.scale, worldScale, umlKind: 'infra',
-          minResizeWidth: resizeMinimum.width, minResizeHeight: resizeMinimum.height,
-          presentationBaseWidth: presentationBase.width * worldScale,
-          presentationBaseHeight: presentationBase.height * worldScale,
-          umlMetadata: { version: 1, category: infra.category, provider: infra.provider, service: infra.service, subtype: infra.subtype },
-        } as unknown as Record<string, unknown>,
-        draggable: true, selectable: true,
-      }
-    }
-    return {
-      id, type: 'infra', parentId: parentId ?? undefined, position, style,
-      data: {
-        id, label: infra.name, name: infra.name, infraType: infra.infraType,
-        category: infra.category ?? 'api', provider: infra.provider ?? 'generic',
-        service: infra.service ?? '', subtype: infra.subtype ?? '', status: infra.status ?? 'confirmed',
-        agentTouched: agentTouchedIds.has(id), frameScale: geometry.scale, worldScale,
-      } satisfies InfraNodeData as unknown as Record<string, unknown>,
-      draggable: true, selectable: true,
-    }
+  const rfNodes = projectFloorNodes({
+    systems,
+    files,
+    infraNodes,
+    descriptors,
+    siblingsByParent,
+    geometryById,
+    worldScaleById,
+    agentTouchedIds,
+    currentZoom,
   })
   return { rfNodes, rfEdges: [] }
 }

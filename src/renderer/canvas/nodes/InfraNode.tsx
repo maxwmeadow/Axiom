@@ -1,5 +1,5 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import type { InfraNodeData } from '../AxiomCanvas'
+import type { InfraNodeData } from '../sceneTypes'
 import { useInfraService } from '../../store/registryStore'
 import { brandIcon, CATEGORY_GLYPHS, officialServiceIcon } from './infraIcons'
 import { EditableNodeTitle } from './EditableNodeTitle'

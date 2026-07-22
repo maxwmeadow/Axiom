@@ -1,6 +1,6 @@
 import React from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import type { SystemNodeData } from '../AxiomCanvas'
+import type { SystemNodeData } from '../sceneTypes'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { useInfraService } from '../../store/registryStore'
 import { brandIcon, CATEGORY_GLYPHS, officialServiceIcon } from './infraIcons'
