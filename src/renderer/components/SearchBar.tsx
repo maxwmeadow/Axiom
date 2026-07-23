@@ -53,13 +53,10 @@ export function SearchBar({ onClose }: SearchBarProps) {
   }
 
   return (
-    <div style={{
+    <div className="axiom-floating-surface" style={{
       position: 'fixed', top: '20%', left: '50%', transform: 'translateX(-50%)',
       width: 480, zIndex: 1000,
-      background: 'var(--bg-surface)',
       border: '1px solid var(--border)',
-      borderRadius: 0,
-      boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
       overflow: 'hidden',
       animation: 'fadeIn 0.12s ease-out',
     }}>

@@ -43,7 +43,7 @@ export function InjectConfirmBanner() {
   }
 
   return (
-    <div style={{
+    <div className="axiom-floating-surface" style={{
       position: 'absolute',
       top: 16,
       left: '50%',
@@ -51,11 +51,9 @@ export function InjectConfirmBanner() {
       zIndex: 1200,
       maxWidth: 560,
       padding: '14px 18px',
-      borderRadius: 0,
       background: 'var(--bg-raised)',
       border: '1px solid var(--agent-color)',
       borderLeft: '3px solid var(--agent-color)',
-      boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
       color: 'var(--text-primary)',
       fontSize: 13,
     }}>

@@ -73,7 +73,7 @@
 
   /* Hard offset shadow — "sheet pinned to the board", never a glow */
   --shadow-card: 3px 3px 0 rgba(0, 0, 0, 0.3);
-  --shadow-dialog: 6px 6px 0 rgba(0, 0, 0, 0.35);
+  --shadow-floating: 6px 6px 0 rgba(0, 0, 0, 0.35);
 
   /* Typography */
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
@@ -334,7 +334,13 @@ a { color: var(--accent); text-decoration: none; }
 .glass-dialog {
   background: var(--bg-raised) !important;
   border: 1px solid var(--border) !important;
-  box-shadow: var(--shadow-dialog) !important;
+  box-shadow: var(--shadow-floating) !important;
+}
+
+.axiom-floating-surface {
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-floating);
 }
 
 .glass-input {

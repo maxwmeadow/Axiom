@@ -78,7 +78,7 @@ function RuntimeTooltip({ runtime, color }: { runtime: RuntimeNodeState; color: 
         borderRadius: 0,
         background: 'var(--bg-overlay)',
         border: `1px solid ${color}`,
-        boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
+        boxShadow: 'var(--shadow-floating)',
         zIndex: 100,
         fontSize: 11,
         pointerEvents: 'none',

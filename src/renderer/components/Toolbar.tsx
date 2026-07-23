@@ -172,10 +172,9 @@ function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
       {open && (
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 998 }} onClick={() => setOpen(false)} />
-          <div style={{
+          <div className="axiom-floating-surface" style={{
             position: 'absolute', top: 38, right: 0, zIndex: 999, width: 320,
-            background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 0,
-            boxShadow: '6px 6px 0 rgba(0,0,0,0.35)', padding: 6, maxHeight: 380, overflowY: 'auto',
+            border: '1px solid var(--border)', padding: 6, maxHeight: 380, overflowY: 'auto',
           }}>
             <div style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '6px 8px', fontWeight: 600 }}>
               INVESTIGATION CAPTURES

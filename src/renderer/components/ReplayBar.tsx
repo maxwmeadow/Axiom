@@ -77,12 +77,11 @@ export function ReplayBar() {
   const close = () => { setPlaying(false); stopReplay() }
 
   return (
-    <div style={{
+    <div className="axiom-floating-surface" style={{
       position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)',
       zIndex: 1200, width: 640, maxWidth: 'calc(100vw - 48px)',
       background: 'var(--bg-raised)',
       border: '1px solid #a855f7', borderLeft: '3px solid #a855f7', borderRadius: 0,
-      boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
       padding: '12px 16px', color: 'var(--text-primary)',
     }}>
       {/* Header */}

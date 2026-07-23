@@ -17,20 +17,17 @@ export function AgentConnectBanner() {
   const mcpEndpoint = 'http://127.0.0.1:7743/mcp'
 
   return (
-    <div style={{
+    <div className="axiom-floating-surface" style={{
       position: 'fixed',
       bottom: 36,
       left: '50%',
       transform: 'translateX(-50%)',
       zIndex: 500,
-      background: 'var(--bg-surface)',
       border: '1px solid var(--accent)',
-      borderRadius: 0,
       padding: '14px 20px',
       display: 'flex',
       alignItems: 'center',
       gap: 16,
-      boxShadow: '6px 6px 0 rgba(0,0,0,0.35)',
       animation: 'fadeIn 0.3s ease-out',
       maxWidth: 560,
     }}>
