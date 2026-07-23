@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "test:renderer": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test src/renderer/canvas/directChildCounts.test.mjs src/renderer/canvas/dropPersistence.test.mjs src/renderer/canvas/floorSceneProjection.test.mjs src/renderer/canvas/resizeGeometry.test.mjs src/renderer/canvas/resizePersistence.test.mjs src/renderer/canvas/selectionController.test.mjs src/renderer/canvas/viewportMath.test.mjs src/renderer/canvas/nodes/connectionChrome.test.mjs src/renderer/canvas/packing.test.mjs",
+    "test:renderer": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test src/renderer/canvas/directChildCounts.test.mjs src/renderer/canvas/dropPersistence.test.mjs src/renderer/canvas/floorSceneProjection.test.mjs src/renderer/canvas/resizeGeometry.test.mjs src/renderer/canvas/resizePersistence.test.mjs src/renderer/canvas/selectionController.test.mjs src/renderer/canvas/semanticZoom.test.mjs src/renderer/canvas/viewportMath.test.mjs src/renderer/canvas/nodes/connectionChrome.test.mjs src/renderer/canvas/packing.test.mjs",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:update": "npm run build && playwright test --update-snapshots",
     "preview": "electron-vite preview",

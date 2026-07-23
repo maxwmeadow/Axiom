@@ -66,6 +66,7 @@ import { projectFloorNodes, type FloorSceneDescriptor } from './floorSceneProjec
 import { easeViewportTowardZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, nextWheelZoomTarget, ZOOM_SNAP_EPSILON, zoomViewportAroundPoint } from './viewportMath'
 import { emptySelection, selectionAfterNodeChanges, singleNodeSelection, stampSelection } from './selectionController'
 import { planFloorDrop, planSheetDrop } from './dropPersistence'
+import { applyZoomVisibility, makeFullyVisible } from './semanticZoom'
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
@@ -146,16 +147,6 @@ function renderedNodeRect(nodeId: string): DOMRect | null {
   }
   return null
 }
-
-// ─── Zoom thresholds ───────────────────────────────────────────────────────
-// Reveal is size-driven, not depth-driven. A node opens its contents once the
-// node itself is rendered large enough on screen, so arbitrarily sized and
-// scaled frames each get their own reveal point. Children are always
-// physically smaller than their parent, so reveal cascades outward-in.
-// This one constant tunes the entire progression: the on-screen size
-// (geometric mean of rendered width and height, in pixels) at which a node
-// reveals what it contains.
-const REVEAL_CONTAINER_PX = 480
 
 // ─── World-space sizing ────────────────────────────────────────────────────
 // One scale factor halves the cell size per depth level.
@@ -849,77 +840,6 @@ export interface InfraNodeData {
   onResizeEnd?: (params: NodeResizeParams) => void
   frameScale?: number
   worldScale?: number
-}
-
-// ─── Zoom visibility (continuous fade) ─────────────────────────────────────
-// A node's contents flip visible once the node is rendered large enough on
-// screen (REVEAL_CONTAINER_PX). CSS completes the fade after that flip,
-// independently of continued zoom movement. Computed node-by-node top-down so
-// a child can never show before every ancestor has opened.
-
-function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
-  // Sort nodes by depth so parent visibility is computed before children
-  const sortedNodes = [...nodes].sort((a, b) => {
-    const da = (a.data as any).depth ?? 0
-    const db = (b.data as any).depth ?? 0
-    return da - db
-  })
-
-  const childrenVisibleMap = new Map<string, number>()
-
-  const updatedNodes = sortedNodes.map(node => {
-    const parentId = node.parentId
-
-    // Parent visibility drives child visibility
-    let selfT = 1
-    if (parentId) {
-      selfT = childrenVisibleMap.get(parentId) ?? 0
-    }
-
-    // Semantic zoom is size-relative: contents appear once this node is
-    // rendered REVEAL_CONTAINER_PX across. style dimensions are world-space
-    // (canonical × worldScale), so screen size is style × zoom. Nodes with no
-    // measurable size never hide their contents.
-    const worldW = Number(node.style?.width ?? node.measured?.width ?? 0)
-    const worldH = Number(node.style?.height ?? node.measured?.height ?? 0)
-    const measurable = worldW > 0 && worldH > 0
-    const renderedSize = Math.sqrt(worldW * worldH) * zoom
-    const childT = selfT * (!measurable || renderedSize >= REVEAL_CONTAINER_PX ? 1 : 0)
-
-    childrenVisibleMap.set(node.id, childT)
-
-    const scale = 0.92 + 0.08 * selfT
-    const blur = (1 - selfT) * 3
-
-    return {
-      ...node,
-      style: {
-        ...node.style,
-        opacity:       selfT,
-        pointerEvents: selfT > 0.1 ? 'all' : ('none' as any),
-        transition:    'opacity 0.25s ease-out',
-      },
-      data: {
-        ...node.data,
-        currentZoom: zoom,
-        childrenVisible: childT,
-        selfScale: scale,
-        selfBlur: blur,
-      },
-    }
-  })
-
-  // Maintain original order of nodes for ReactFlow rendering stability
-  const updatedNodesMap = new Map<string, Node>(updatedNodes.map(n => [n.id, n]))
-  return nodes.map(n => updatedNodesMap.get(n.id) || n)
-}
-
-function makeFullyVisible(n: Node): Node {
-  return {
-    ...n,
-    style: { ...n.style, opacity: 1, pointerEvents: 'all' as any },
-    data: { ...n.data, selfScale: 1, selfBlur: 0, childrenVisible: 1 },
-  }
 }
 
 // ─── Layout engine ─────────────────────────────────────────────────────────
