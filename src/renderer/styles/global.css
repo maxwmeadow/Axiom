@@ -441,6 +441,107 @@ a { color: var(--accent); text-decoration: none; }
   font-size: 11px;
 }
 
+.axiom-canvas-command {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.axiom-canvas-command:disabled { cursor: not-allowed; }
+
+.axiom-canvas-command--trace-active {
+  border-color: var(--trace-color);
+  background: var(--bg-raised);
+  color: var(--trace-color);
+}
+
+.axiom-zoom-indicator {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  user-select: none;
+}
+
+.axiom-selection-actions {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.axiom-selection-action {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.axiom-selection-action--primary {
+  border: none;
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.axiom-selection-action--ghost {
+  padding-inline: 10px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.axiom-sheet-palette {
+  position: absolute;
+  top: 60px;
+  left: 12px;
+  z-index: 1000;
+  width: 92px;
+  padding: 8px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.axiom-sheet-palette__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 4px;
+  cursor: grab;
+  user-select: none;
+}
+
+.axiom-sheet-palette__item:hover { background: var(--bg-raised); }
+
 .glass-input {
   background: var(--bg-deep) !important;
   border: 1px solid var(--border) !important;

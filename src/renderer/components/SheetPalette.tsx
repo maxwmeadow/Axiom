@@ -1,8 +1,6 @@
 // SheetPalette — the UML stencil sidebar, shown when a sheet layer is active.
 // Drag a stencil onto the canvas to place it; the new element opens straight
 // into its inline name editor. Small semantic shape set by design.
-import React from 'react'
-
 export interface StencilDef {
   id: string
   label: string
@@ -39,14 +37,7 @@ function StencilGlyph({ shape }: { shape: StencilDef['shape'] }) {
 
 export function SheetPalette() {
   return (
-    <div style={{
-      position: 'absolute', top: 60, left: 12, zIndex: 1000,
-      width: 92,
-      background: 'var(--bg-surface)',
-      border: '1px solid var(--border)',
-      boxShadow: 'var(--shadow-card)',
-      padding: '8px 0 4px',
-    }}>
+    <div className="axiom-sheet-palette">
       <div style={{
         fontSize: 8, fontFamily: 'var(--font-mono)', fontWeight: 700,
         letterSpacing: '0.1em', color: 'var(--text-dim)', padding: '0 10px 6px',
@@ -60,12 +51,7 @@ export function SheetPalette() {
             e.dataTransfer.setData('application/axiom-stencil', JSON.stringify(s))
             e.dataTransfer.effectAllowed = 'copy'
           }}
-          style={{
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
-            padding: '7px 4px', cursor: 'grab', userSelect: 'none',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-raised)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          className="axiom-sheet-palette__item"
         >
           <StencilGlyph shape={s.shape} />
           <span style={{ fontSize: 9.5, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{s.label}</span>

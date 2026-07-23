@@ -1097,18 +1097,7 @@ function buildFloorFrameLayout(
 function ZoomIndicator() {
   const { zoom } = useViewport()
   return (
-    <div style={{
-      background: 'var(--bg-surface)',
-      border: '1px solid var(--border)',
-      padding: '6px 12px',
-      color: 'var(--text-secondary)',
-      fontSize: '12px',
-      fontFamily: 'var(--font-mono)',
-      fontWeight: 600,
-      boxShadow: 'var(--shadow-card)',
-      pointerEvents: 'none',
-      userSelect: 'none',
-    }}>
+    <div className="axiom-zoom-indicator">
       Zoom: {zoom.toFixed(2)}x
     </div>
   )
@@ -3056,21 +3045,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           <button
             onClick={tidyFrame}
             disabled={isTidying || readOnly}
-            style={{
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border)',
-              padding: '8px 14px',
-              color: 'var(--text-primary)',
-              fontSize: '13px',
-              fontWeight: 500,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              cursor: (isTidying || readOnly) ? 'not-allowed' : 'pointer',
-              boxShadow: 'var(--shadow-card)',
-              transition: 'border-color 0.15s ease, color 0.15s ease',
-            }}
-            className="tidy-layout-btn"
+            className="axiom-canvas-command"
           >
             {isTidying ? (
               <>
@@ -3109,20 +3084,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             <button
               onClick={() => setFocusEnabled(v => !v)}
               title="Dim nodes that are off the active trace / runtime path"
-              style={{
-                background: focusEnabled ? 'var(--bg-raised)' : 'var(--bg-surface)',
-                border: `1px solid ${focusEnabled ? 'var(--trace-color)' : 'var(--border)'}`,
-                padding: '8px 14px',
-                color: focusEnabled ? 'var(--trace-color)' : 'var(--text-primary)',
-                fontSize: '13px',
-                fontWeight: 500,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                cursor: 'pointer',
-                boxShadow: 'var(--shadow-card)',
-                transition: 'border-color 0.15s ease, color 0.15s ease',
-              }}
+              className={focusEnabled
+                ? 'axiom-canvas-command axiom-canvas-command--trace-active'
+                : 'axiom-canvas-command'}
             >
               <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -3139,42 +3103,26 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       </ReactFlow>
 
       {selectedFileIds.length > 1 && (
-        <div style={{
-          position: 'absolute', bottom: 24, left: '50%', transform: 'translateX(-50%)',
-          zIndex: 1000, background: 'var(--bg-surface)', border: '1px solid var(--border)',
-          borderRadius: 0, padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12,
-          boxShadow: 'var(--shadow-card)',
-        }}>
+        <div className="axiom-selection-actions">
           <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>
             {selectedFileIds.length} files selected
           </span>
           <button
             onClick={() => setGroupDialogOpen(true)}
-            style={{
-              background: 'var(--accent)', color: '#fff', border: 'none',
-              borderRadius: 0, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            }}
+            className="axiom-selection-action axiom-selection-action--primary"
           >
             Group into System
           </button>
           <button
             onClick={() => setSheetDialogOpen(true)}
             title="Curate the selection onto a named sheet — a live diagram telling one story"
-            style={{
-              background: 'var(--bg-raised)', color: 'var(--text-primary)',
-              border: '1px solid var(--border)', borderRadius: 0,
-              padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            }}
+            className="axiom-selection-action"
           >
             New Sheet
           </button>
           <button
             onClick={() => setSelectionMode(false)}
-            style={{
-              background: 'transparent', color: 'var(--text-secondary)',
-              border: '1px solid var(--border)', borderRadius: 0,
-              padding: '6px 10px', fontSize: 12, cursor: 'pointer',
-            }}
+            className="axiom-selection-action axiom-selection-action--ghost"
           >
             Cancel
           </button>
