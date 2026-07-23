@@ -57,6 +57,14 @@
   --warn:  #fbbf24;
   --ok:    #34d399;
 
+  /* Dialog semantics */
+  --dialog-scrim: rgba(5, 8, 15, 0.7);
+  --dialog-error-bg: rgba(248, 113, 113, 0.08);
+  --dialog-error-border: rgba(248, 113, 113, 0.15);
+  --dialog-primary-end: #4f46e5;
+  --text-on-accent: #fff;
+  --text-on-agent: #1a1200;
+
   /* Corners — square. This is an instrument, not a toy. */
   --radius-sm: 0px;
   --radius:    0px;
@@ -65,6 +73,7 @@
 
   /* Hard offset shadow — "sheet pinned to the board", never a glow */
   --shadow-card: 3px 3px 0 rgba(0, 0, 0, 0.3);
+  --shadow-dialog: 6px 6px 0 rgba(0, 0, 0, 0.35);
 
   /* Typography */
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
@@ -325,7 +334,7 @@ a { color: var(--accent); text-decoration: none; }
 .glass-dialog {
   background: var(--bg-raised) !important;
   border: 1px solid var(--border) !important;
-  box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.35) !important;
+  box-shadow: var(--shadow-dialog) !important;
 }
 
 .glass-input {
@@ -343,6 +352,99 @@ a { color: var(--accent); text-decoration: none; }
 .glass-input:focus {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 1px var(--accent) !important;
+}
+
+/* Shared dialog structure. Values intentionally preserve the legacy dialogs;
+   the visual overhaul can now change their system from one place. */
+.axiom-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dialog-scrim);
+}
+
+.axiom-dialog-surface {
+  width: var(--axiom-dialog-width);
+  max-width: 90%;
+  padding: 28px;
+  border-radius: var(--radius);
+}
+
+.axiom-dialog-title {
+  margin: 0 0 20px;
+  color: var(--text-primary);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.axiom-dialog-title--compact { margin-bottom: 6px; }
+
+.axiom-dialog-error {
+  padding: 10px 14px;
+  border: 1.5px solid var(--dialog-error-border);
+  border-radius: var(--radius);
+  background: var(--dialog-error-bg);
+  color: var(--error);
+  font-size: 12px;
+}
+
+.axiom-dialog-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.axiom-dialog-form--gap-14 { gap: 14px; }
+.axiom-dialog-form--gap-16 { gap: 16px; }
+
+.axiom-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.axiom-dialog-actions--inset { margin-top: 4px; }
+
+.axiom-dialog-button {
+  padding: 9px 18px;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.axiom-dialog-button:disabled {
+  cursor: not-allowed;
+  opacity: var(--axiom-dialog-disabled-opacity, 0.6);
+}
+
+.axiom-dialog-button--secondary {
+  padding-inline: 16px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.axiom-dialog-button--secondary:disabled {
+  cursor: pointer;
+  opacity: 1;
+}
+
+.axiom-dialog-button--primary {
+  --axiom-dialog-disabled-opacity: 0.7;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--dialog-primary-end) 100%);
+  color: var(--text-on-accent);
+}
+
+.axiom-dialog-button--agent {
+  --axiom-dialog-disabled-opacity: 0.6;
+  background: var(--agent-color);
+  color: var(--text-on-agent);
 }
 
 /* Pulsing Hotspot Aura */

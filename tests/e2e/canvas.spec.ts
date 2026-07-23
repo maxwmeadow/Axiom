@@ -51,6 +51,50 @@ test('renders the deterministic Floor baseline', async () => {
   await expect(page.locator('.react-flow')).toHaveScreenshot('floor-baseline.png')
 })
 
+test('opens shared dialog chrome with the preserved visual tokens', async () => {
+  const first = page.locator('.react-flow__node[data-id="file_canvas"]')
+  const second = page.locator('.react-flow__node[data-id="file_types"]')
+  const firstBox = await first.boundingBox()
+  const secondBox = await second.boundingBox()
+  expect(firstBox).not.toBeNull()
+  expect(secondBox).not.toBeNull()
+  if (!firstBox || !secondBox) return
+
+  await page.getByRole('button', { name: 'Lasso Select' }).click()
+  await page.mouse.move(
+    Math.min(firstBox.x, secondBox.x) - 4,
+    Math.min(firstBox.y, secondBox.y) - 4,
+  )
+  await page.mouse.down()
+  await page.mouse.move(
+    Math.max(firstBox.x + firstBox.width, secondBox.x + secondBox.width) + 4,
+    Math.max(firstBox.y + firstBox.height, secondBox.y + secondBox.height) + 4,
+    { steps: 8 },
+  )
+  await page.mouse.up()
+
+  const newSheetButton = page.getByRole('button', { name: 'New Sheet', exact: true })
+  await expect(newSheetButton).toBeVisible()
+  await newSheetButton.click()
+  const backdrop = page.locator('.axiom-dialog-backdrop')
+  const surface = page.locator('.axiom-dialog-surface')
+  await expect(surface).toBeVisible()
+  await expect(surface.getByRole('heading', { name: 'New Sheet' })).toBeVisible()
+
+  const backdropColor = await backdrop.evaluate(element => getComputedStyle(element).backgroundColor)
+  const surfaceBox = await surface.boundingBox()
+  const surfaceStyle = await surface.evaluate(element => {
+    const style = getComputedStyle(element)
+    return { padding: style.padding, borderRadius: style.borderRadius }
+  })
+  expect(backdropColor).toBe('rgba(5, 8, 15, 0.7)')
+  expect(surfaceBox?.width).toBeCloseTo(420, 0)
+  expect(surfaceStyle).toEqual({ padding: '28px', borderRadius: '0px' })
+
+  await surface.getByRole('button', { name: 'Cancel' }).click()
+  await expect(surface).toHaveCount(0)
+})
+
 test('keeps resize chrome screen-sized and attached while resizing', async () => {
   const node = page.locator('.react-flow__node[data-id="file_canvas"]')
   await node.click({ position: { x: 12, y: 12 } })

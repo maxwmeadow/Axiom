@@ -6,6 +6,7 @@ import React, { useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useGraphStore } from '../store/graphStore'
 import { useSheetStore } from '../store/sheetStore'
+import { DialogActions, DialogButton, DialogError, DialogForm, DialogFrame, DialogTitle } from './ui/DialogPrimitives'
 
 interface SendToAgentDialogProps {
   isOpen: boolean
@@ -61,25 +62,18 @@ export function SendToAgentDialog({ isOpen, onClose }: SendToAgentDialogProps) {
   }
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(5, 8, 15, 0.7)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
-    }}>
-      <div className="glass-dialog animate-fade-in" style={{ padding: 28, width: 460, maxWidth: '90%', borderRadius: 0 }}>
-        <h3 style={{ margin: '0 0 6px 0', fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+    <DialogFrame width={460}>
+        <DialogTitle compact>
           Message the Agent
-        </h3>
+        </DialogTitle>
         <p style={{ margin: '0 0 16px 0', fontSize: 12, color: 'var(--text-secondary)' }}>
           Delivered to any connected agent (Claude Code, Codex, Copilot, …) through the Axiom MCP channel.
           {selection.length > 0 && <> Attached: <code style={{ color: 'var(--accent)' }}>{selection.join(', ')}</code></>}
         </p>
 
-        <form onSubmit={handleSend} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <DialogForm onSubmit={handleSend} gap={14}>
           {error && (
-            <div style={{
-              color: '#f87171', background: 'rgba(248,113,113,0.08)',
-              border: '1.5px solid rgba(248,113,113,0.15)', padding: '10px 14px', fontSize: 12,
-            }}>{error}</div>
+            <DialogError>{error}</DialogError>
           )}
 
           <textarea
@@ -92,19 +86,13 @@ export function SendToAgentDialog({ isOpen, onClose }: SendToAgentDialogProps) {
             autoFocus
           />
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-            <button type="button" onClick={onClose} disabled={sending} style={{
-              background: 'transparent', color: 'var(--text-secondary)',
-              border: '1px solid var(--border)', padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            }}>Cancel</button>
-            <button type="submit" disabled={sending || !note.trim()} style={{
-              background: 'var(--agent-color)', color: '#1a1200', border: 'none',
-              padding: '9px 18px', fontSize: 13, fontWeight: 700,
-              cursor: sending || !note.trim() ? 'not-allowed' : 'pointer',
-              opacity: sending || !note.trim() ? 0.6 : 1,
-            }}>{sending ? 'Sending…' : 'Send to Agent'}</button>
-          </div>
-        </form>
+          <DialogActions>
+            <DialogButton type="button" variant="secondary" onClick={onClose} disabled={sending}>Cancel</DialogButton>
+            <DialogButton type="submit" variant="agent" disabled={sending || !note.trim()}>
+              {sending ? 'Sending…' : 'Send to Agent'}
+            </DialogButton>
+          </DialogActions>
+        </DialogForm>
 
         {recent.length > 0 && (
           <div style={{ marginTop: 18, borderTop: '1px solid var(--border-dim)', paddingTop: 10 }}>
@@ -124,7 +112,6 @@ export function SendToAgentDialog({ isOpen, onClose }: SendToAgentDialogProps) {
             ))}
           </div>
         )}
-      </div>
-    </div>
+    </DialogFrame>
   )
 }

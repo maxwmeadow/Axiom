@@ -3,6 +3,7 @@
 import React, { useState } from 'react'
 import { useGraphStore } from '../store/graphStore'
 import { useSheetStore } from '../store/sheetStore'
+import { DialogActions, DialogButton, DialogError, DialogForm, DialogFrame, DialogTitle } from './ui/DialogPrimitives'
 
 interface NewSheetDialogProps {
   isOpen: boolean
@@ -47,20 +48,13 @@ export function NewSheetDialog({ isOpen, onClose, selectedFileIds, onSuccess }: 
   }
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(5, 8, 15, 0.7)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
-    }}>
-      <div className="glass-dialog animate-fade-in" style={{ padding: 28, width: 420, maxWidth: '90%', borderRadius: 0 }}>
-        <h3 style={{ margin: '0 0 20px 0', fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
+    <DialogFrame width={420}>
+        <DialogTitle>
           New Sheet
-        </h3>
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        </DialogTitle>
+        <DialogForm onSubmit={handleSubmit}>
           {error && (
-            <div style={{
-              color: '#f87171', background: 'rgba(248,113,113,0.08)',
-              border: '1.5px solid rgba(248,113,113,0.15)', padding: '10px 14px', fontSize: 12,
-            }}>{error}</div>
+            <DialogError>{error}</DialogError>
           )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 700, letterSpacing: '0.05em' }}>
@@ -85,19 +79,13 @@ export function NewSheetDialog({ isOpen, onClose, selectedFileIds, onSuccess }: 
             {selectedFileIds.length === 1 ? 'file' : 'files'} onto this sheet. Elements stay live —
             renames and deletions in the codebase show up here.
           </p>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
-            <button type="button" onClick={onClose} disabled={loading} style={{
-              background: 'transparent', color: 'var(--text-secondary)',
-              border: '1px solid var(--border)', padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            }}>Cancel</button>
-            <button type="submit" disabled={loading} style={{
-              background: 'linear-gradient(135deg, var(--accent) 0%, #4f46e5 100%)',
-              color: '#fff', border: 'none', padding: '9px 18px', fontSize: 13, fontWeight: 700,
-              cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1,
-            }}>{loading ? 'Creating…' : 'Create Sheet'}</button>
-          </div>
-        </form>
-      </div>
-    </div>
+          <DialogActions inset>
+            <DialogButton type="button" variant="secondary" onClick={onClose} disabled={loading}>Cancel</DialogButton>
+            <DialogButton type="submit" variant="primary" disabled={loading}>
+              {loading ? 'Creating…' : 'Create Sheet'}
+            </DialogButton>
+          </DialogActions>
+        </DialogForm>
+    </DialogFrame>
   )
 }

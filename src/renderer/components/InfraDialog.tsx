@@ -3,6 +3,7 @@ import { useGraphStore } from '../store/graphStore'
 import { useRegistryStore } from '../store/registryStore'
 import { brandIcon, CATEGORY_GLYPHS, officialServiceIcon } from '../canvas/nodes/infraIcons'
 import type { InfraService } from '../../shared/types'
+import { DialogActions, DialogButton, DialogError, DialogForm, DialogFrame, DialogTitle } from './ui/DialogPrimitives'
 
 interface InfraDialogProps {
   isOpen: boolean
@@ -75,41 +76,16 @@ export function InfraDialog({ isOpen, onClose }: InfraDialogProps) {
   }
 
   return (
-    <div className="nowheel" onWheel={event => event.stopPropagation()} style={{
-      position: 'fixed',
-      inset: 0,
-      background: 'rgba(5, 8, 15, 0.7)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      zIndex: 9999,
-    }}>
-      <div
-        className="glass-dialog animate-fade-in"
-        style={{ padding: 28, width: 480, maxWidth: '90%', borderRadius: 0 }}
-      >
-        <h3 style={{
-          margin: '0 0 20px 0',
-          fontSize: 18,
-          fontWeight: 700,
-          color: 'var(--text-primary)',
-          letterSpacing: '-0.02em',
-        }}>
+    <DialogFrame width={480} backdropClassName="nowheel" onWheel={event => event.stopPropagation()}>
+        <DialogTitle>
           Add Infrastructure
-        </h3>
+        </DialogTitle>
 
-        <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <DialogForm onSubmit={handleCreate} gap={14}>
           {error && (
-            <div style={{
-              color: '#f87171',
-              background: 'rgba(248,113,113,0.08)',
-              border: '1.5px solid rgba(248,113,113,0.15)',
-              borderRadius: 0,
-              padding: '10px 14px',
-              fontSize: 12,
-            }}>
+            <DialogError>
               {error}
-            </div>
+            </DialogError>
           )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -201,44 +177,25 @@ export function InfraDialog({ isOpen, onClose }: InfraDialogProps) {
             />
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4 }}>
-            <button
+          <DialogActions inset>
+            <DialogButton
               type="button"
               onClick={onClose}
               disabled={loading}
-              style={{
-                background: 'transparent',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border)',
-                borderRadius: 0,
-                padding: '9px 16px',
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
+              variant="secondary"
             >
               Cancel
-            </button>
-            <button
+            </DialogButton>
+            <DialogButton
               type="submit"
               disabled={loading || !selected}
-              style={{
-                background: 'linear-gradient(135deg, var(--accent) 0%, #4f46e5 100%)',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 0,
-                padding: '9px 18px',
-                fontSize: 13,
-                fontWeight: 700,
-                cursor: loading || !selected ? 'not-allowed' : 'pointer',
-                opacity: loading || !selected ? 0.6 : 1,
-              }}
+              disabledOpacity={0.6}
+              variant="primary"
             >
               {loading ? 'Adding…' : 'Add to Canvas'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+            </DialogButton>
+          </DialogActions>
+        </DialogForm>
+    </DialogFrame>
   )
 }
