@@ -1,9 +1,10 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { useReactFlow } from '@xyflow/react'
 import { useGraphStore } from '../store/graphStore'
 import { InfraDialog } from './InfraDialog'
 import { SendToAgentDialog } from './SendToAgentDialog'
 import { useSheetStore } from '../store/sheetStore'
+import { ChromeButton } from './ui/ChromeButton'
 
 interface ToolbarProps {
   onSearch: () => void
@@ -22,17 +23,7 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
   const queuedMsgs = useSheetStore(s => s.messages.filter(m => m.status === 'queued').length)
 
   return (
-    <div style={{
-      height: 48,
-      background: 'var(--bg-surface)',
-      borderBottom: '1px solid var(--border)',
-      display: 'flex',
-      alignItems: 'center',
-      padding: '0 16px',
-      gap: 8,
-      flexShrink: 0,
-      WebkitAppRegion: 'drag',
-    }}>
+    <div className="axiom-toolbar">
       {/* App logo */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
@@ -55,7 +46,7 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
       <div style={{ flex: 1 }} />
 
       {/* Lasso Select / Pan Mode Toggle */}
-      <ToolbarBtn
+      <ChromeButton
         onClick={() => setSelectionMode(!selectionMode)}
         label={selectionMode ? "Lasso Active" : "Lasso Select"}
         active={selectionMode}
@@ -69,31 +60,31 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
             <rect x="3" y="3" width="18" height="18" rx="2" strokeDasharray="3 3"/>
           </svg>
         )}
-      </ToolbarBtn>
+      </ChromeButton>
 
       {/* Message the agent from the canvas (canvas→agent channel) */}
-      <ToolbarBtn onClick={() => setAgentMsgOpen(true)} label={queuedMsgs > 0 ? `Message agent (${queuedMsgs} queued)` : 'Message agent'} active={queuedMsgs > 0}>
+      <ChromeButton onClick={() => setAgentMsgOpen(true)} label={queuedMsgs > 0 ? `Message agent (${queuedMsgs} queued)` : 'Message agent'} active={queuedMsgs > 0}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
         </svg>
-      </ToolbarBtn>
+      </ChromeButton>
       <SendToAgentDialog isOpen={agentMsgOpen} onClose={() => setAgentMsgOpen(false)} />
 
       {/* Add infrastructure node */}
-      <ToolbarBtn onClick={() => setInfraOpen(true)} label="Add infra">
+      <ChromeButton onClick={() => setInfraOpen(true)} label="Add infra">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <ellipse cx="12" cy="6" rx="8" ry="3"/>
           <path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/>
           <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>
         </svg>
-      </ToolbarBtn>
+      </ChromeButton>
       <InfraDialog isOpen={infraOpen} onClose={() => setInfraOpen(false)} />
 
       {/* Investigations (capture replay) */}
       <InvestigationsMenu workspaceId={workspaceId} />
 
       {/* Search */}
-      <ToolbarBtn
+      <ChromeButton
         onClick={onSearch}
         label="Search"
         shortcut="⌘K"
@@ -101,21 +92,21 @@ export function Toolbar({ onSearch, onOpenProject, projectName }: ToolbarProps) 
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
         </svg>
-      </ToolbarBtn>
+      </ChromeButton>
 
       {/* Open project */}
-      <ToolbarBtn onClick={onOpenProject} label="Open project">
+      <ChromeButton onClick={onOpenProject} label="Open project">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
         </svg>
-      </ToolbarBtn>
+      </ChromeButton>
 
       {/* Fit view */}
-      <ToolbarBtn onClick={() => fitView({ padding: 0.15, duration: 400 })} label="Fit view">
+      <ChromeButton onClick={() => fitView({ padding: 0.15, duration: 400 })} label="Fit view">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
         </svg>
-      </ToolbarBtn>
+      </ChromeButton>
 
       {/* Indexing indicator */}
       {isIndexing && (
@@ -164,11 +155,11 @@ function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
 
   return (
     <div style={{ position: 'relative', WebkitAppRegion: 'no-drag' }}>
-      <ToolbarBtn onClick={toggle} label="Investigations" active={open || !!replay}>
+      <ChromeButton onClick={toggle} label="Investigations" active={open || !!replay}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="12" r="9" /><polygon points="10,8 16,12 10,16" fill="currentColor" stroke="none" />
         </svg>
-      </ToolbarBtn>
+      </ChromeButton>
       {open && (
         <>
           <div style={{ position: 'fixed', inset: 0, zIndex: 998 }} onClick={() => setOpen(false)} />
@@ -203,60 +194,6 @@ function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
         </>
       )}
     </div>
-  )
-}
-
-function ToolbarBtn({
-  onClick, label, shortcut, active, children
-}: {
-  onClick: () => void
-  label: string
-  shortcut?: string
-  active?: boolean
-  children: React.ReactNode
-}) {
-  const [hovered, setHovered] = useState(false)
-  const bg = active
-    ? 'var(--bg-raised)'
-    : hovered
-    ? 'var(--bg-raised)'
-    : 'transparent'
-  const color = active
-    ? 'var(--accent)'
-    : hovered
-    ? 'var(--text-primary)'
-    : 'var(--text-secondary)'
-  const border = active ? '1px solid var(--accent)' : '1px solid transparent'
-
-  return (
-    <button
-      onClick={onClick}
-      title={shortcut ? `${label} (${shortcut})` : label}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        WebkitAppRegion: 'no-drag',
-        display: 'flex', alignItems: 'center', gap: 5,
-        padding: '5px 9px',
-        borderRadius: 0,
-        border,
-        color,
-        background: bg,
-        fontSize: 12,
-        transition: 'color 0.15s, background 0.15s, border-color 0.15s',
-        cursor: 'pointer',
-        outline: 'none',
-      }}
-    >
-      {children}
-      {shortcut && (
-        <kbd style={{
-          fontSize: 9, color: 'var(--text-dim)',
-          background: 'var(--bg-overlay)', borderRadius: 0,
-          padding: '1px 4px', border: '1px solid var(--border)',
-        }}>{shortcut}</kbd>
-      )}
-    </button>
   )
 }
 

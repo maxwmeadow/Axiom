@@ -65,6 +65,11 @@
   --text-on-accent: #fff;
   --text-on-agent: #1a1200;
 
+  /* Application chrome */
+  --chrome-toolbar-height: 48px;
+  --chrome-rail-width: 176px;
+  --chrome-status-height: 28px;
+
   /* Corners — square. This is an instrument, not a toy. */
   --radius-sm: 0px;
   --radius:    0px;
@@ -341,6 +346,99 @@ a { color: var(--accent); text-decoration: none; }
   border-radius: var(--radius);
   background: var(--bg-surface);
   box-shadow: var(--shadow-floating);
+}
+
+.axiom-toolbar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+  height: var(--chrome-toolbar-height);
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  -webkit-app-region: drag;
+}
+
+.axiom-chrome-button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  outline: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  -webkit-app-region: no-drag;
+}
+
+.axiom-chrome-button:hover {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+}
+
+.axiom-chrome-button--active,
+.axiom-chrome-button--active:hover {
+  border-color: var(--accent);
+  background: var(--bg-raised);
+  color: var(--accent);
+}
+
+.axiom-chrome-button__shortcut {
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-overlay);
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.axiom-sheet-rail {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: var(--chrome-rail-width);
+  overflow: hidden;
+  border-right: 1px solid var(--border-dim);
+  background: var(--bg-base);
+}
+
+.axiom-sheet-rail__button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-left: 3px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.axiom-sheet-rail__button--active {
+  border-left-color: var(--accent);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.axiom-status-bar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 20px;
+  height: var(--chrome-status-height);
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-deep);
+  color: var(--text-dim);
+  font-size: 11px;
 }
 
 .glass-input {

@@ -51,6 +51,35 @@ test('renders the deterministic Floor baseline', async () => {
   await expect(page.locator('.react-flow')).toHaveScreenshot('floor-baseline.png')
 })
 
+test('preserves tokenized app chrome geometry and toolbar interaction states', async () => {
+  const toolbar = page.locator('.axiom-toolbar')
+  const rail = page.locator('.axiom-sheet-rail')
+  const status = page.locator('.axiom-status-bar')
+  const [toolbarBox, railBox, statusBox] = await Promise.all([
+    toolbar.boundingBox(),
+    rail.boundingBox(),
+    status.boundingBox(),
+  ])
+
+  expect(toolbarBox?.height).toBeCloseTo(48, 0)
+  expect(railBox?.width).toBeCloseTo(176, 0)
+  expect(statusBox?.height).toBeCloseTo(28, 0)
+
+  const lasso = page.getByRole('button', { name: 'Lasso Select' })
+  await lasso.hover()
+  await expect.poll(() => lasso.evaluate(element => {
+    const style = getComputedStyle(element)
+    return { background: style.backgroundColor, color: style.color }
+  })).toEqual({ background: 'rgb(34, 38, 42)', color: 'rgb(226, 232, 240)' })
+
+  await lasso.click()
+  const active = page.getByRole('button', { name: 'Lasso Active' })
+  await expect.poll(() => active.evaluate(element => {
+    const style = getComputedStyle(element)
+    return { border: style.borderColor, color: style.color }
+  })).toEqual({ border: 'rgb(91, 138, 154)', color: 'rgb(91, 138, 154)' })
+})
+
 test('opens shared dialog chrome with the preserved visual tokens', async () => {
   const first = page.locator('.react-flow__node[data-id="file_canvas"]')
   const second = page.locator('.react-flow__node[data-id="file_types"]')

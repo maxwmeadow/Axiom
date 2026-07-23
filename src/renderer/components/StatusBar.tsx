@@ -1,4 +1,3 @@
-import React from 'react'
 import { useGraphStore } from '../store/graphStore'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -15,18 +14,7 @@ export function StatusBar() {
   )
 
   return (
-    <div style={{
-      height: 28,
-      background: 'var(--bg-deep)',
-      borderTop: '1px solid var(--border)',
-      display: 'flex',
-      alignItems: 'center',
-      padding: '0 12px',
-      gap: 20,
-      fontSize: 11,
-      color: 'var(--text-dim)',
-      flexShrink: 0,
-    }}>
+    <div className="axiom-status-bar">
       {/* Connection status */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
         <span style={{
