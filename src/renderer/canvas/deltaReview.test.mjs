@@ -9,6 +9,7 @@ import {
   deltaAttribution,
   deltaHeadline,
   deltaWindow,
+  realizationPresentation,
 } from './deltaReview.ts'
 
 const emptyCounts = {
@@ -195,4 +196,12 @@ test('cursor clamps inside the claim list', () => {
   assert.equal(clampClaimCursor([claim()], -5), 0)
   assert.equal(clampClaimCursor([claim()], 99), 0)
   assert.equal(clampClaimCursor([], 0), -1)
+})
+
+test('every realization state explains the evidence threshold it represents', () => {
+  for (const state of ['MATCHED', 'FLEXED', 'DRIFTED', 'MISSING', 'UNKNOWN']) {
+    const presentation = realizationPresentation(state)
+    assert.equal(presentation.label, state)
+    assert.ok(presentation.title.length > state.length)
+  }
 })

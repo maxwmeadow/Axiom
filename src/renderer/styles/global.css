@@ -6237,3 +6237,36 @@ select.axiom-inspector-input {
 @media (max-width: 1180px) {
   .axiom-agentlog { width: 344px; }
 }
+
+/* ─── Trustworthy realization states ─────────────────────────────────────── */
+
+.axiom-delta__intent[data-status="matched"] {
+  border-color: #718c75;
+  background: #dce8dd;
+  color: #3f6246;
+}
+
+.axiom-delta__intent[data-status="flexed"] {
+  border-color: #9a7f48;
+  background: #eee4c9;
+  color: #72591f;
+}
+
+.axiom-delta__intent[data-status="drifted"] {
+  border-color: #a55d54;
+  background: #ead7d2;
+  color: #813c35;
+}
+
+.axiom-delta__intent[data-status="missing"] {
+  border-style: dashed;
+  border-color: #8d6d91;
+  background: #e7dce9;
+  color: #68476d;
+}
+
+.axiom-delta__intent[data-status="unknown"] {
+  border-color: #7f858c;
+  background: #e2e4e6;
+  color: #555d65;
+}

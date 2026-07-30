@@ -8,6 +8,7 @@ import {
   deltaAttribution,
   deltaHeadline,
   deltaWindow,
+  realizationPresentation,
   sessionDuration,
   type DeltaReview,
 } from '../canvas/deltaReview.ts'
@@ -55,7 +56,11 @@ function ClaimRow({
   onSelect: () => void
   onToggle: () => void
 }) {
-  const hasEvidence = claim.evidence.length > 0
+  const evidence = [...(claim.realizationEvidence ?? []), ...claim.evidence]
+  const hasEvidence = evidence.length > 0
+  const realization = claim.realizationState
+    ? realizationPresentation(claim.realizationState)
+    : null
   // Topology says what moved; only the agent that moved it can say why. When
   // nobody narrated the change, say so rather than leaving a silent gap.
   const why = claimRationale(claim, review)
@@ -75,15 +80,13 @@ function ClaimRow({
         {why && <span className="axiom-delta__claim-why">“{why}”</span>}
         <span className="axiom-delta__claim-meta">
           <span className="axiom-delta__claim-sub">{claim.subtitle}</span>
-          {claim.intentStatus && (
+          {claim.realizationState && realization && (
             <span
               className="axiom-delta__intent"
-              data-status={claim.intentStatus}
-              title={claim.intentStatus === 'expected'
-                ? 'Matches a build spec dispatched before this change'
-                : 'No dispatched build spec explains this agent change'}
+              data-status={claim.realizationState.toLowerCase()}
+              title={realization.title}
             >
-              {claim.intentStatus === 'expected' ? 'EXPECTED' : 'DRIFT'}
+              {realization.label}
             </span>
           )}
           {!why && claim.actor === 'agent' && (
@@ -102,13 +105,13 @@ function ClaimRow({
           aria-expanded={expanded}
           onClick={onToggle}
         >
-          {expanded ? '▾' : '▸'} {claim.evidence.length} evidence
+          {expanded ? '▾' : '▸'} {evidence.length} evidence
         </button>
       )}
 
       {expanded && hasEvidence && (
         <ul className="axiom-delta__evidence">
-          {claim.evidence.map((item, index) => (
+          {evidence.map((item, index) => (
             <li key={`${claim.id}:${index}`}>
               <span className="axiom-delta__evidence-label">{item.label}</span>
               {item.detail && <span className="axiom-delta__evidence-detail">{item.detail}</span>}

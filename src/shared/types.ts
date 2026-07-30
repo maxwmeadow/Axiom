@@ -561,3 +561,16 @@ export interface DbGraphPatch {
     | { fileId: string; systemId: string }
     | { revision: number; layouts: FloorLayout[] }
 }
+
+// ─── Trustworthy realization ────────────────────────────────────────────────
+// Appended as declaration merging so concurrent work can keep the original
+// DeltaClaim definition stable while the review API moves beyond binary drift.
+
+export type RealizationState = 'MATCHED' | 'FLEXED' | 'DRIFTED' | 'MISSING' | 'UNKNOWN'
+
+export interface DeltaClaim {
+  /** True only when the indexer produced the structural facts behind a claim. */
+  corroborated?: boolean
+  realizationState?: RealizationState
+  realizationEvidence?: DeltaEvidence[]
+}
