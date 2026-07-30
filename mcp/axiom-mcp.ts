@@ -41,8 +41,21 @@ interface ActiveProject {
   rootPath: string
 }
 
+/**
+ * archd's HTTP API. Overridable so the server can be driven against an
+ * isolated daemon in tests without touching a developer's real workspace.
+ */
+const API_BASE = process.env.AXIOM_API_URL ?? 'http://127.0.0.1:7743'
+
+/**
+ * Which project the agent is acting on. The desktop app writes this; an
+ * override lets a harness point at a throwaway workspace.
+ */
+const ACTIVE_PROJECT_PATH =
+  process.env.AXIOM_ACTIVE_PROJECT ?? join(homedir(), '.axiom', 'data', 'active_project.json')
+
 function getActiveProject(): ActiveProject {
-  const activeProjectPath = join(homedir(), '.axiom', 'data', 'active_project.json')
+  const activeProjectPath = ACTIVE_PROJECT_PATH
   if (!fs.existsSync(activeProjectPath)) {
     throw new Error('No active project found. Please open a project in the Axiom desktop application.')
   }
@@ -51,7 +64,7 @@ function getActiveProject(): ActiveProject {
 
 // Helper: Secure read-only SQL execution via Go daemon query gateway
 async function queryDb(workspaceId: string, sql: string, params: any[] = []): Promise<any[]> {
-  const res = await fetch('http://localhost:7743/api/query', {
+  const res = await fetch(`${API_BASE}/api/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workspaceId, sql, params }),
@@ -65,7 +78,7 @@ async function queryDb(workspaceId: string, sql: string, params: any[] = []): Pr
 // Helper: Post agent activity log to Go backend which broadcasts to WS client UI
 async function postAgentActivity(workspaceId: string, message: string, level: 'info' | 'warn' | 'success' | 'error') {
   try {
-    await fetch('http://localhost:7743/api/agent/activity', {
+    await fetch(`${API_BASE}/api/agent/activity`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workspaceId, message, level }),
@@ -89,7 +102,7 @@ async function postAgentAction(
   error?: string,
 ) {
   try {
-    await fetch('http://localhost:7743/api/agent/action', {
+    await fetch(`${API_BASE}/api/agent/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -111,7 +124,7 @@ async function postAgentAction(
 // Helper: resolve a sheet by ID or exact name.
 async function resolveSheetId(workspaceId: string, ref: string): Promise<string> {
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(ref)) return ref
-  const res = await fetch(`http://localhost:7743/api/sheets?workspace=${encodeURIComponent(workspaceId)}`)
+  const res = await fetch(`${API_BASE}/api/sheets?workspace=${encodeURIComponent(workspaceId)}`)
   if (!res.ok) throw new Error(`sheets list failed: ${await res.text()}`)
   const sheets = await res.json() as { id: string; name: string }[]
   const hit = (sheets ?? []).find(s => s.name === ref) ?? (sheets ?? []).find(s => s.name.toLowerCase() === ref.toLowerCase())
@@ -158,7 +171,7 @@ async function canvasTrailer(workspaceId: string, toolName: string): Promise<str
   if (CANVAS_TOOLS.has(toolName)) return ''
   try {
     const res = await fetch(
-      `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(workspaceId)}&peek=1`
+      `${API_BASE}/api/canvas/outbox?workspace=${encodeURIComponent(workspaceId)}&peek=1`
     )
     if (!res.ok) return ''
     const { queued } = await res.json() as { queued: number }
@@ -192,7 +205,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
   }
   const project = getActiveProject()
   const res = await fetch(
-    `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=prompt`
+    `${API_BASE}/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=prompt`
   )
   const msgs = res.ok ? (await res.json() as any[]) ?? [] : []
   const text = msgs.length === 0
@@ -664,7 +677,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           source: 'agent',
         }
         await postAgentActivity(project.workspaceId, `Creating system "${args.name}"`, 'info')
-        const res = await fetch('http://localhost:7743/api/systems', {
+        const res = await fetch(`${API_BASE}/api/systems`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -704,7 +717,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         await postAgentActivity(project.workspaceId, `Updating system "${payload.name}"`, 'info')
-        const res = await fetch(`http://localhost:7743/api/systems/${sysId}`, {
+        const res = await fetch(`${API_BASE}/api/systems/${sysId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -725,7 +738,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const sysLabel = existing.length > 0 ? existing[0].name : sysId
 
         await postAgentActivity(project.workspaceId, `Deleting system "${sysLabel}"`, 'info')
-        const res = await fetch(`http://localhost:7743/api/systems/${sysId}?workspace=${project.workspaceId}`, {
+        const res = await fetch(`${API_BASE}/api/systems/${sysId}?workspace=${project.workspaceId}`, {
           method: 'DELETE',
         })
         if (!res.ok) {
@@ -769,7 +782,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await postAgentActivity(project.workspaceId, `Assigning ${idsToAssign.length} files to system "${sysLabel}"`, 'info')
 
         for (const fileId of idsToAssign) {
-          const res = await fetch(`http://localhost:7743/api/files/${fileId}/assign`, {
+          const res = await fetch(`${API_BASE}/api/files/${fileId}/assign`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ systemId, workspaceId: project.workspaceId }),
@@ -804,7 +817,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // 1. Reassign files in source system
         const filesToMove = await queryDb(project.workspaceId, 'SELECT id FROM files WHERE system_id = ?', [sourceId])
         for (const file of filesToMove) {
-          const res = await fetch(`http://localhost:7743/api/files/${file.id}/assign`, {
+          const res = await fetch(`${API_BASE}/api/files/${file.id}/assign`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ systemId: targetId, workspaceId: project.workspaceId }),
@@ -834,7 +847,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             width: sys.width,
             height: sys.height,
           }
-          const res = await fetch(`http://localhost:7743/api/systems/${sys.id}`, {
+          const res = await fetch(`${API_BASE}/api/systems/${sys.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -843,7 +856,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         
         // 3. Delete the source system
-        const res = await fetch(`http://localhost:7743/api/systems/${sourceId}?workspace=${project.workspaceId}`, {
+        const res = await fetch(`${API_BASE}/api/systems/${sourceId}?workspace=${project.workspaceId}`, {
           method: 'DELETE',
         })
         if (!res.ok) throw new Error(`Failed to delete source system ${sourceId}: ${await res.text()}`)
@@ -944,7 +957,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               height: existing.height,
             }
             
-            const res = await fetch(`http://localhost:7743/api/systems/${u.systemId}`, {
+            const res = await fetch(`${API_BASE}/api/systems/${u.systemId}`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload),
@@ -1267,7 +1280,7 @@ Steps to execute:
         const file = args.file as string
         const symbol = args.symbol as string
         await postAgentActivity(project.workspaceId, `Agent watching function: ${symbol} in ${file}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/watch', {
+        const res = await fetch(`${API_BASE}/api/runtime/watch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol }),
@@ -1281,7 +1294,7 @@ Steps to execute:
         const file = args.file as string
         const symbol = args.symbol as string
         await postAgentActivity(project.workspaceId, `Agent removed watch: ${symbol} in ${file}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/unwatch', {
+        const res = await fetch(`${API_BASE}/api/runtime/unwatch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol }),
@@ -1302,7 +1315,7 @@ Steps to execute:
           `Agent requests injection: ${symbol}(${paramName}=${JSON.stringify(value)}) in ${file} — awaiting user confirmation`,
           'warn',
         )
-        const res = await fetch('http://localhost:7743/api/runtime/inject', {
+        const res = await fetch(`${API_BASE}/api/runtime/inject`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol, paramName, value, once }),
@@ -1315,7 +1328,7 @@ Steps to execute:
       case 'cancel_injection': {
         const injectId = args.injectId as string
         await postAgentActivity(project.workspaceId, `Agent cancelled injection ${injectId}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/inject/cancel', {
+        const res = await fetch(`${API_BASE}/api/runtime/inject/cancel`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, injectId }),
@@ -1327,7 +1340,7 @@ Steps to execute:
 
       case 'get_runtime_snapshot': {
         const res = await fetch(
-          `http://localhost:7743/api/runtime/snapshot?workspace=${encodeURIComponent(project.workspaceId)}`
+          `${API_BASE}/api/runtime/snapshot?workspace=${encodeURIComponent(project.workspaceId)}`
         )
         if (!res.ok) throw new Error(`snapshot failed: ${await res.text()}`)
         result = await res.json()
@@ -1339,7 +1352,7 @@ Steps to execute:
         const cwd = args.cwd as string | undefined
         const language = args.language as string | undefined
         await postAgentActivity(project.workspaceId, `Agent launching target: ${command.join(' ')}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/launch', {
+        const res = await fetch(`${API_BASE}/api/runtime/launch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, command, cwd, language }),
@@ -1352,7 +1365,7 @@ Steps to execute:
       case 'stop_target': {
         const targetId = args.targetId as string
         await postAgentActivity(project.workspaceId, `Agent stopping target ${targetId}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/stop', {
+        const res = await fetch(`${API_BASE}/api/runtime/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ targetId }),
@@ -1365,7 +1378,7 @@ Steps to execute:
       case 'get_target_log': {
         const targetId = args.targetId as string
         const res = await fetch(
-          `http://localhost:7743/api/runtime/target-log?target=${encodeURIComponent(targetId)}`
+          `${API_BASE}/api/runtime/target-log?target=${encodeURIComponent(targetId)}`
         )
         if (!res.ok) throw new Error(`target-log failed: ${await res.text()}`)
         result = await res.json()
@@ -1384,7 +1397,7 @@ Steps to execute:
           else if (resolved.fileId) focusFileIds.push(resolved.fileId)
           else throw new Error(`Work focus "${ref}" is infrastructure; use a file or system boundary`)
         }
-        const res = await fetch('http://localhost:7743/api/work/start', {
+        const res = await fetch(`${API_BASE}/api/work/start`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             workspaceId: project.workspaceId,
@@ -1406,7 +1419,7 @@ Steps to execute:
         const text = args.text as string
         const sessionId = activeWorkSessionIds.get(project.workspaceId)
         if (!sessionId) throw new Error('No active work session in this MCP client — call start_work first')
-        const res = await fetch('http://localhost:7743/api/work/note', {
+        const res = await fetch(`${API_BASE}/api/work/note`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, sessionId, text }),
         })
@@ -1420,7 +1433,7 @@ Steps to execute:
         const summary = args.summary as string
         const sessionId = activeWorkSessionIds.get(project.workspaceId)
         if (!sessionId) throw new Error('No active work session in this MCP client — call start_work first')
-        const res = await fetch('http://localhost:7743/api/work/finish', {
+        const res = await fetch(`${API_BASE}/api/work/finish`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, sessionId, summary }),
         })
@@ -1433,7 +1446,7 @@ Steps to execute:
 
       case 'start_investigation': {
         const name = (args.name as string) ?? ''
-        const res = await fetch('http://localhost:7743/api/investigation/start', {
+        const res = await fetch(`${API_BASE}/api/investigation/start`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, name }),
         })
@@ -1445,7 +1458,7 @@ Steps to execute:
 
       case 'annotate_investigation': {
         const text = args.text as string
-        const res = await fetch('http://localhost:7743/api/investigation/note', {
+        const res = await fetch(`${API_BASE}/api/investigation/note`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, text }),
         })
@@ -1456,7 +1469,7 @@ Steps to execute:
       }
 
       case 'stop_investigation': {
-        const res = await fetch('http://localhost:7743/api/investigation/stop', {
+        const res = await fetch(`${API_BASE}/api/investigation/stop`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId }),
         })
@@ -1467,7 +1480,7 @@ Steps to execute:
       }
 
       case 'list_investigations': {
-        const res = await fetch(`http://localhost:7743/api/investigation/list?workspace=${encodeURIComponent(project.workspaceId)}`)
+        const res = await fetch(`${API_BASE}/api/investigation/list?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`list_investigations failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1475,7 +1488,7 @@ Steps to execute:
 
       case 'get_investigation': {
         const id = args.id as string
-        const res = await fetch(`http://localhost:7743/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(project.workspaceId)}`)
+        const res = await fetch(`${API_BASE}/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`get_investigation failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1489,7 +1502,7 @@ Steps to execute:
         const params = new URLSearchParams({ workspace: project.workspaceId, variable })
         if (file) params.set('file', file)
         if (maxFiles) params.set('maxFiles', String(maxFiles))
-        const res = await fetch(`http://localhost:7743/api/data-flow?${params.toString()}`)
+        const res = await fetch(`${API_BASE}/api/data-flow?${params.toString()}`)
         if (!res.ok) throw new Error(`data-flow failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1500,7 +1513,7 @@ Steps to execute:
         const symbol = args.symbol as string
         await postAgentActivity(project.workspaceId, `Agent reading function body: ${symbol} in ${file}`, 'info')
         const res = await fetch(
-          `http://localhost:7743/api/function-body?workspace=${encodeURIComponent(project.workspaceId)}&file=${encodeURIComponent(file)}&symbol=${encodeURIComponent(symbol)}`
+          `${API_BASE}/api/function-body?workspace=${encodeURIComponent(project.workspaceId)}&file=${encodeURIComponent(file)}&symbol=${encodeURIComponent(symbol)}`
         )
         if (!res.ok) {
           const errMsg = await res.text()
@@ -1534,7 +1547,7 @@ Steps to execute:
         await postAgentActivity(project.workspaceId, `Agent tracing call path: ${from} → ${to}`, 'info')
 
         const res = await fetch(
-          `http://localhost:7743/api/call-path?workspace=${encodeURIComponent(project.workspaceId)}&from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`
+          `${API_BASE}/api/call-path?workspace=${encodeURIComponent(project.workspaceId)}&from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`
         )
         if (!res.ok) {
           const errMsg = await res.text()
@@ -1554,7 +1567,7 @@ Steps to execute:
 
       // ── Infra layer (INFRA_LAYER_PLAN.md Phase I1) ─────────────────────────
       case 'list_infra_services': {
-        const res = await fetch('http://localhost:7743/api/registry/services')
+        const res = await fetch(`${API_BASE}/api/registry/services`)
         if (!res.ok) throw new Error(`registry fetch failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1562,7 +1575,7 @@ Steps to execute:
 
       case 'list_infra': {
         await postAgentActivity(project.workspaceId, 'Agent listed infra nodes', 'info')
-        const res = await fetch(`http://localhost:7743/api/infra?workspace=${encodeURIComponent(project.workspaceId)}`)
+        const res = await fetch(`${API_BASE}/api/infra?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`infra list failed: ${await res.text()}`)
         const data = await res.json() as { nodes: any[]; edges: any[] }
         if (args.status) {
@@ -1575,7 +1588,7 @@ Steps to execute:
       case 'create_infra_node': {
         const label = (args.name as string) || (args.service as string) || (args.category as string) || 'infra node'
         await postAgentActivity(project.workspaceId, `Agent creating infra node "${label}"`, 'info')
-        const res = await fetch('http://localhost:7743/api/infra', {
+        const res = await fetch(`${API_BASE}/api/infra`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1599,7 +1612,7 @@ Steps to execute:
       }
 
       case 'update_infra_node': {
-        const res = await fetch(`http://localhost:7743/api/infra/${encodeURIComponent(args.id as string)}`, {
+        const res = await fetch(`${API_BASE}/api/infra/${encodeURIComponent(args.id as string)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1618,7 +1631,7 @@ Steps to execute:
 
       case 'delete_infra_node': {
         const res = await fetch(
-          `http://localhost:7743/api/infra/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`,
+          `${API_BASE}/api/infra/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`,
           { method: 'DELETE' }
         )
         if (!res.ok) throw new Error(`delete infra failed: ${await res.text()}`)
@@ -1642,7 +1655,7 @@ Steps to execute:
           srcId = rows[0].id
         }
         await postAgentActivity(project.workspaceId, `Agent connecting ${args.src} → infra (${args.kind})`, 'info')
-        const res = await fetch('http://localhost:7743/api/infra/connect', {
+        const res = await fetch(`${API_BASE}/api/infra/connect`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1663,7 +1676,7 @@ Steps to execute:
       case 'get_activity_hotspots': {
         const limit = args.limit ?? 20
         const res = await fetch(
-          `http://localhost:7743/api/activity/hotspots?workspace=${encodeURIComponent(project.workspaceId)}&limit=${limit}`
+          `${API_BASE}/api/activity/hotspots?workspace=${encodeURIComponent(project.workspaceId)}&limit=${limit}`
         )
         if (!res.ok) throw new Error(`hotspots failed: ${await res.text()}`)
         const hots = await res.json() as any[]
@@ -1708,7 +1721,7 @@ Steps to execute:
 
       // ── Sheets (UML experience layer — UML_UX_PLAN.md U1) ─────────────────
       case 'list_sheets': {
-        const res = await fetch(`http://localhost:7743/api/sheets?workspace=${encodeURIComponent(project.workspaceId)}`)
+        const res = await fetch(`${API_BASE}/api/sheets?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`sheets list failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1717,7 +1730,7 @@ Steps to execute:
       case 'get_sheet': {
         const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
         const res = await fetch(
-          `http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/asm?workspace=${encodeURIComponent(project.workspaceId)}`
+          `${API_BASE}/api/sheets/${encodeURIComponent(sheetId)}/asm?workspace=${encodeURIComponent(project.workspaceId)}`
         )
         if (!res.ok) throw new Error(`get sheet failed: ${await res.text()}`)
         const data = await res.json() as { asm: string }
@@ -1732,7 +1745,7 @@ Steps to execute:
           elements.push(await resolveModelRef(project.workspaceId, ref))
         }
         await postAgentActivity(project.workspaceId, `Agent creating sheet "${args.name}"`, 'info')
-        const res = await fetch('http://localhost:7743/api/sheets', {
+        const res = await fetch(`${API_BASE}/api/sheets`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1756,7 +1769,7 @@ Steps to execute:
         for (const ref of (args.members as string[]) ?? []) {
           elements.push(await resolveModelRef(project.workspaceId, ref))
         }
-        const res = await fetch(`http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/elements`, {
+        const res = await fetch(`${API_BASE}/api/sheets/${encodeURIComponent(sheetId)}/elements`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, elements: elements.map(e => ({ ...e, addedBy: 'agent' })) }),
@@ -1777,7 +1790,7 @@ Steps to execute:
           else if (ref.systemId) { targetType = 'system'; targetId = ref.systemId }
           else if (ref.infraId) { targetType = 'infra'; targetId = ref.infraId }
         }
-        const res = await fetch('http://localhost:7743/api/annotations', {
+        const res = await fetch(`${API_BASE}/api/annotations`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1795,7 +1808,7 @@ Steps to execute:
 
       case 'plan_element': {
         const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
-        const res = await fetch(`http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/planned`, {
+        const res = await fetch(`${API_BASE}/api/sheets/${encodeURIComponent(sheetId)}/planned`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1824,7 +1837,7 @@ Steps to execute:
 
       case 'get_plan_status': {
         const res = await fetch(
-          `http://localhost:7743/api/planned/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`
+          `${API_BASE}/api/planned/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`
         )
         if (!res.ok) throw new Error(`plan status failed: ${await res.text()}`)
         const planned = await res.json() as any
@@ -1845,7 +1858,7 @@ Steps to execute:
       case 'get_build_spec': {
         const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
         const res = await fetch(
-          `http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/buildspec?workspace=${encodeURIComponent(project.workspaceId)}`
+          `${API_BASE}/api/sheets/${encodeURIComponent(sheetId)}/buildspec?workspace=${encodeURIComponent(project.workspaceId)}`
         )
         if (!res.ok) throw new Error(`build spec failed: ${await res.text()}`)
         const data = await res.json() as { buildSpec: string }
@@ -1856,7 +1869,7 @@ Steps to execute:
       // ── Canvas → agent channel (UML_UX_PLAN.md U-C) ────────────────────────
       case 'get_canvas_updates': {
         const res = await fetch(
-          `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
+          `${API_BASE}/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
         )
         if (!res.ok) throw new Error(`canvas outbox failed: ${await res.text()}`)
         const msgs = await res.json() as any[]
@@ -1875,7 +1888,7 @@ Steps to execute:
         let messages: any[] = []
         while (Date.now() < deadline) {
           const res = await fetch(
-            `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
+            `${API_BASE}/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
           )
           if (res.ok) {
             messages = await res.json() as any[] ?? []
@@ -1890,7 +1903,7 @@ Steps to execute:
       }
 
       case 'reply_to_canvas': {
-        const res = await fetch('http://localhost:7743/api/canvas/reply', {
+        const res = await fetch(`${API_BASE}/api/canvas/reply`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

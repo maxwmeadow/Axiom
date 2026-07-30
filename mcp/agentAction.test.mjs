@@ -25,6 +25,16 @@ test('targets come from whichever id-bearing argument the tool used', () => {
   )
 })
 
+test('the consolidated id/ids vocabulary is recognised', () => {
+  // get_architecture takes a generic `id`. Missing it meant every read through
+  // the new surface recorded no targets, so the canvas lit nothing at all.
+  assert.deepEqual(actionTargets('get_architecture', { scope: 'node', id: 'n1' }), ['n1'])
+  assert.deepEqual(
+    actionTargets('get_architecture', { scope: 'systems', ids: ['s1', 's2'] }),
+    ['s1', 's2'],
+  )
+})
+
 test('a traced path targets every hop, not just the endpoints', () => {
   const targets = actionTargets(
     'get_call_path',

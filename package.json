@@ -7,6 +7,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "test:renderer": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.mjs\" \"mcp/**/*.test.mjs\"",
+    "test:mcp": "npm run build:archd && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"mcp/e2e/*.e2e.mjs\"",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:update": "npm run build && playwright test --update-snapshots",
     "preview": "electron-vite preview",
