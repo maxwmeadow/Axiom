@@ -196,3 +196,67 @@ export function placeIncoming(
   }
   return best ?? { x: maxX + options.baseGap, y: Math.max(origin.y, minY) }
 }
+
+/**
+ * The free slot CLOSEST to where the user let go, constrained to `bounds`.
+ *
+ * `placeIncoming` answers a different question — "where does this extend the
+ * cluster most compactly?" — scored against the cluster's bounds and centroid,
+ * with `origin` acting as a hard lower bound rather than a preference. Used for
+ * a drop that landed on a sibling, it yanked the node back toward the cluster
+ * from wherever it was released, and its result then had to be clamped into the
+ * frame afterwards. That clamp could push the node back onto a neighbour, the
+ * caller read the collision as "no room", and a drop into a frame with obvious
+ * empty space fell through to a full interior compression.
+ *
+ * Here `bounds` is a filter rather than a post-hoc clamp, so a returned slot is
+ * always genuinely free and genuinely inside the frame, and null genuinely
+ * means the frame is full.
+ */
+export function placeNearest(
+  item: PackItem,
+  occupied: readonly { x: number; y: number; width: number; height: number }[],
+  options: { baseGap: number; bounds: { x: number; y: number; width: number; height: number }; preferred: { x: number; y: number } },
+): { x: number; y: number } | null {
+  const { baseGap, bounds, preferred } = options
+  if (item.width > bounds.width || item.height > bounds.height) return null
+  const placed: PlacedRect[] = occupied.map((rect, index) => ({
+    id: 'occupied:' + index, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+  }))
+  const minClearance = baseGap - CLEARANCE_EPSILON
+  const maxX = bounds.x + bounds.width - item.width
+  const maxY = bounds.y + bounds.height - item.height
+  const clampIntoBounds = (spot: { x: number; y: number }) => ({
+    x: Math.min(Math.max(spot.x, bounds.x), maxX),
+    y: Math.min(Math.max(spot.y, bounds.y), maxY),
+  })
+
+  // The release point first, then every edge-flush spot around a neighbour, and
+  // the frame's own corners so a full-looking frame still finds its margins.
+  const candidates = [preferred]
+  for (const anchor of placed) {
+    for (const candidate of candidatesAround(anchor, item, baseGap)) {
+      // Sliding along one axis only keeps the node near where it was released.
+      candidates.push(candidate, { x: candidate.x, y: preferred.y }, { x: preferred.x, y: candidate.y })
+    }
+  }
+  candidates.push(
+    { x: bounds.x, y: bounds.y },
+    { x: maxX, y: bounds.y },
+    { x: bounds.x, y: maxY },
+    { x: maxX, y: maxY },
+  )
+
+  let best: { x: number; y: number } | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const raw of candidates) {
+    const spot = clampIntoBounds(raw)
+    if (collides(spot.x, spot.y, item.width, item.height, placed, minClearance)) continue
+    const distance = Math.hypot(spot.x - preferred.x, spot.y - preferred.y)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = spot
+    }
+  }
+  return best
+}

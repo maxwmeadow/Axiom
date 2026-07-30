@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  HIDDEN_NODE_CLASS,
   REVEAL_CONTAINER_PX,
   applyZoomVisibility,
   makeFullyVisible,
@@ -53,4 +54,78 @@ test('makeFullyVisible overrides temporary semantic-zoom hiding', () => {
   assert.equal(visible.data.selfScale, 1)
   assert.equal(visible.data.selfBlur, 0)
   assert.equal(visible.data.childrenVisible, 1)
+})
+
+test('a zoom change that alters nothing reuses the exact same node objects', () => {
+  // React Flow re-renders a node only when its object identity changes. During
+  // smooth-zoom easing this runs every animation frame, so a node whose
+  // visibility did not change must come back identical or the whole canvas
+  // re-renders ~60 times a second.
+  const nodes = [
+    node('root', REVEAL_CONTAINER_PX, REVEAL_CONTAINER_PX),
+    node('leaf', 220, 110, { depth: 1, parentId: 'root' }),
+  ]
+  const first = applyZoomVisibility(nodes, 1)
+  const again = applyZoomVisibility(first, 1)
+  assert.equal(again[0], first[0])
+  assert.equal(again[1], first[1])
+
+  // A tiny easing step that crosses no threshold must also change nothing.
+  const nudged = applyZoomVisibility(first, 1.0001)
+  assert.equal(nudged[0], first[0])
+  assert.equal(nudged[1], first[1])
+})
+
+test('crossing the detail threshold does produce new node objects', () => {
+  const leaf = node('leaf', 220, 110, { depth: 0 })
+  leaf.data.worldScale = 1
+  const below = applyZoomVisibility([leaf], 1)
+  const above = applyZoomVisibility(below, 2)
+
+  assert.notEqual(above[0], below[0])
+  assert.equal(below[0].data.detailRevealed, false)
+  assert.equal(above[0].data.detailRevealed, true)
+})
+
+test('crossing the container reveal threshold produces new node objects', () => {
+  const parent = node('parent', REVEAL_CONTAINER_PX, REVEAL_CONTAINER_PX)
+  const child = node('child', 100, 100, { depth: 1, parentId: 'parent' })
+  const revealed = applyZoomVisibility([parent, child], 1)
+  const hidden = applyZoomVisibility(revealed, 0.2)
+
+  assert.equal(revealed[1].style.opacity, 1)
+  assert.equal(hidden[1].style.opacity, 0)
+  assert.notEqual(hidden[1], revealed[1])
+})
+
+test('a semantically hidden node cannot be grabbed', () => {
+  // CSS pointer-events on the wrapper is not enough: a descendant setting
+  // `auto` re-enables hits, so an invisible child stole drags meant for the
+  // container drawn around it.
+  const parent = node('parent', 100, 100)
+  const child = node('child', 40, 40, { depth: 1, parentId: 'parent' })
+  const [hiddenParent, hiddenChild] = applyZoomVisibility([parent, child], 0.05)
+
+  assert.equal(hiddenChild.style.opacity, 0)
+  assert.equal(hiddenChild.style.pointerEvents, 'none')
+  assert.equal(hiddenChild.draggable, false)
+  // And genuinely click-through, so the pointer reaches the visible node it
+  // sits on top of rather than being swallowed.
+  assert.equal(hiddenChild.className, HIDDEN_NODE_CLASS)
+  assert.equal(hiddenParent.className, '')
+  assert.equal(hiddenChild.selectable, false)
+  // The visible container it sits inside stays fully interactive.
+  assert.equal(hiddenParent.draggable, true)
+  assert.equal(hiddenParent.selectable, true)
+
+  // Revealing restores interaction.
+  const revealed = applyZoomVisibility(
+    [node('parent', REVEAL_CONTAINER_PX, REVEAL_CONTAINER_PX),
+     node('child', 40, 40, { depth: 1, parentId: 'parent' })],
+    1,
+  )[1]
+  assert.equal(revealed.draggable, true)
+
+  // A dragged node is forced interactive even while faded.
+  assert.equal(makeFullyVisible(hiddenChild).draggable, true)
 })

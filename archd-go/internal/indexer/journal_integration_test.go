@@ -1,0 +1,200 @@
+package indexer
+
+import (
+	"database/sql"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"axiom.local/archd/internal/db"
+	"axiom.local/archd/internal/delta"
+	"axiom.local/archd/internal/hub"
+)
+
+// The journal is what makes the delta survive the app being closed, so these
+// tests exercise the real reindex path rather than the pure aggregator.
+
+func journalFixture(t *testing.T) (*sql.DB, db.Root, *hub.Hub) {
+	t.Helper()
+	sqlDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	root := db.Root{ID: "root", WorkspaceID: "ws", Path: t.TempDir()}
+	if err := db.UpsertWorkspace(sqlDB, db.Workspace{ID: "ws", Name: "journal"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertRoot(sqlDB, root); err != nil {
+		t.Fatal(err)
+	}
+	return sqlDB, root, hub.New()
+}
+
+// reviewedAt returns a watermark positioned strictly between the events
+// recorded so far and everything that happens next. The journal is
+// millisecond-resolution and the delta window is exclusive (ts > since), so a
+// test that acts within the same millisecond as its own setup would otherwise
+// filter out the change it is asserting on.
+func reviewedAt(t *testing.T, sqlDB *sql.DB) int64 {
+	t.Helper()
+	events, err := db.GetStructuralEvents(sqlDB, "ws", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watermark := int64(0)
+	if len(events) > 0 {
+		watermark = events[len(events)-1].TS
+	}
+	for time.Now().UnixMilli() <= watermark {
+		time.Sleep(time.Millisecond)
+	}
+	return watermark
+}
+
+func journalSummary(t *testing.T, sqlDB *sql.DB, since int64) delta.Summary {
+	t.Helper()
+	events, err := db.GetStructuralEvents(sqlDB, "ws", since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return delta.Aggregate(events, since, 0)
+}
+
+func TestReindexJournalsCreationAndTopology(t *testing.T) {
+	sqlDB, root, eventHub := journalFixture(t)
+
+	callerPath := filepath.Join(root.Path, "caller.py")
+	calleePath := filepath.Join(root.Path, "worker.py")
+	writeLivingFixture(t, calleePath, "def transform(value):\n    return value + 1\n")
+	if err := ReindexFile(sqlDB, eventHub, root, calleePath); err != nil {
+		t.Fatal(err)
+	}
+	writeLivingFixture(t, callerPath, "from worker import transform\n\ndef run(value):\n    return transform(value)\n")
+	if err := ReindexFile(sqlDB, eventHub, root, callerPath); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := journalSummary(t, sqlDB, 0)
+	if summary.Counts.FilesCreated != 2 {
+		t.Fatalf("both files should be journaled as created: %+v", summary.Counts)
+	}
+	if summary.Counts.EdgesAdded == 0 {
+		t.Fatalf("the new call should be journaled as topology: %+v", summary.Counts)
+	}
+	for _, file := range summary.Files {
+		if file.Language != "python" {
+			t.Fatalf("journal lost the file's language: %+v", file)
+		}
+	}
+}
+
+func TestNoOpSaveIsNotJournaled(t *testing.T) {
+	sqlDB, root, eventHub := journalFixture(t)
+	path := filepath.Join(root.Path, "stable.py")
+	writeLivingFixture(t, path, "def run():\n    return 1\n")
+	if err := ReindexFile(sqlDB, eventHub, root, path); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := db.GetStructuralEvents(sqlDB, "ws", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same bytes written again — a save, but not a change.
+	writeLivingFixture(t, path, "def run():\n    return 1\n")
+	if err := ReindexFile(sqlDB, eventHub, root, path); err != nil {
+		t.Fatal(err)
+	}
+	after, err := db.GetStructuralEvents(sqlDB, "ws", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("a no-op save must not enter the delta: %d → %d", len(before), len(after))
+	}
+}
+
+func TestRepeatedEditsCollapseToOneJournalRow(t *testing.T) {
+	sqlDB, root, eventHub := journalFixture(t)
+	path := filepath.Join(root.Path, "hot.py")
+	writeLivingFixture(t, path, "def run():\n    return 1\n")
+	if err := ReindexFile(sqlDB, eventHub, root, path); err != nil {
+		t.Fatal(err)
+	}
+	for i, body := range []string{
+		"def run():\n    return 2\n",
+		"def run():\n    return 3\n",
+		"def run():\n    return 4\n",
+	} {
+		writeLivingFixture(t, path, body)
+		if err := ReindexFile(sqlDB, eventHub, root, path); err != nil {
+			t.Fatalf("edit %d: %v", i, err)
+		}
+	}
+
+	events, err := db.GetStructuralEvents(sqlDB, "ws", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates := 0
+	for _, ev := range events {
+		if ev.Kind == db.EventFileUpdated {
+			updates++
+			if ev.Count != 3 {
+				t.Fatalf("three edits should collapse into one row of count 3, got %d", ev.Count)
+			}
+		}
+	}
+	if updates != 1 {
+		t.Fatalf("expected one collapsed update row, got %d", updates)
+	}
+}
+
+func TestDeletedFileStillDescribesItselfInTheDelta(t *testing.T) {
+	sqlDB, root, eventHub := journalFixture(t)
+	path := filepath.Join(root.Path, "doomed.py")
+	writeLivingFixture(t, path, "def run():\n    return 1\n")
+	if err := ReindexFile(sqlDB, eventHub, root, path); err != nil {
+		t.Fatal(err)
+	}
+	// Acknowledge the creation, so the delete stands alone in the next delta.
+	reviewed := reviewedAt(t, sqlDB)
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveFile(sqlDB, eventHub, root, path); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := journalSummary(t, sqlDB, reviewed)
+	if len(summary.Files) != 1 {
+		t.Fatalf("expected the deletion alone, got %+v", summary.Files)
+	}
+	if summary.Files[0].Change != delta.ChangeDeleted {
+		t.Fatalf("expected a deletion, got %q", summary.Files[0].Change)
+	}
+	if summary.Files[0].RelPath != "doomed.py" {
+		t.Fatalf("a tombstone must still name the file, got %+v", summary.Files[0])
+	}
+}
+
+func TestWatermarkNeverMovesBackwards(t *testing.T) {
+	sqlDB, _, _ := journalFixture(t)
+	if err := db.SetDeltaReviewedAt(sqlDB, "ws", 5000); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetDeltaReviewedAt(sqlDB, "ws", 1000); err != nil {
+		t.Fatal(err)
+	}
+	at, err := db.GetDeltaReviewedAt(sqlDB, "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at != 5000 {
+		t.Fatalf("a late ack must not resurrect a reviewed delta, got %d", at)
+	}
+}

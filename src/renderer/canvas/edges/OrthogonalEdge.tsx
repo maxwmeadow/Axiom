@@ -1,18 +1,10 @@
 import React from 'react'
-import { type EdgeProps, getStraightPath } from '@xyflow/react'
+import { EdgeText, type EdgeProps, getSmoothStepPath } from '@xyflow/react'
 
 /**
- * Orthogonal (90-degree stair-step) edge — renders a right-angled path between
- * source and target instead of a smooth bezier. Matches the classic UML/ER
- * diagram aesthetic.
- *
- * Routing: simple midpoint stair-step.
- *   - Horizontal from source anchor to midpoint X
- *   - Vertical step to target Y
- *   - Horizontal from midpoint to target anchor
- *
- * If source and target are vertically aligned (within 20px), falls back to a
- * straight vertical line.
+ * Hard-corner stepped edge that respects the actual source and target faces.
+ * Static diagram edges and transient living flows share the path primitive,
+ * while living flows add their one-shot travelling pulse.
  */
 export function OrthogonalEdge({
   id,
@@ -20,58 +12,85 @@ export function OrthogonalEdge({
   sourceY,
   targetX,
   targetY,
+  sourcePosition,
+  targetPosition,
   style,
-  markerEnd,
-  markerStart,
-  selected,
   data,
+  label,
+  labelStyle,
+  labelShowBg,
+  labelBgStyle,
+  labelBgPadding,
+  labelBgBorderRadius,
 }: EdgeProps) {
-  const dx = Math.abs(targetX - sourceX)
-  const dy = Math.abs(targetY - sourceY)
-
-  let pathD: string
-
-  if (dx < 20) {
-    // Nearly vertical — straight line
-    pathD = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`
-  } else if (dy < 20) {
-    // Nearly horizontal — straight line
-    pathD = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`
-  } else {
-    // Stair-step: horizontal → vertical → horizontal
-    const midX = (sourceX + targetX) / 2
-    pathD = `M ${sourceX} ${sourceY} L ${midX} ${sourceY} L ${midX} ${targetY} L ${targetX} ${targetY}`
-  }
+  const [pathD, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    borderRadius: 0,
+    offset: 18,
+  })
 
   const isTraced = !!(data as any)?.isTraced
   const isSliced = !!(data as any)?.sliced
+  const isLiving = !!(data as any)?.living
+  const livingColor = String((data as any)?.color ?? style?.stroke ?? '#8b6fb3')
+  const livingDelayMs = Number((data as any)?.delayMs ?? 0)
+  const livingTravelMs = Number((data as any)?.travelMs ?? 1550)
+  const stroke = isLiving
+    ? livingColor
+    : isSliced
+      ? '#a855f7'
+      : isTraced
+        ? 'var(--trace-color)'
+        : 'var(--border)'
 
   return (
     <>
       <path
         id={id}
         d={pathD}
+        pathLength={isLiving ? 1 : undefined}
+        className="react-flow__edge-path"
         fill="none"
-        stroke={isSliced ? '#a855f7' : isTraced ? 'var(--trace-color)' : 'var(--border)'}
-        strokeWidth={isTraced || isSliced ? 2 : 1}
-        strokeDasharray={isTraced ? '8 4' : undefined}
+        strokeWidth={isLiving ? 2.5 : isTraced || isSliced ? 2 : 1}
+        strokeDasharray={isLiving ? '0.13 0.87' : isTraced ? '8 4' : undefined}
         style={{
           ...style,
-          animation: isTraced ? 'traceFlow 0.6s linear infinite' : undefined,
-          filter: isTraced ? 'drop-shadow(0 0 4px var(--trace-color))' : undefined,
+          stroke,
+          animation: isLiving
+            ? `axiomLivingFlowTravel ${livingTravelMs}ms cubic-bezier(0.22, 1, 0.36, 1) both`
+            : isTraced ? 'traceFlow 0.6s linear infinite' : undefined,
+          animationDelay: isLiving ? `${livingDelayMs}ms` : undefined,
+          filter: isLiving
+            ? `drop-shadow(0 0 5px ${livingColor})`
+            : isTraced ? 'drop-shadow(0 0 4px var(--trace-color))' : undefined,
           transition: 'stroke 0.2s ease, stroke-width 0.2s ease',
         }}
-        markerEnd={markerEnd}
-        markerStart={markerStart}
       />
-      {/* Invisible wider hit area for easier selection */}
       <path
         d={pathD}
+        className="react-flow__edge-interaction"
         fill="none"
         stroke="transparent"
         strokeWidth={12}
         style={{ cursor: 'pointer' }}
       />
+      {label != null && (
+        <EdgeText
+          x={labelX}
+          y={labelY}
+          label={label}
+          labelStyle={labelStyle}
+          labelShowBg={labelShowBg}
+          labelBgStyle={labelBgStyle}
+          labelBgPadding={labelBgPadding}
+          labelBgBorderRadius={labelBgBorderRadius}
+        />
+      )}
     </>
   )
 }

@@ -45,6 +45,23 @@ function nodeTypeFor(id: string, systemIds: Set<string>, fileIds: Set<string>): 
   return 'infra'
 }
 
+/**
+ * A layout write replaces the whole row, so any writer that is not *about*
+ * interior compression has to carry the current value through. Persisted state
+ * wins over projected state, which can lag a save by a frame.
+ */
+export function previousInteriorScale(
+  floorLayouts: readonly FloorLayout[],
+  nodeId: string,
+  nodeType: FloorNodeType,
+  node?: Node,
+): number {
+  const persisted = floorLayouts.find(layout => layout.nodeId === nodeId && layout.nodeType === nodeType)
+  const candidate = persisted?.interiorScale
+    ?? Number((node?.data as Record<string, unknown> | undefined)?.interiorScale ?? 1)
+  return Number.isFinite(candidate) && candidate > 0 ? candidate : 1
+}
+
 function canonicalResize(node: Node, end: NodeResizeParams) {
   const ownScale = Number((node.data as Record<string, unknown>).frameScale ?? 1)
   const worldScale = Number((node.data as Record<string, unknown>).worldScale ?? ownScale)
@@ -128,7 +145,14 @@ export function planFloorResize({
     width: geometry.width,
     height: geometry.height,
     scale: ownScale,
+    // Resizing a frame changes how much room it has, never how much it
+    // compresses what it holds. Preserve the existing value verbatim.
+    interiorScale: previousInteriorScale(floorLayouts, nodeId, nodeType, node),
   }
+
+  // Children are stored in the frame's CONTENT space, so their compensation
+  // divides by contentScale — equal to worldScale unless the frame compresses.
+  const contentScale = Number((node.data as Record<string, unknown>).contentScale ?? worldScale)
 
   const childLayouts: FloorLayoutWrite[] = [...start.children].flatMap(([childId, childStart]) => {
     const childNode = nodes.find(candidate => candidate.id === childId)
@@ -137,8 +161,8 @@ export function planFloorResize({
     const childPrevious = floorLayouts.find(layout => layout.nodeId === childId && layout.nodeType === childType)
     const childData = childNode.data as Record<string, unknown>
     const childOwnScale = childPrevious?.scale ?? Number(childData.frameScale ?? 1)
-    const childWorldScale = Number(childData.worldScale ?? worldScale * childOwnScale)
-    const position = childPositionAfterParentResize(childStart, start, end, worldScale)
+    const childWorldScale = Number(childData.worldScale ?? contentScale * childOwnScale)
+    const position = childPositionAfterParentResize(childStart, start, end, contentScale)
     return [{
       nodeId: childId,
       nodeType: childType,
@@ -150,6 +174,7 @@ export function planFloorResize({
       width: childPrevious?.width ?? Number(childNode.style?.width ?? childNode.measured?.width ?? 1) / Math.max(0.0001, childWorldScale),
       height: childPrevious?.height ?? Number(childNode.style?.height ?? childNode.measured?.height ?? 1) / Math.max(0.0001, childWorldScale),
       scale: childOwnScale,
+      interiorScale: childPrevious?.interiorScale ?? Number(childData.interiorScale ?? 1),
     }]
   })
 

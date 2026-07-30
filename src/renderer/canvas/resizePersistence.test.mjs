@@ -31,7 +31,7 @@ test('plans an optimistic Floor resize and compensates direct children', () => {
   assert.deepEqual(plan.updates[0], {
     nodeId: 'system', nodeType: 'system', parentNodeId: null, parentNodeType: null,
     containmentKind: 'root', positionX: 10, positionY: 20,
-    width: 700, height: 500, scale: 1,
+    width: 700, height: 500, scale: 1, interiorScale: 1,
   })
   assert.equal(plan.updates[1].positionX, 90)
   assert.equal(plan.updates[1].positionY, 100)

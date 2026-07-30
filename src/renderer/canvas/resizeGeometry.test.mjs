@@ -117,7 +117,7 @@ test('persists north-west origin movement and compensates direct children', () =
   assert.equal(resizeChanged({ ...parentStart, width: 200, height: 100 }, { ...parentEnd, width: 240, height: 130 }), true)
 })
 
-test('container minimum protects children from all four resize directions', () => {
+test('container minimum is the box around its children plus insets', () => {
   const minimum = minimumContainerSize(
     { width: 600, height: 420 },
     [
@@ -127,10 +127,45 @@ test('container minimum protects children from all four resize directions', () =
     { left: 28, right: 28, top: 54, bottom: 28 },
     { width: 120, height: 82 },
   )
-  assert.deepEqual(minimum, {
-    width: 548, // right handle: 520 + 28; left handle only needs 600 - 90 + 28
-    height: 394, // top handle: 420 - 80 + 54; bottom handle only needs 340 + 28
-  })
+  assert.equal(minimum.width, 548)  // furthest right edge 520, plus 28 right inset
+  assert.equal(minimum.height, 368) // furthest bottom edge 340, plus 28 bottom inset
+  // West/north handles move the origin, so they keep their own minima.
+  assert.equal(minimum.westWidth, 538)  // 600 - (90 - 28)
+  assert.equal(minimum.northHeight, 394) // 420 - (80 - 54)
+})
+
+test('the minimum never depends on the container\'s current size', () => {
+  // Regression: the old formula included `container.width - left`, so a frame
+  // whose children hugged its left edge reported a minimum equal to its own
+  // width and refused to narrow at all — however much empty space it had.
+  const children = [
+    { x: 10, y: 60, width: 220, height: 110 },
+    { x: 10, y: 200, width: 220, height: 110 },
+    { x: 10, y: 340, width: 220, height: 110 },
+  ]
+  const insets = { left: 28, right: 28, top: 54, bottom: 28 }
+  const floor = { width: 120, height: 82 }
+
+  const narrow = minimumContainerSize({ width: 400, height: 900 }, children, insets, floor)
+  const wide = minimumContainerSize({ width: 4000, height: 900 }, children, insets, floor)
+  assert.equal(narrow.width, wide.width)
+  // Stacked children only ever require room for one column: right edge 230,
+  // plus 18 of left overhang (they sit inside the 28px inset), plus 28.
+  assert.equal(wide.width, 276)
+  assert.ok(wide.width < 400, 'a roomy frame must still be shrinkable')
+})
+
+test('a child overhanging its inset demands the extra room', () => {
+  const minimum = minimumContainerSize(
+    { width: 600, height: 420 },
+    [{ x: -20, y: 10, width: 100, height: 100 }],
+    { left: 28, right: 28, top: 54, bottom: 28 },
+    { width: 120, height: 82 },
+  )
+  // Right edge 80, plus 48 of left overhang, plus the 28 right inset.
+  assert.equal(minimum.width, 156)
+  // Bottom edge 110, plus 44 of top overhang, plus the 28 bottom inset.
+  assert.equal(minimum.height, 182)
 })
 
 test('empty container retains the structural frame minimum', () => {
@@ -139,8 +174,8 @@ test('empty container retains the structural frame minimum', () => {
       { width: 600, height: 420 }, [],
       { left: 28, right: 28, top: 54, bottom: 28 },
       { width: 120, height: 82 },
-    ),
-    { width: 120, height: 82 },
+    ).width,
+    120,
   )
 })
 

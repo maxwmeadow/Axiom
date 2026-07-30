@@ -58,7 +58,6 @@ export interface AsmNode {
   // Semantic zoom
   semanticDepth: number       // 0 = top-level system, 1 = subsystem, 2 = file, 3 = symbol
   // runtime
-  agentTouched?: boolean
   churnScore?: number         // 0–1, normalized commit frequency
   agentAuthored?: boolean     // true if an AI agent created/placed this node
 }
@@ -87,6 +86,7 @@ export interface AsmGraph {
 export type WsMessage =
   // Legacy demo / TypeScript archd messages
   | { type: 'graph:snapshot'; payload: AsmGraph }
+  | { type: 'classification:updated'; payload: CanvasSnapshot }
   | { type: 'graph:patch'; payload: GraphPatch }
   | { type: 'agent:activity'; payload: AgentActivity }
   | { type: 'indexing:progress'; payload: IndexingProgress }
@@ -169,6 +169,9 @@ export interface ProjectConfig {
   name: string
   rootPath: string
   ignoredPaths: string[]
+  // Explicitly distinguishes "reviewed and include everything" (an empty
+  // ignoredPaths array) from "the source-boundary decision has never run".
+  sourceBoundariesReviewedAt?: number
   languageOverrides: Record<string, string>
   layoutPreferences: {
     zoom: number
@@ -302,7 +305,20 @@ export interface FloorLayout {
   positionY: number
   width: number
   height: number
+  /** This frame's own size in its parent's coordinate space. */
   scale: number
+  /**
+   * How much this frame compresses its CONTENTS, independent of its own size.
+   * A container that runs out of room shrinks its interior by moving this
+   * number alone — its own geometry, chrome, and presentation scale are not
+   * expressed in terms of it, so they cannot react to interior compression.
+   *
+   * Required rather than optional on purpose: a layout write is a full row
+   * replacement, so an omitted value silently resets a container's compression
+   * to 1. Making it mandatory turns that data loss into a compile error. The
+   * daemon still normalizes a missing value to 1 for older clients.
+   */
+  interiorScale: number
   updatedAt: number
 }
 
@@ -334,13 +350,214 @@ export interface CanvasSnapshot {
   floorLayouts?: FloorLayout[]
 }
 
+export interface FileUpdatePatch {
+  file: DbFile
+  change: 'created' | 'updated'
+  animate: boolean
+  traceId?: string
+}
+
+export interface FileDeletePatch {
+  id: string
+  relPath: string
+  traceId?: string
+}
+
+export interface LivingRelationshipChange {
+  src: string
+  dst: string
+  /** File whose watcher event caused this relationship delta. */
+  originId?: string
+  relationship: string
+  change: 'added' | 'updated' | 'removed'
+  callerSymbol?: string
+  calleeSymbol?: string
+  callCount?: number
+  animate: boolean
+  dependency?: DbDependency
+  dependencyId?: string
+  traceId?: string
+}
+
+// ─── Morning Delta ───────────────────────────────────────────────────────────
+// The net architectural diff since the user last acknowledged the structural
+// journal. Mirrors archd's internal/delta package; net effect, not event log,
+// so transient churn (created then deleted) never appears here.
+
+export type DeltaChange = 'created' | 'updated' | 'deleted' | 'added' | 'removed'
+export type DeltaActor = 'human' | 'agent' | 'both'
+
+export interface DeltaFileChange {
+  id: string
+  relPath: string
+  change: 'created' | 'updated' | 'deleted'
+  actor: DeltaActor
+  saves: number
+  ts: number
+  systemId?: string
+  systemName?: string
+  language?: string
+}
+
+export interface DeltaEdgeChange {
+  srcId: string
+  dstId: string
+  srcLabel: string
+  dstLabel: string
+  change: 'added' | 'removed'
+  relationship: string
+  callerSymbol?: string
+  calleeSymbol?: string
+  srcSystem?: string
+  dstSystem?: string
+  /** The relationship crossed a system boundary when it changed. */
+  cross: boolean
+  actor: DeltaActor
+  ts: number
+}
+
+export interface DeltaSystemChange {
+  id: string
+  name: string
+  change: 'created' | 'deleted'
+  actor: DeltaActor
+  ts: number
+}
+
+export interface DeltaCounts {
+  filesCreated: number
+  filesUpdated: number
+  filesDeleted: number
+  edgesAdded: number
+  edgesRemoved: number
+  systemsAdded: number
+  systemsRemoved: number
+  crossBoundary: number
+  agentFiles: number
+  humanFiles: number
+}
+
+/**
+ * A claim is the unit of architectural review: the smallest statement that
+ * changes your understanding of the architecture. Call sites, imports and
+ * individual files are EVIDENCE nested under the claim they support — twenty
+ * files newly importing one module is one claim, never twenty rows.
+ */
+export type DeltaClaimKind =
+  | 'system.coupling'
+  | 'system.decoupling'
+  | 'system.hub'
+  | 'system.orphaned'
+  | 'system.added'
+  | 'system.removed'
+  | 'system.membership'
+  | 'file.unclassified'
+  | 'system.internal'
+
+export interface DeltaEvidence {
+  kind: string
+  label: string
+  detail?: string
+  fileIds?: string[]
+}
+
+export interface DeltaClaim {
+  id: string
+  kind: DeltaClaimKind
+  title: string
+  subtitle: string
+  severity: number
+  score: number
+  actor: DeltaActor
+  ts: number
+  /** A new coupling that closes a dependency loop between systems. */
+  createsCycle: boolean
+  /** Churn inside one system; hidden until the user asks for it. */
+  internal: boolean
+  /** For a boundary claim the boundary IS the claim — frame both systems. */
+  focusSystemIds?: string[]
+  focusFileIds?: string[]
+  evidence: DeltaEvidence[]
+  /** The declared work this change belongs to; empty means unexplained. */
+  sessionId?: string
+  /** Whether agent work matched an immutable build spec dispatched first. */
+  intentStatus?: 'expected' | 'unexpected'
+  intentIds?: string[]
+}
+
+/**
+ * An agent's own account of what it set out to do. Structural facts are true
+ * but thin — "Handlers now depends on Record" says the topology moved without
+ * saying why. Narration is the bidirectional half: the agent writes intent
+ * into the map rather than leaving the map to infer meaning it cannot know.
+ */
+export interface DeltaSessionNote {
+  ts: number
+  text: string
+}
+
+export interface DeltaWorkSession {
+  id: string
+  workspaceId: string
+  agent?: string
+  goal: string
+  summary?: string
+  notes: DeltaSessionNote[]
+  focusSystemIds: string[]
+  focusFileIds: string[]
+  startedAt: number
+  endedAt: number
+}
+
+export interface DeltaSummary {
+  since: number
+  until: number
+  files: DeltaFileChange[]
+  edges: DeltaEdgeChange[]
+  systems: DeltaSystemChange[]
+  claims: DeltaClaim[]
+  sessions: DeltaWorkSession[]
+  counts: DeltaCounts
+  empty: boolean
+}
+
+
+// ─── Agent action log ────────────────────────────────────────────────────────
+// Everything an agent DID, including reads. Distinct from the structural
+// journal, which only records changes to the architecture.
+
+export type AgentActionKind = 'read' | 'trace' | 'write' | 'plan' | 'debug' | 'narrate'
+
+export interface AgentAction {
+  id: number
+  workspaceId: string
+  ts: number
+  sessionId?: string
+  agent?: string
+  tool: string
+  kind: AgentActionKind
+  summary: string
+  /** Canvas node IDs this action touched, so the map can show it happening. */
+  targets: string[]
+  detail?: string
+  durationMs: number
+  status: 'ok' | 'error'
+  error?: string
+}
+
 /** Incremental patch sent by Go archd when a single entity changes. */
 export interface DbGraphPatch {
   type:
     | 'system:upserted' | 'system:deleted'
-    | 'file:updated'    | 'file:assigned'
+    | 'file:updated'    | 'file:assigned' | 'file:deleted'
+    | 'relationship:changed'
     | 'infra:upserted'  | 'infra:deleted'
     | 'infra:connected' | 'infra:disconnected'
     | 'floor:layouts'
-  payload: DbSystem | DbFile | DbInfraNode | DbDependency | { id: string } | { fileId: string; systemId: string } | { revision: number; layouts: FloorLayout[] }
+  payload:
+    | DbSystem | DbFile | FileUpdatePatch | FileDeletePatch
+    | LivingRelationshipChange
+    | DbInfraNode | DbDependency | { id: string }
+    | { fileId: string; systemId: string }
+    | { revision: number; layouts: FloorLayout[] }
 }

@@ -3,7 +3,7 @@
 import React, { useState } from 'react'
 import { useGraphStore } from '../store/graphStore'
 import { useSheetStore } from '../store/sheetStore'
-import { DialogActions, DialogButton, DialogError, DialogForm, DialogFrame, DialogTitle } from './ui/DialogPrimitives'
+import { DialogActions, DialogButton, DialogError, DialogField, DialogForm, DialogFrame, DialogNote } from './ui/DialogPrimitives'
 
 interface NewSheetDialogProps {
   isOpen: boolean
@@ -48,37 +48,28 @@ export function NewSheetDialog({ isOpen, onClose, selectedFileIds, onSuccess }: 
   }
 
   return (
-    <DialogFrame width={420}>
-        <DialogTitle>
-          New Sheet
-        </DialogTitle>
+    <DialogFrame title="New Sheet" width={420}>
         <DialogForm onSubmit={handleSubmit}>
           {error && (
             <DialogError>{error}</DialogError>
           )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 700, letterSpacing: '0.05em' }}>
-              SHEET NAME
-            </label>
+          <DialogField label="Sheet name">
             <input
               type="text" value={name} onChange={e => setName(e.target.value)}
-              placeholder='e.g. "Payment flow"' className="glass-input" autoFocus
+              placeholder='e.g. "Payment flow"' className="axiom-dialog-input" autoFocus
             />
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 700, letterSpacing: '0.05em' }}>
-              PURPOSE <span style={{ opacity: 0.5, fontWeight: 400 }}>(optional — shown in the title block)</span>
-            </label>
+          </DialogField>
+          <DialogField label="Purpose" optional="optional — shown in the title block">
             <input
               type="text" value={purpose} onChange={e => setPurpose(e.target.value)}
-              placeholder="What story does this sheet tell?" className="glass-input"
+              placeholder="What story does this sheet tell?" className="axiom-dialog-input"
             />
-          </div>
-          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', opacity: 0.75 }}>
-            Curating <strong style={{ color: 'var(--accent)' }}>{selectedFileIds.length}</strong> selected{' '}
+          </DialogField>
+          <DialogNote>
+            Curating <strong>{selectedFileIds.length}</strong> selected{' '}
             {selectedFileIds.length === 1 ? 'file' : 'files'} onto this sheet. Elements stay live —
             renames and deletions in the codebase show up here.
-          </p>
+          </DialogNote>
           <DialogActions inset>
             <DialogButton type="button" variant="secondary" onClick={onClose} disabled={loading}>Cancel</DialogButton>
             <DialogButton type="submit" variant="primary" disabled={loading}>

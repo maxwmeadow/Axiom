@@ -1,14 +1,17 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import { spawn, ChildProcess } from 'child_process'
+import { createHash } from 'crypto'
 import os from 'os'
 import fs from 'fs'
 import type { ProjectConfig, WsMessage } from '../src/shared/types'
+import { completeSourceBoundaries, mergePersistedProjectConfig } from '../src/shared/projectLifecycle'
 
 // electron-vite sets VITE_DEV_SERVER_URL in dev/preview mode only
 const IS_DEV = !!process.env.VITE_DEV_SERVER_URL
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 const IS_E2E = process.env.AXIOM_E2E === '1'
+const IS_E2E_HOME = process.env.AXIOM_E2E_HOME === '1'  // route straight to the launcher for capture
 const CONFIG_DIR = join(os.homedir(), '.axiom')
 const PROJECTS_FILE = join(CONFIG_DIR, 'projects.json')
 const DATA_DIR = join(os.homedir(), '.axiom', 'data')
@@ -38,9 +41,27 @@ function saveRecentProjects(projects: ProjectConfig[]): void {
 function upsertRecentProject(config: ProjectConfig): void {
   const projects = loadRecentProjects()
   const idx = projects.findIndex(p => p.id === config.id)
-  if (idx >= 0) projects[idx] = config
+  if (idx >= 0) projects[idx] = mergePersistedProjectConfig(projects[idx], config)
   else projects.unshift(config)
   saveRecentProjects(projects.slice(0, 20))
+}
+
+// A workspace's stable id is derived from its full path. It MUST hash the whole
+// path: the old `base64(path).slice(0,16)` only captured the first ~12 bytes, so
+// every project under the same parent (e.g. C:\Users\<name>\…) collided onto one
+// id — and therefore one shared archd database. A path hash keeps it stable per
+// project (reopening finds the same db) while being unique across projects.
+function projectIdFromPath(rootPath: string): string {
+  return createHash('sha256').update(rootPath).digest('hex').slice(0, 16)
+}
+
+// Turn a user-typed project name into a safe folder name: drop path-invalid
+// characters, collapse whitespace to hyphens, and trim stray separators.
+function sanitizeProjectName(name: string): string {
+  return (name ?? '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/^[.\s-]+|[.\s-]+$/g, '')
 }
 
 // ─── archd daemon lifecycle ─────────────────────────────────────────────────
@@ -61,21 +82,27 @@ function startArchd(): void {
 
   const binary = archdBinaryPath()
   if (!fs.existsSync(binary)) {
-    console.warn(`[main] archd binary not found at ${binary} — run: cd archd-go && go build -o archd ./cmd/archd`)
+    console.warn(`[main] archd binary not found at ${binary} — run: npm run build:archd`)
     return
   }
 
   fs.mkdirSync(DATA_DIR, { recursive: true })
 
   console.log('[main] spawning archd at:', binary)
-  archdProcess = spawn(binary, [
-    '-data', DATA_DIR,
-    '-api-port', String(ARCHD_API_PORT),
-    '-ws-port', String(ARCHD_WS_PORT),
-  ], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-  })
+  try {
+    archdProcess = spawn(binary, [
+      '-data', DATA_DIR,
+      '-api-port', String(ARCHD_API_PORT),
+      '-ws-port', String(ARCHD_WS_PORT),
+    ], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+  } catch (error) {
+    reportArchdLaunchError(binary, error)
+    archdProcess = null
+    return
+  }
 
   archdProcess.stderr?.on('data', (chunk: Buffer) => {
     process.stderr.write('[archd] ' + chunk.toString())
@@ -98,13 +125,25 @@ function startArchd(): void {
     }
   })
 
-  archdProcess.on('error', (err) => console.error('[main] archd error:', err))
+  archdProcess.on('error', (error) => {
+    reportArchdLaunchError(binary, error)
+    archdProcess = null
+  })
   archdProcess.on('exit', (code) => {
     console.log(`[main] archd exited with code ${code}`)
     archdProcess = null
   })
 
   console.log('[main] archd started, pid:', archdProcess.pid)
+}
+
+function reportArchdLaunchError(binary: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  console.error(`[main] archd launch failed at ${binary}:`, error)
+  dialog.showErrorBox(
+    'Axiom backend failed to start',
+    `${message}\n\nRebuild the Windows daemon with:\nnpm run build:archd`,
+  )
 }
 
 function stopArchd(): void {
@@ -139,9 +178,9 @@ function createWindow(): void {
     // On Windows: overlay native window controls on top of the custom toolbar
     ...(isWin ? {
       titleBarOverlay: {
-        color: '#161b27',
-        symbolColor: '#e2e8f0',
-        height: 48,
+        color: '#202b29',
+        symbolColor: '#f2f1eb',
+        height: 34,
       },
     } : {}),
     backgroundColor: '#0f1117',
@@ -152,34 +191,52 @@ function createWindow(): void {
     },
     title: 'Axiom',
     show: false,
+    // E2E windows render offscreen and never enter the taskbar. They are shown
+    // with showInactive() below because Chromium will not consider screenshots
+    // geometrically stable while a BrowserWindow remains fully hidden.
+    skipTaskbar: IS_E2E,
   })
 
   if (IS_DEV && DEV_SERVER_URL) {
     const rendererUrl = new URL(DEV_SERVER_URL)
     if (IS_E2E) rendererUrl.searchParams.set('e2e', '1')
+    if (IS_E2E_HOME) rendererUrl.searchParams.set('home', '1')
     mainWindow.loadURL(rendererUrl.toString())
     if (!IS_E2E) mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     mainWindow.loadFile(
       join(__dirname, '../renderer/index.html'),
-      IS_E2E ? { query: { e2e: '1' } } : undefined,
+      IS_E2E ? { query: IS_E2E_HOME ? { e2e: '1', home: '1' } : { e2e: '1' } } : undefined,
     )
   }
 
-  // Show as soon as the renderer is usable. ready-to-show alone is NOT
-  // reliable on Windows (it can simply never fire for initially-hidden
-  // windows on some GPU/driver combos — the app stays invisible while
-  // everything else runs). did-finish-load always fires, so show on
-  // whichever comes first, with a timed fallback as the last resort.
-  const showOnce = (source: string) => {
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-      console.log(`[main] showing window (${source})`)
-      mainWindow.show()
+  if (IS_E2E) {
+    const showForAutomation = () => {
+      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return
+      // Keep a conventionally rendered window (required for reliable canvas
+      // screenshots) far outside every practical desktop, and never activate
+      // it. Unlike show(), showInactive() cannot take keyboard focus.
+      mainWindow.setPosition(-32000, -32000, false)
+      mainWindow.showInactive()
     }
+    mainWindow.once('ready-to-show', showForAutomation)
+    mainWindow.webContents.once('did-finish-load', showForAutomation)
+  } else {
+    // Show as soon as the renderer is usable. ready-to-show alone is NOT
+    // reliable on Windows (it can simply never fire for initially-hidden
+    // windows on some GPU/driver combos — the app stays invisible while
+    // everything else runs). did-finish-load always fires, so show on
+    // whichever comes first, with a timed fallback as the last resort.
+    const showOnce = (source: string) => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        console.log(`[main] showing window (${source})`)
+        mainWindow.show()
+      }
+    }
+    mainWindow.once('ready-to-show', () => showOnce('ready-to-show'))
+    mainWindow.webContents.once('did-finish-load', () => showOnce('did-finish-load'))
+    setTimeout(() => showOnce('fallback-timer'), 5000)
   }
-  mainWindow.once('ready-to-show', () => showOnce('ready-to-show'))
-  mainWindow.webContents.once('did-finish-load', () => showOnce('did-finish-load'))
-  setTimeout(() => showOnce('fallback-timer'), 5000)
 
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error(`[main] renderer failed to load: ${code} ${desc} url=${url}`)
@@ -208,8 +265,8 @@ function setupIPC(): void {
     if (result.canceled || !result.filePaths[0]) return null
 
     const rootPath = result.filePaths[0]
-    const id = Buffer.from(rootPath).toString('base64').slice(0, 16)
-    const config: ProjectConfig = {
+    const id = projectIdFromPath(rootPath)
+    const freshConfig: ProjectConfig = {
       id,
       name: rootPath.split(/[/\\]/).pop() ?? 'Project',
       rootPath,
@@ -217,6 +274,13 @@ function setupIPC(): void {
       languageOverrides: {},
       layoutPreferences: { zoom: 1, panX: 0, panY: 0 },
       openedAt: Date.now(),
+    }
+    const existing = loadRecentProjects().find(project => project.id === id)
+    let config = mergePersistedProjectConfig(existing, freshConfig)
+    // Opening a genuinely empty folder is equivalent to creating a new
+    // project: there is no source scope to decide yet.
+    if (fs.readdirSync(rootPath).length === 0) {
+      config = completeSourceBoundaries(config, [])
     }
     upsertRecentProject(config)
     return config
@@ -231,6 +295,42 @@ function setupIPC(): void {
       JSON.stringify({ workspaceId: config.id, name: config.name, rootPath: config.rootPath }, null, 2)
     )
     sendToArchd({ type: 'open:project', payload: config })
+    return config
+  })
+
+  // Choose a directory to hold a new project (New Project flow → location).
+  ipcMain.handle('dialog:choose-directory', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Choose a location for the new project',
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    return result.filePaths[0]
+  })
+
+  // Create a project from scratch: make an empty folder that an agent (or the
+  // user) can build into, then hand back a config the renderer opens like any
+  // other project. The live Floor then materializes files as they appear.
+  ipcMain.handle('project:create', async (_event, { parentDir, name }: { parentDir: string; name: string }) => {
+    const safe = sanitizeProjectName(name)
+    if (!safe) throw new Error('Project name is empty or contains only invalid characters.')
+    if (!parentDir) throw new Error('No location was chosen for the project.')
+    const rootPath = join(parentDir, safe)
+    if (fs.existsSync(rootPath) && fs.readdirSync(rootPath).length > 0) {
+      throw new Error(`A non-empty folder named "${safe}" already exists here.`)
+    }
+    fs.mkdirSync(rootPath, { recursive: true })
+    const id = projectIdFromPath(rootPath)
+    const config: ProjectConfig = completeSourceBoundaries({
+      id,
+      name: safe,
+      rootPath,
+      ignoredPaths: [],
+      languageOverrides: {},
+      layoutPreferences: { zoom: 1, panX: 0, panY: 0 },
+      openedAt: Date.now(),
+    }, [])
+    upsertRecentProject(config)
     return config
   })
 

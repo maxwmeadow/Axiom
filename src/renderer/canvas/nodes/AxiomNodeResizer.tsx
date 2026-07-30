@@ -9,9 +9,14 @@ import {
   type NodeResizeParams,
 } from '../resizeGeometry'
 import { traceResizeEnd, traceResizeStart, traceResizeStep } from './resizeChrome'
+import { scaleSelectionRects, type SelectionMember } from '../selectionResize'
+import { contentRectFor } from '../frameGeometry'
 
 type HorizontalSide = 'left' | 'right' | null
 type VerticalSide = 'top' | 'bottom' | null
+
+/** Floor under which a scaled selection member may not shrink. */
+const MIN_SELECTION_MEMBER_PX = 24
 
 interface ResizeDirection extends FloatingResizeDirection {
   name: string
@@ -45,6 +50,14 @@ interface ResizeSession {
   start: NodeResizeParams
   last: NodeResizeParams
   childStarts: Map<string, { x: number; y: number }>
+  /** Other selected nodes sharing this node's parent, captured at gesture start. */
+  selectionStarts: SelectionMember[]
+  /** Minima resolved for THIS gesture's handle. */
+  minWidth: number
+  minHeight: number
+  /** Largest this node may grow, after clamping to its parent frame. */
+  maxWidth: number
+  maxHeight: number
   handle: SVGGElement
   nodeElement: HTMLElement | null
   lastPointerEvent: PointerEvent
@@ -62,6 +75,9 @@ export interface AxiomNodeResizerProps {
   isResizable?: boolean
   minWidth?: number
   minHeight?: number
+  /** West/north handles move the origin and need their own minima. */
+  minWidthWest?: number
+  minHeightNorth?: number
   maxWidth?: number
   maxHeight?: number
   onResizeStart?: (params: NodeResizeParams) => void
@@ -116,6 +132,8 @@ export function AxiomNodeResizer({
   isResizable = true,
   minWidth = 1,
   minHeight = 1,
+  minWidthWest,
+  minHeightNorth,
   maxWidth = Number.MAX_VALUE,
   maxHeight = Number.MAX_VALUE,
   onResizeStart,
@@ -158,10 +176,10 @@ export function AxiomNodeResizer({
       delta,
       currentFlow ? 1 : session.zoom,
       {
-        minWidth: safePositive(minWidth, 1),
-        minHeight: safePositive(minHeight, 1),
-        maxWidth: safePositive(maxWidth, Number.MAX_VALUE),
-        maxHeight: safePositive(maxHeight, Number.MAX_VALUE),
+        minWidth: session.minWidth,
+        minHeight: session.minHeight,
+        maxWidth: session.maxWidth,
+        maxHeight: session.maxHeight,
       },
     )
   }, [flowPointForClient, maxHeight, maxWidth, minHeight, minWidth])
@@ -187,6 +205,30 @@ export function AxiomNodeResizer({
           type: 'position',
           position: { x: childStart.x - originDeltaX, y: childStart.y - originDeltaY },
           dragging: false,
+        })
+      }
+    }
+    // The rest of the selection rides the same transform, so a multi-selection
+    // resizes as one frame instead of only the node under the pointer.
+    if (session.selectionStarts.length > 0) {
+      for (const member of scaleSelectionRects(
+        session.start,
+        next,
+        session.selectionStarts,
+        { minWidth: MIN_SELECTION_MEMBER_PX, minHeight: MIN_SELECTION_MEMBER_PX },
+      )) {
+        changes.push({
+          id: member.id,
+          type: 'position',
+          position: { x: member.x, y: member.y },
+          dragging: false,
+        })
+        changes.push({
+          id: member.id,
+          type: 'dimensions',
+          dimensions: { width: member.width, height: member.height },
+          resizing,
+          setAttributes: true,
         })
       }
     }
@@ -236,6 +278,92 @@ export function AxiomNodeResizer({
       if (candidate.parentId === nodeId) childStarts.set(candidateId, { ...candidate.position })
     }
 
+    // A multi-selection resizes as one frame. Only members sharing this
+    // node's parent can be transformed by the same map, since a node parented
+    // elsewhere measures its position against a different origin.
+    const selectionStarts: SelectionMember[] = []
+    for (const [candidateId, candidate] of state.nodeLookup) {
+      if (candidateId === nodeId || !candidate.selected) continue
+      if ((candidate.parentId ?? null) !== (node.parentId ?? null)) continue
+      const memberWidth = authoritativeResizeDimension({
+        controlled: candidate.width,
+        styled: Number(candidate.style?.width),
+        rendered: undefined,
+        measured: candidate.measured?.width,
+      })
+      const memberHeight = authoritativeResizeDimension({
+        controlled: candidate.height,
+        styled: Number(candidate.style?.height),
+        rendered: undefined,
+        measured: candidate.measured?.height,
+      })
+      if (!(memberWidth > 0) || !(memberHeight > 0)) continue
+      selectionStarts.push({
+        id: candidateId,
+        x: candidate.position.x,
+        y: candidate.position.y,
+        width: memberWidth,
+        height: memberHeight,
+      })
+    }
+
+    // A child may not be resized outside the frame that owns it. Nothing was
+    // passing a maximum, so a child could be grown far beyond its parent.
+    // Absolute positions are used because they share one coordinate space
+    // across nesting levels, unlike per-node scaled geometry.
+    let boundedMaxWidth = safePositive(maxWidth, Number.MAX_VALUE)
+    let boundedMaxHeight = safePositive(maxHeight, Number.MAX_VALUE)
+    const parentInternal = node.parentId ? state.nodeLookup.get(node.parentId) : null
+    if (parentInternal) {
+      const parentAbsolute = parentInternal.internals.positionAbsolute
+      const parentWidth = Number(parentInternal.style?.width ?? parentInternal.measured?.width ?? 0)
+      const parentHeight = Number(parentInternal.style?.height ?? parentInternal.measured?.height ?? 0)
+      // A system frame is not usable to its own edges: the tab and title band
+      // occupy the top, and there is padding on the other three sides.
+      //
+      // Those insets are authored in CANONICAL frame units, while a rendered
+      // parent's width/height are already multiplied by its world scale.
+      // Feeding the scaled box straight into contentRect applied unscaled
+      // padding to scaled geometry, inflating every inset — which is why the
+      // node stopped far short of edges it could plainly be dragged to. Take
+      // the content box in canonical units, then scale it, exactly as the drop
+      // planner does for the same frame.
+      const parentData = parentInternal.data as Record<string, unknown> | undefined
+      const parentScale = safePositive(Number(parentData?.worldScale), 1)
+      // Tab-aware, and identical to what the drop planner and the resize
+      // minimum compute for this same frame. The flat header default used here
+      // before disagreed with both, so a node could be dragged into a band a
+      // resize refused to enter.
+      const canonicalContent = contentRectFor(
+        { width: parentWidth / parentScale, height: parentHeight / parentScale },
+        Number(parentData?.depth ?? 0),
+        parentScale,
+      )
+      const parentContent = {
+        x: canonicalContent.x * parentScale,
+        y: canonicalContent.y * parentScale,
+        width: canonicalContent.width * parentScale,
+        height: canonicalContent.height * parentScale,
+      }
+      const selfAbsolute = node.internals.positionAbsolute
+      if (parentWidth > 0 && parentHeight > 0) {
+        // West/north handles move the origin, so their headroom is measured
+        // from the fixed far edge instead of the moving near edge.
+        const growsWest = direction.horizontal === 'left'
+        const growsNorth = direction.vertical === 'top'
+        const contentLeft = parentAbsolute.x + parentContent.x
+        const contentTop = parentAbsolute.y + parentContent.y
+        const roomX = growsWest
+          ? (selfAbsolute.x + width) - contentLeft
+          : (contentLeft + parentContent.width) - selfAbsolute.x
+        const roomY = growsNorth
+          ? (selfAbsolute.y + height) - contentTop
+          : (contentTop + parentContent.height) - selfAbsolute.y
+        if (roomX > 0) boundedMaxWidth = Math.min(boundedMaxWidth, roomX)
+        if (roomY > 0) boundedMaxHeight = Math.min(boundedMaxHeight, roomY)
+      }
+    }
+
     const startFlow = flowPointForClient(event.clientX, event.clientY)
     const session: ResizeSession = {
       pointerId: event.pointerId,
@@ -249,6 +377,18 @@ export function AxiomNodeResizer({
       start,
       last: start,
       childStarts,
+      selectionStarts,
+      maxWidth: boundedMaxWidth,
+      maxHeight: boundedMaxHeight,
+      // A west handle walks the origin toward the children, so it is bounded by
+      // how far the origin may travel — not by the east minimum, which is
+      // measured from an origin this handle is moving.
+      minWidth: direction.horizontal === 'left'
+        ? safePositive(minWidthWest ?? minWidth, 1)
+        : safePositive(minWidth, 1),
+      minHeight: direction.vertical === 'top'
+        ? safePositive(minHeightNorth ?? minHeight, 1)
+        : safePositive(minHeight, 1),
       handle,
       nodeElement,
       lastPointerEvent: event.nativeEvent,

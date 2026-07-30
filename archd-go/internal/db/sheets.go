@@ -77,6 +77,7 @@ type CanvasMessage struct {
 	Selection          string  `json:"selection"`     // json array of durable refs
 	ChangeSummary      string  `json:"changeSummary"` // 12-verb semantic summary
 	SheetContext       string  `json:"sheetContext"`  // resolved Sheet + live Floor context at send time
+	BuildSpec          string  `json:"buildSpec"`     // approved planned increment at send time
 	Status             string  `json:"status"`
 	DeliveredTo        *string `json:"deliveredTo"`
 	AnswerAnnotationID *string `json:"answerAnnotationId"`
@@ -625,9 +626,9 @@ func EnqueueCanvasMessage(db *sql.DB, m *CanvasMessage) error {
 	m.CreatedAt = time.Now().UnixMilli()
 	_, err := db.Exec(`
 		INSERT INTO canvas_outbox (id, workspace_id, sheet_id, note, selection,
-		                           change_summary, sheet_context, status, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		m.ID, m.WorkspaceID, m.SheetID, m.Note, m.Selection, m.ChangeSummary, m.SheetContext,
+		                           change_summary, sheet_context, build_spec, status, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		m.ID, m.WorkspaceID, m.SheetID, m.Note, m.Selection, m.ChangeSummary, m.SheetContext, m.BuildSpec,
 		m.Status, m.CreatedAt)
 	return err
 }
@@ -662,7 +663,7 @@ func DrainCanvasMessages(db *sql.DB, workspaceID, deliveredTo string) ([]CanvasM
 
 func listCanvasMessages(db *sql.DB, workspaceID, status string) ([]CanvasMessage, error) {
 	rows, err := db.Query(`
-		SELECT id, workspace_id, sheet_id, note, selection, change_summary, sheet_context, status,
+		SELECT id, workspace_id, sheet_id, note, selection, change_summary, sheet_context, build_spec, status,
 		       delivered_to, answer_annotation_id, created_at, delivered_at, answered_at
 		FROM canvas_outbox WHERE workspace_id=? AND status=? ORDER BY created_at`,
 		workspaceID, status)
@@ -674,7 +675,33 @@ func listCanvasMessages(db *sql.DB, workspaceID, status string) ([]CanvasMessage
 	for rows.Next() {
 		var m CanvasMessage
 		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.SheetID, &m.Note, &m.Selection,
-			&m.ChangeSummary, &m.SheetContext, &m.Status, &m.DeliveredTo, &m.AnswerAnnotationID,
+			&m.ChangeSummary, &m.SheetContext, &m.BuildSpec, &m.Status, &m.DeliveredTo, &m.AnswerAnnotationID,
+			&m.CreatedAt, &m.DeliveredAt, &m.AnsweredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// GetCanvasMessages returns the durable dispatch history regardless of
+// delivery state. Morning Delta uses immutable Sheet snapshots from this
+// history to decide whether an architectural claim was expected or drift.
+func GetCanvasMessages(db *sql.DB, workspaceID string) ([]CanvasMessage, error) {
+	rows, err := db.Query(`
+		SELECT id, workspace_id, sheet_id, note, selection, change_summary, sheet_context, build_spec, status,
+		       delivered_to, answer_annotation_id, created_at, delivered_at, answered_at
+		FROM canvas_outbox WHERE workspace_id=? ORDER BY created_at`,
+		workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CanvasMessage
+	for rows.Next() {
+		var m CanvasMessage
+		if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.SheetID, &m.Note, &m.Selection,
+			&m.ChangeSummary, &m.SheetContext, &m.BuildSpec, &m.Status, &m.DeliveredTo, &m.AnswerAnnotationID,
 			&m.CreatedAt, &m.DeliveredAt, &m.AnsweredAt); err != nil {
 			return nil, err
 		}
@@ -694,7 +721,7 @@ func AnswerCanvasMessage(db *sql.DB, msgID, annotationID string) error {
 // GetCanvasMessage fetches one message by id.
 func GetCanvasMessage(db *sql.DB, id string) (*CanvasMessage, error) {
 	rows, err := db.Query(`
-		SELECT id, workspace_id, sheet_id, note, selection, change_summary, sheet_context, status,
+		SELECT id, workspace_id, sheet_id, note, selection, change_summary, sheet_context, build_spec, status,
 		       delivered_to, answer_annotation_id, created_at, delivered_at, answered_at
 		FROM canvas_outbox WHERE id=?`, id)
 	if err != nil {
@@ -706,7 +733,7 @@ func GetCanvasMessage(db *sql.DB, id string) (*CanvasMessage, error) {
 	}
 	var m CanvasMessage
 	if err := rows.Scan(&m.ID, &m.WorkspaceID, &m.SheetID, &m.Note, &m.Selection,
-		&m.ChangeSummary, &m.SheetContext, &m.Status, &m.DeliveredTo, &m.AnswerAnnotationID,
+		&m.ChangeSummary, &m.SheetContext, &m.BuildSpec, &m.Status, &m.DeliveredTo, &m.AnswerAnnotationID,
 		&m.CreatedAt, &m.DeliveredAt, &m.AnsweredAt); err != nil {
 		return nil, err
 	}

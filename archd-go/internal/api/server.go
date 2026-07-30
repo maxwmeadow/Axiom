@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -181,6 +182,7 @@ func (s *Server) startWatcher(sqlDB *sql.DB, root db.Root) {
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/api/snapshot/", s.handleSnapshot)
+	mux.HandleFunc("/api/workspace-scope/", s.handleWorkspaceScope)
 	mux.HandleFunc("/api/workspace/", s.handleWorkspaceByID)
 	mux.HandleFunc("/api/workspace", s.handleWorkspace)
 	mux.HandleFunc("/api/systems", s.handleSystems)
@@ -199,7 +201,13 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	s.registerRuntimeRoutes(mux)
 	s.registerInvestigationRoutes(mux)
 	mux.HandleFunc("/api/agent/activity", s.handleAgentActivity)
+	mux.HandleFunc("/api/agent/action", s.handleAgentAction)
+	mux.HandleFunc("/api/agent/actions", s.handleAgentActions)
 	mux.HandleFunc("/api/activity/hotspots", s.handleActivityHotspots)
+	mux.HandleFunc("/api/delta", s.handleDelta)
+	mux.HandleFunc("/api/delta/ack", s.handleDeltaAck)
+	mux.HandleFunc("/api/work/", s.handleWork)
+	mux.HandleFunc("/api/command-deck", s.handleCommandDeck)
 	mux.HandleFunc("/api/query", s.handleQuery)
 }
 
@@ -234,10 +242,59 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 // ─── Workspace ────────────────────────────────────────────────────────────────
 
 type openWorkspaceReq struct {
-	WorkspaceID  string   `json:"workspaceId"` // empty = create new
-	Name         string   `json:"name"`
-	RootPath     string   `json:"rootPath"`
-	IgnoredPaths []string `json:"ignoredPaths"`
+	WorkspaceID                string   `json:"workspaceId"` // empty = create new
+	Name                       string   `json:"name"`
+	RootPath                   string   `json:"rootPath"`
+	IgnoredPaths               []string `json:"ignoredPaths"`
+	SourceBoundariesReviewedAt *int64   `json:"sourceBoundariesReviewedAt"`
+}
+
+func (s *Server) handleWorkspaceScope(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+	workspaceID := strings.TrimPrefix(r.URL.Path, "/api/workspace-scope/")
+	if workspaceID == "" {
+		jsonError(w, "workspace id is required", http.StatusBadRequest)
+		return
+	}
+	dbPath := filepath.Join(s.dataDir, workspaceID, "axiom.db")
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		jsonOK(w, map[string]any{
+			"indexed":                    false,
+			"ignoredPaths":               []string{},
+			"sourceBoundariesReviewedAt": nil,
+		})
+		return
+	}
+	sqlDB, err := s.dbFor(workspaceID)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	roots, err := db.GetRoots(sqlDB, workspaceID)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	requestedPath := filepath.Clean(r.URL.Query().Get("rootPath"))
+	for _, root := range roots {
+		if requestedPath != "." && !strings.EqualFold(filepath.Clean(root.Path), requestedPath) {
+			continue
+		}
+		jsonOK(w, map[string]any{
+			"indexed":                    root.IndexedAt != nil && *root.IndexedAt > 0,
+			"ignoredPaths":               root.IgnoredPaths,
+			"sourceBoundariesReviewedAt": root.SourceBoundariesReviewedAt,
+		})
+		return
+	}
+	jsonOK(w, map[string]any{
+		"indexed":                    false,
+		"ignoredPaths":               []string{},
+		"sourceBoundariesReviewedAt": nil,
+	})
 }
 
 func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -271,18 +328,28 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	h := sha256.Sum256([]byte(wsID + "|" + req.RootPath))
 	rootID := hex.EncodeToString(h[:])[:32]
 	root := db.Root{
-		ID:          rootID,
-		WorkspaceID: wsID,
-		Path:        req.RootPath,
+		ID:                         rootID,
+		WorkspaceID:                wsID,
+		Path:                       req.RootPath,
+		IgnoredPaths:               req.IgnoredPaths,
+		SourceBoundariesReviewedAt: req.SourceBoundariesReviewedAt,
 	}
 	// Check if this root has been successfully indexed before.
 	// On first open: wipe any stale data and do a full index.
 	// On re-open: skip the wipe — indexer upserts only what changed.
 	alreadyIndexed := false
+	classifierVersion := 0
 	if existing, err := db.GetRoots(sqlDB, wsID); err == nil {
 		for _, r := range existing {
-			if r.ID == rootID && r.IndexedAt != nil && *r.IndexedAt > 0 {
-				alreadyIndexed = true
+			if r.ID == rootID {
+				if root.SourceBoundariesReviewedAt == nil && r.SourceBoundariesReviewedAt != nil {
+					root.IgnoredPaths = r.IgnoredPaths
+					root.SourceBoundariesReviewedAt = r.SourceBoundariesReviewedAt
+				}
+				if r.IndexedAt != nil && *r.IndexedAt > 0 {
+					alreadyIndexed = true
+					classifierVersion = r.ClassifierVersion
+				}
 				break
 			}
 		}
@@ -307,20 +374,40 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	// Kick off indexing in the background.
 	// On first open: full index + cluster. On re-open: skip re-indexing to preserve
 	// user-arranged positions — the watcher handles live file changes.
-	// Exception: if the project has files but no systems yet (e.g. indexed in a prior
-	// version before clustering was introduced), run a cluster-only pass so the canvas
-	// is populated without re-parsing every file.
+	// Run a cluster-only pass when systems are absent or the persisted classifier
+	// contract is stale. This migrates inferred boundaries without reparsing files.
 	go func() {
 		if !alreadyIndexed {
-			if err := indexer.IndexRoot(sqlDB, s.hub, root, req.IgnoredPaths); err != nil {
+			if err := indexer.IndexRoot(sqlDB, s.hub, root, root.IgnoredPaths); err != nil {
 				log.Printf("api: index root %s: %v", root.Path, err)
 				return
 			}
+			// The initial index journals the whole codebase. That is the
+			// project's baseline, not a delta — presenting it as "what changed
+			// while you were away" would be false. Mark it reviewed.
+			baselineAt := time.Now().UnixMilli()
+			if err := db.SetDeltaReviewedAt(sqlDB, wsID, baselineAt); err != nil {
+				log.Printf("api: baseline delta watermark for %s: %v", wsID, err)
+			}
+			if _, err := s.saveDeltaSnapshot(sqlDB, wsID, baselineAt); err != nil {
+				log.Printf("api: baseline delta snapshot for %s: %v", wsID, err)
+			}
 		} else {
+			// Catch the graph up with whatever happened while Axiom was not
+			// running. This is what makes the Morning Delta true for its
+			// headline case: agents worked overnight with the app closed.
+			if _, err := indexer.ReconcileRoot(sqlDB, s.hub, root, root.IgnoredPaths); err != nil {
+				log.Printf("api: reconcile %s: %v", root.Path, err)
+			}
 			snap, _ := db.GetCanvasSnapshot(sqlDB, wsID)
-			needsCluster := snap != nil && len(snap.Systems) == 0 && len(snap.Files) > 0
+			needsCluster := snap != nil && len(snap.Files) > 0 &&
+				(len(snap.Systems) == 0 || classifierVersion < indexer.ClassifierVersion)
 			if needsCluster {
-				log.Printf("[api] workspace %s: already indexed but 0 systems — running cluster-only pass", wsID)
+				reason := "classifier contract is stale"
+				if len(snap.Systems) == 0 {
+					reason = "no inferred systems exist"
+				}
+				log.Printf("[api] workspace %s: already indexed but %s; rebuilding semantic evidence and systems", wsID, reason)
 				if err := indexer.ClusterOnly(sqlDB, root); err != nil {
 					log.Printf("api: cluster-only %s: %v", root.Path, err)
 				}
@@ -330,6 +417,10 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		if snap != nil {
 			s.hub.BroadcastSnapshot(snap)
 		}
+		// Only now is the journal settled: baseline, reconciliation, and any
+		// migration have all finished. Telling the renderer explicitly avoids
+		// it racing the catch-up pass and reading an empty delta.
+		s.hub.Broadcast("delta:ready", map[string]any{"workspaceId": wsID})
 	}()
 
 	jsonOK(w, map[string]any{"workspaceId": wsID, "rootId": root.ID})

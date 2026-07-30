@@ -5,6 +5,8 @@
 package parser
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
 	"os"
 	"path/filepath"
@@ -235,11 +237,13 @@ func extractSymbols(root *sitter.Node, src []byte, lang string) []db.Symbol {
 		if ok && kind != "" {
 			name := extractName(node, src, lang)
 			if name != "" {
+				bodySum := sha256.Sum256(src[node.StartByte():node.EndByte()])
 				symbols = append(symbols, db.Symbol{
 					Name:      name,
 					Kind:      kind,
 					LineStart: int(node.StartPoint().Row) + 1,
 					LineEnd:   int(node.EndPoint().Row) + 1,
+					BodyHash:  hex.EncodeToString(bodySum[:]),
 				})
 				if !containerSymbolTypes[node.Type()] {
 					return // leaf symbol — stop descending into its body

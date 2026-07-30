@@ -1,11 +1,16 @@
 import React from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import type { FileNodeData } from '../sceneTypes'
+import type { FileNodeData, NodeFx } from '../sceneTypes'
 import type { RuntimeNodeState } from '../../store/graphStore'
-import { useGraphStore } from '../../store/graphStore'
+import {
+  LIVING_FILE_DELETE_MS,
+  LIVING_FILE_SIGNAL_CLOSE_MS,
+  useGraphStore,
+} from '../../store/graphStore'
 import { ShapeBackdrop } from './NodeShell'
 import { EditableNodeTitle } from './EditableNodeTitle'
-import { LanguagePicker } from '../languages'
+import { AgentPresenceBadge } from './AgentPresenceBadge'
+import { LanguageIcon, LanguagePicker } from '../languages'
 import { SourcePreviewDialog } from '../../components/SourcePreviewDialog'
 import { fitPresentationScale } from '../resizeGeometry'
 import { connectionHandleProps } from './connectionChrome'
@@ -13,7 +18,63 @@ import { AxiomNodeResizer } from './AxiomNodeResizer'
 
 type SymbolTab = 'functions' | 'variables' | 'classes'
 
-const LEAF_DETAIL_REVEAL_THRESHOLD = (0.95 + 1.2) / 2
+
+// Every structural life event surfaces the same pop-out card, so a file that is
+// born or destroyed inside a collapsed system is as legible as one being
+// edited. Only 'classify' stays silent: ownership changes are not life events.
+function isLivingFileSignal(fx: NodeFx | null | undefined): fx is NodeFx {
+  return !!fx && (
+    fx.kind === 'edit' ||
+    fx.kind === 'enter' ||
+    fx.kind === 'exit' ||
+    fx.kind === 'flow-add' ||
+    fx.kind === 'flow-update' ||
+    fx.kind === 'flow-remove'
+  )
+}
+
+function useRetainedLivingFileSignal(fx: NodeFx | null | undefined): {
+  fx: NodeFx | null
+  closing: boolean
+} {
+  const incoming = isLivingFileSignal(fx) ? fx : null
+  const signature = incoming ? `${incoming.kind}:${incoming.key}` : ''
+  const [rendered, setRendered] = React.useState<NodeFx | null>(incoming)
+  const [closing, setClosing] = React.useState(false)
+  const closeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  React.useEffect(() => {
+    if (closeTimer.current !== null) {
+      clearTimeout(closeTimer.current)
+      closeTimer.current = null
+    }
+    if (incoming) {
+      setRendered(incoming)
+      setClosing(false)
+      return
+    }
+    if (!rendered) return
+
+    setClosing(true)
+    closeTimer.current = setTimeout(() => {
+      setRendered(null)
+      setClosing(false)
+      closeTimer.current = null
+    }, LIVING_FILE_SIGNAL_CLOSE_MS)
+    return () => {
+      if (closeTimer.current !== null) {
+        clearTimeout(closeTimer.current)
+        closeTimer.current = null
+      }
+    }
+  }, [signature])
+
+  React.useEffect(() => () => {
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+  }, [])
+
+  return { fx: rendered, closing }
+}
 
 function EditableSymbolName({ value, editable, onCommit }: { value: string; editable: boolean; onCommit: (value: string) => void }) {
   const [editing, setEditing] = React.useState(false)
@@ -102,6 +163,7 @@ function RuntimeTooltip({ runtime, color }: { runtime: RuntimeNodeState; color: 
 
 export function FileNode({ data, selected, width, height, isConnectable }: NodeProps) {
   const d = data as unknown as FileNodeData
+  const livingSignal = useRetainedLivingFileSignal(d.fx)
   const { onResizeStart, onResizeEnd } = d as any
   const [hovered, setHovered] = React.useState(false)
   const churn = d.churnScore ?? 0
@@ -118,15 +180,36 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
     : runtime?.lastKind === 'exception' ? '#ef4444'
     : runtime?.rateLimited ? '#f59e0b'
     : '#22d3ee'
+  const livingRevealColor = livingSignal.fx?.kind === 'enter' || livingSignal.fx?.kind === 'flow-add'
+    ? '#2fa35d'
+    : livingSignal.fx?.kind === 'exit' || livingSignal.fx?.kind === 'flow-remove'
+      ? '#b6534b'
+      : '#3c8f92'
 
   // Content renders at base (depth-0) pixel sizes inside a div that is
   // 1/s times the node's box, then uniformly scaled down by s. Every file
   // node is therefore pixel-identical in its own frame at any depth.
   const s = fitPresentationScale(width, height, 220, 110, d.worldScale ?? 1)
+  const livingSignalLabel = livingSignal.fx?.kind === 'edit'
+    ? 'EDITED'
+    : livingSignal.fx?.kind === 'enter'
+      ? 'CREATED'
+    : livingSignal.fx?.kind === 'exit'
+      ? 'DELETED'
+    : livingSignal.fx?.kind === 'flow-add'
+      ? 'LINK ADDED'
+      : livingSignal.fx?.kind === 'flow-remove'
+        ? 'LINK REMOVED'
+        : 'IMPACT'
   // Apparent zoom of this node on screen — a depth-2 node at viewport zoom 2
   // looks like a depth-0 node at zoom 0.5. Detail states gate on this.
-  const effZoom = d.currentZoom * (d.worldScale ?? 1)
-  const churnColor = churn > 0.7 ? '#ef4444' : churn > 0.4 ? '#f59e0b' : 'transparent'
+  // Resolved by the semantic-zoom pass. Reading the raw zoom here would make
+  // this node re-render on every frame of a zoom animation.
+  const detailRevealed = d.detailRevealed ?? false
+  // Heat is a percentile rank within the workspace, so a small/fresh project
+  // spreads scores across the whole range and everything reads "hot". Keep the
+  // bar high and muted — a just-written file is NEW (green pulse), not hot.
+  const churnColor = churn > 0.82 ? '#b8563f' : churn > 0.62 ? '#a8803c' : 'transparent'
   // Unified shape vocabulary (Rev 2b): class-first header when the file IS its
   // class; cylinder/hexagon files get a shape backdrop over the same card.
   // Class-first only fires when it ADDS information: in class-per-file
@@ -142,11 +225,26 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
     : d.shape === 'cylinder' || d.shape === 'hexagon' ? d.shape : 'box' as const
   // Perimeter stroke = accent + heat in one channel (design spec): quiet
   // hairline by default, activity heat and states shift the whole silhouette.
-  const perimeter = d.agentTouched ? 'var(--agent-color)'
-    : churn > 0.7 ? '#ff453a'
-    : churn > 0.4 ? '#ff9f0a'
-    : 'var(--border)'
-  const perimeterW = churn > 0.4 ? 1.6 : 1
+  // Morning Delta review paints the same perimeter channel: during a review
+  // the question is "what changed", so the diff outranks the heat reading it
+  // would otherwise show. Colors match the living choreography exactly —
+  // green created, teal edited — so a mark and a live event read as one
+  // vocabulary rather than two.
+  // An agent reading this file. Deliberately a soft outer halo, not a border
+  // treatment: attention must never be mistaken for a change. The perimeter
+  // channel belongs to churn and to delta marks.
+  const agentReading = !!(d as any).agentReading
+  const deltaMark = d.deltaMark ?? null
+  const deltaColor = deltaMark === 'created' ? '#2fa35d'
+    : deltaMark === 'updated' ? '#3c8f92'
+      : deltaMark === 'deleted' ? '#b6534b'
+        : null
+  const perimeter = deltaColor
+    ?? (churn > 0.82 ? '#b8563f'
+      : churn > 0.62 ? '#a8803c'
+        : 'var(--border)')
+  const perimeterW = deltaColor ? (d.deltaFocused ? 2.4 : 1.6)
+    : churn > 0.62 ? 1.3 : 1
 
   const previewOffset = (d as any).previewOffset as { x: number; y: number } | null | undefined
   const translateX = previewOffset?.x ?? 0
@@ -196,7 +294,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       )
       return
     }
-    if ((effZoom >= LEAF_DETAIL_REVEAL_THRESHOLD || d.onSymbolsChange) && !symbols) {
+    if ((detailRevealed || d.onSymbolsChange) && !symbols) {
       const controller = new AbortController()
       setSymbolsLoading(true)
       fetch(`http://127.0.0.1:7744/api/files/${d.id}/symbols?workspace=${encodeURIComponent(workspaceId)}`, { signal: controller.signal })
@@ -230,7 +328,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       return () => controller.abort()
     }
     setSymbolsLoading(false)
-  }, [effZoom, d.id, workspaceId, suppliedSymbols, symbols])
+  }, [detailRevealed, d.id, workspaceId, suppliedSymbols, symbols])
 
   const handleSymbolClick = (sym: any) => {
     if (!editableSymbols && sym.lineStart > 0) setPreviewSymbol(sym)
@@ -256,19 +354,21 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
   // Authoring capability must not bypass semantic zoom. Sheet leaves use the
   // same identity/detail threshold as live Floor leaves; their controls become
   // available once the detailed state has faded in.
-  const detailAlpha = effZoom >= LEAF_DETAIL_REVEAL_THRESHOLD ? 1 : 0
+  const detailAlpha = detailRevealed ? 1 : 0
 
+  // Muted workbench ink for symbol kinds — reads as engraved type on parchment,
+  // not neon. (Runtime state, not symbol kind, is what glows on this canvas.)
   const renderSymbolIcon = (kind: string) => {
     switch (kind.toLowerCase()) {
       case 'function':
       case 'method':
-        return <span style={{ color: '#22d3ee', marginRight: 4, fontFamily: 'var(--font-mono)' }}>ƒ</span>
+        return <span style={{ color: '#29746a', marginRight: 4, fontFamily: 'var(--font-mono)' }}>ƒ</span>
       case 'class':
-        return <span style={{ color: '#f59e0b', marginRight: 4, fontFamily: 'var(--font-mono)' }}>C</span>
+        return <span style={{ color: '#a06a34', marginRight: 4, fontFamily: 'var(--font-mono)' }}>C</span>
       case 'interface':
-        return <span style={{ color: '#10b981', marginRight: 4, fontFamily: 'var(--font-mono)' }}>I</span>
+        return <span style={{ color: '#4f7d5a', marginRight: 4, fontFamily: 'var(--font-mono)' }}>I</span>
       case 'type':
-        return <span style={{ color: '#a855f7', marginRight: 4, fontFamily: 'var(--font-mono)' }}>T</span>
+        return <span style={{ color: '#8a5a67', marginRight: 4, fontFamily: 'var(--font-mono)' }}>T</span>
       default:
         return <span style={{ color: 'var(--text-secondary)', marginRight: 4, fontFamily: 'var(--font-mono)' }}>v</span>
     }
@@ -283,23 +383,45 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
         height: '100%',
         position: 'relative',
         cursor: 'grab',
-        transition: 'opacity 0.3s ease',
+        transition: 'opacity 0.3s ease, box-shadow 0.35s ease-out',
         opacity: dimmed ? 0.22 : 1,
         filter: dimmed ? 'saturate(0.5)' : undefined,
         userSelect: 'none',
-      }}
+        // Reading halo rides outside the frame so it cannot be confused with
+        // the create/edit pulses, which live on the perimeter itself.
+        boxShadow: agentReading
+          ? '0 0 0 2px rgba(139,124,214,0.55), 0 0 18px 4px rgba(139,124,214,0.28)'
+          : undefined,
+        // Live choreography: creation is a strong materialization; live
+        // classification is a quieter settle into architectural ownership.
+        // Deletion is held open for the whole severance window so the file is
+        // still on the Floor while its fuses burn, then dissolves as it
+        // unmounts. Linear timing keeps those keyframe stops truthful.
+        '--living-delete-hold': `${LIVING_FILE_DELETE_MS}ms`,
+        animation: d.fx?.kind === 'enter'
+          ? 'axiomMaterialize 0.55s cubic-bezier(0.22,1,0.36,1) both'
+          : d.fx?.kind === 'exit'
+            ? 'axiomDematerializeRed var(--living-delete-hold) linear both'
+          : d.fx?.kind === 'classify'
+            ? 'axiomClassifySettle 0.7s cubic-bezier(0.22,1,0.36,1) both'
+            : undefined,
+      } as React.CSSProperties}
     >
+      <AgentPresenceBadge presence={d.agentPresence} scale={Math.max(0.8, Math.min(1.1, s))} />
       {/* Preview plane: node visuals ride the predicted post-drop offset.
           Interaction chrome (resizer, connection handles) stays outside on
           the raw node frame so selection outlines never shift or teleport. */}
-      <div style={{
-        position: 'absolute',
-        inset: 0,
-        transform: `translate(${translateX}px, ${translateY}px)`,
-        transition: translateX !== 0 || translateY !== 0
-          ? 'transform 0.22s cubic-bezier(0.25,1,0.5,1)'
-          : undefined,
-      }}>
+      <div
+        className="axiom-file-node__normal"
+        style={{
+          position: 'absolute',
+          inset: 0,
+          transform: `translate(${translateX}px, ${translateY}px)`,
+          transition: translateX !== 0 || translateY !== 0
+            ? 'transform 0.22s cubic-bezier(0.25,1,0.5,1)'
+            : undefined,
+        }}
+      >
       {/* Content plane: laid out at base (depth-0) size, uniformly scaled to fit
           the node box so every file node looks identical in its own frame. */}
       <div
@@ -321,7 +443,9 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
           background: 'transparent',
         }}
       >
-      <ShapeBackdrop shape={shellShape} stroke={perimeter} strokeWidth={perimeterW} />
+      <ShapeBackdrop shape={shellShape} stroke={perimeter} strokeWidth={perimeterW}
+        headBand={shellShape === 'box' || shellShape === 'classbox' ? 29 : undefined}
+        headBandOpacity={detailAlpha} />
       <>
       {/* Name compartment: icon + filename left, line count right. Rule is
           INSET (not full-bleed) so it never collides with shaped silhouettes. */}
@@ -418,14 +542,14 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
             textAlign: 'center',
             fontFamily: 'var(--font-mono)',
           }} />
-          {churn > 0.4 && <span style={{
+          {churn > 0.62 && <span style={{
             position: 'absolute',
             bottom: 0,
             fontSize: 8,
             color: churnColor,
             fontFamily: 'var(--font-mono)',
-            opacity: 0.75,
-          }}>{churn > 0.7 ? 'hot' : 'active'}</span>}
+            opacity: 0.7,
+          }}>{churn > 0.82 ? 'hot' : 'active'}</span>}
         </div>
       )}
       {(
@@ -561,15 +685,6 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
 
       </div>
 
-      {d.agentTouched && (
-        <div style={{
-          position: 'absolute', inset: -3,
-          borderRadius: 0,
-          border: '1.5px solid var(--agent-color)',
-          animation: 'agentPulse 1.5s ease-out 3',
-          pointerEvents: 'none',
-        }} />
-      )}
       {isTraced && (
         <div style={{
           position: 'absolute', inset: -3,
@@ -605,6 +720,130 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
           borderRadius: 0,
           border: `2px solid ${runtimeColor}`,
           animation: 'runtimePulse 0.7s ease-out 1 forwards',
+          pointerEvents: 'none',
+        }} />
+      )}
+      {livingSignal.fx && (
+        <div
+          className={
+            `axiom-living-file-signal${livingSignal.closing
+              ? ' axiom-living-file-signal--closing'
+              : ''}`
+          }
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 40,
+            pointerEvents: 'none',
+            background: 'transparent',
+            '--living-signal-close': `${LIVING_FILE_SIGNAL_CLOSE_MS}ms`,
+          } as React.CSSProperties}
+        >
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            width: `${100 / s}%`,
+            height: `${100 / s}%`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '14px 16px',
+            border: `2px solid ${livingRevealColor}`,
+            background:
+              `linear-gradient(110deg, color-mix(in srgb, ${livingRevealColor} 16%, var(--bg-raised)), ` +
+              'var(--bg-raised) 68%)',
+            boxShadow:
+              `4px 4px 0 color-mix(in srgb, ${livingRevealColor} 24%, transparent), ` +
+              `0 0 24px color-mix(in srgb, ${livingRevealColor} 48%, transparent)`,
+            transform: `scale(${s})`,
+            transformOrigin: 'top left',
+          }}>
+            <div style={{
+              width: 38,
+              height: 38,
+              display: 'grid',
+              flex: '0 0 38px',
+              placeItems: 'center',
+              border: `1px solid color-mix(in srgb, ${livingRevealColor} 65%, var(--border))`,
+              background: 'var(--bg-surface)',
+            }}>
+              <LanguageIcon language={d.language ?? ''} size={25} />
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{
+                color: livingRevealColor,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 8,
+                fontWeight: 900,
+                letterSpacing: '0.13em',
+                lineHeight: 1,
+              }}>
+                {livingSignalLabel}
+              </div>
+              <div style={{
+                marginTop: 7,
+                overflow: 'hidden',
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 14,
+                fontWeight: 750,
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                {d.label}
+              </div>
+            </div>
+            <div
+              className="axiom-living-file-signal__beacon"
+              style={{ background: livingRevealColor, boxShadow: `0 0 12px ${livingRevealColor}` }}
+            />
+          </div>
+        </div>
+      )}
+      {/* Just created: a green pop-pulse announces the file was made. */}
+      {d.fx?.kind === 'enter' && (
+        <div key={`fx-${d.fx.key}`} style={{
+          position: 'absolute', inset: -3,
+          border: '2px solid #2fa35d',
+          animation: 'axiomCreatePulse 0.9s ease-out 1 forwards',
+          pointerEvents: 'none',
+        }} />
+      )}
+      {/* Being destroyed: a red ring collapses inward while the severed
+          relationships burn outward from this node. */}
+      {d.fx?.kind === 'exit' && (
+        <div key={`fx-${d.fx.key}`} style={{
+          position: 'absolute', inset: -3,
+          border: '2px solid #b6534b',
+          animation: 'axiomDeletePulse 0.9s cubic-bezier(0.4,0,0.2,1) 1 forwards',
+          pointerEvents: 'none',
+        }} />
+      )}
+      {/* Live edit landed: the file was just rewritten — a one-shot teal
+          perimeter pulse so the change is visible on the map. */}
+      {d.fx?.kind === 'edit' && (
+        <div key={`fx-${d.fx.key}`} style={{
+          position: 'absolute', inset: -3,
+          border: '2px solid var(--accent)',
+          animation: 'axiomEditPulse 0.75s ease-out 1 forwards',
+          pointerEvents: 'none',
+        }} />
+      )}
+      {d.fx?.kind.startsWith('flow-') && (
+        <div key={`fx-${d.fx.key}`} style={{
+          position: 'absolute', inset: -3,
+          border: `2px solid ${d.fx.kind === 'flow-add' ? '#2fa35d' : d.fx.kind === 'flow-remove' ? '#b6534b' : '#3c8f92'}`,
+          animation: 'axiomFlowArrival 0.8s ease-out 1 forwards',
+          pointerEvents: 'none',
+        }} />
+      )}
+      {/* A loose file found architectural ownership: a restrained olive
+          perimeter confirms classification without competing with creation. */}
+      {d.fx?.kind === 'classify' && (
+        <div key={`fx-${d.fx.key}`} style={{
+          position: 'absolute', inset: -3,
+          border: '1px dashed #667a55',
+          animation: 'axiomClassifyPulse 0.9s ease-out 1 forwards',
           pointerEvents: 'none',
         }} />
       )}
@@ -649,10 +888,14 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
         onClose={() => setPreviewSymbol(null)}
       />}
 
-      <Handle type="source" position={Position.Bottom} {...connectionHandleProps(isConnectable, s)} />
-      <Handle type="target" position={Position.Top}    {...connectionHandleProps(isConnectable, s)} />
-      <Handle type="source" position={Position.Right}  {...connectionHandleProps(isConnectable, s)} />
-      <Handle type="target" position={Position.Left}   {...connectionHandleProps(isConnectable, s)} />
+      <Handle id="source-top" type="source" position={Position.Top} {...connectionHandleProps(isConnectable, s)} />
+      <Handle id="source-right" type="source" position={Position.Right} {...connectionHandleProps(isConnectable, s)} />
+      <Handle id="source-bottom" type="source" position={Position.Bottom} {...connectionHandleProps(isConnectable, s)} />
+      <Handle id="source-left" type="source" position={Position.Left} {...connectionHandleProps(isConnectable, s)} />
+      <Handle id="target-top" type="target" position={Position.Top} {...connectionHandleProps(isConnectable, s)} />
+      <Handle id="target-right" type="target" position={Position.Right} {...connectionHandleProps(isConnectable, s)} />
+      <Handle id="target-bottom" type="target" position={Position.Bottom} {...connectionHandleProps(isConnectable, s)} />
+      <Handle id="target-left" type="target" position={Position.Left} {...connectionHandleProps(isConnectable, s)} />
     </div>
   )
 }

@@ -1,6 +1,30 @@
-import type { DbSystem, FloorLayout } from '../../shared/types'
+import type { AgentAction, DbSystem, DeltaSummary, FloorLayout } from '../../shared/types'
 
 const BASE = 'http://127.0.0.1:7744'
+
+/**
+ * Fetching a delta never acknowledges it. The watermark only moves on
+ * apiAckDelta, so closing Axiom mid-review leaves the delta waiting.
+ */
+export async function apiGetDelta(workspaceId: string, signal?: AbortSignal): Promise<DeltaSummary> {
+  const res = await fetch(`${BASE}/api/delta?workspace=${encodeURIComponent(workspaceId)}`, { signal })
+  if (!res.ok) throw new Error(await res.text() || `Unable to load delta (${res.status})`)
+  return res.json() as Promise<DeltaSummary>
+}
+
+/**
+ * Acknowledges up to the moment the reviewed delta was computed — never "now"
+ * — so changes that landed while the user was reading survive into the next
+ * delta instead of being silently swallowed.
+ */
+export async function apiAckDelta(workspaceId: string, until: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/delta/ack`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspaceId, until }),
+  })
+  if (!res.ok) throw new Error(await res.text() || `Unable to acknowledge delta (${res.status})`)
+}
 
 export interface FileSource {
   fileId: string
@@ -51,7 +75,7 @@ export async function apiUpdateSystem(system: DbSystem): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(system),
   })
-  if (!res.ok) console.error('[arcdApi] updateSystem failed', await res.text())
+  if (!res.ok) throw new Error(await res.text() || `Unable to update system (${res.status})`)
 }
 
 export async function apiSaveNodePosition(
@@ -75,4 +99,16 @@ export async function apiSaveNodePosition(
     body,
   })
   if (!res.ok) console.error('[arcdApi] saveNodePosition failed', await res.text())
+}
+
+/**
+ * The recent agent action log. Durable in archd; the renderer keeps a window
+ * of it for the visual log and reloads on project open.
+ */
+export async function apiGetAgentActions(workspaceId: string, limit = 200): Promise<AgentAction[]> {
+  const res = await fetch(
+    `${BASE}/api/agent/actions?workspace=${encodeURIComponent(workspaceId)}&limit=${limit}`,
+  )
+  if (!res.ok) throw new Error(await res.text() || `Unable to load agent log (${res.status})`)
+  return res.json() as Promise<AgentAction[]>
 }

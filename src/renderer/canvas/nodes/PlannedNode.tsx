@@ -40,20 +40,25 @@ export function shapeFor(p: { shape: string; kind: string }): 'box' | 'classbox'
 export function PlannedUmlNode({ data, selected }: NodeProps) {
   const p = (data as { planned: PlannedModel }).planned
   const workspaceId = useGraphStore(s => s.currentProject?.id ?? '')
-  const { updatePlanned, deletePlanned, lastCreatedPlannedId } = useSheetStore(useShallow(s => ({
+  const { updatePlanned, deletePlanned, setPlannedApproval, lastCreatedPlannedId } = useSheetStore(useShallow(s => ({
     updatePlanned: s.updatePlanned, deletePlanned: s.deletePlanned,
+    setPlannedApproval: s.setPlannedApproval,
     lastCreatedPlannedId: s.lastCreatedPlannedId,
   })))
   const members = plannedMembers(p)
   const done = members.filter(m => m.realized).length
   const isRealized = p.status === 'realized' || p.status === 'flattened'
-  const statusColor = STATUS_COLOR[p.status] ?? 'var(--text-dim)'
-  const accent = p.color || 'var(--accent)'
+  const proposalPending = p.createdBy === 'agent' && p.approvalStatus === 'pending'
+  const rejected = p.approvalStatus === 'rejected'
+  const statusColor = rejected ? 'var(--error)' : (STATUS_COLOR[p.status] ?? 'var(--text-dim)')
+  const accent = rejected ? 'var(--error)' : proposalPending ? 'var(--warn)' : (p.color || 'var(--accent)')
   const shape = shapeFor(p)
 
   const [editingName, setEditingName] = useState(false)
   const [editingPath, setEditingPath] = useState(false)
   const [newMember, setNewMember] = useState('')
+  const [approvalBusy, setApprovalBusy] = useState(false)
+  const [approvalError, setApprovalError] = useState<string | null>(null)
   const nameRef = useRef<HTMLInputElement>(null)
 
   // Freshly dropped from the palette → straight into the name editor.
@@ -77,6 +82,18 @@ export function PlannedUmlNode({ data, selected }: NodeProps) {
     commit({ members: members.filter((_, idx) => idx !== i) })
 
   const stopAll = { onMouseDown: (e: React.MouseEvent) => e.stopPropagation() }
+  const decideProposal = async (decision: 'approved' | 'rejected') => {
+    if (approvalBusy) return
+    setApprovalBusy(true)
+    setApprovalError(null)
+    try {
+      await setPlannedApproval(workspaceId, p.id, decision)
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : 'Unable to resolve proposal')
+    } finally {
+      setApprovalBusy(false)
+    }
+  }
 
   const inputStyle: React.CSSProperties = {
     background: 'var(--bg-base)', border: `1px solid ${accent}`, color: 'var(--text-primary)',
@@ -85,6 +102,43 @@ export function PlannedUmlNode({ data, selected }: NodeProps) {
 
   const body = (
     <>
+      {proposalPending && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 5, padding: '5px 8px',
+            borderBottom: '1px dashed var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)',
+          }}
+          {...stopAll}
+        >
+          <span style={{ fontSize: 8, fontWeight: 800, color: 'var(--warn)', letterSpacing: '0.08em' }}>
+            AGENT PROPOSAL
+          </span>
+          <button
+            type="button"
+            disabled={approvalBusy}
+            onClick={e => { e.stopPropagation(); void decideProposal('approved') }}
+            style={{ marginLeft: 'auto', fontSize: 8, cursor: 'pointer' }}
+          >
+            Confirm
+          </button>
+          <button
+            type="button"
+            disabled={approvalBusy}
+            onClick={e => { e.stopPropagation(); void decideProposal('rejected') }}
+            style={{ fontSize: 8, cursor: 'pointer' }}
+          >
+            Reject
+          </button>
+        </div>
+      )}
+      {rejected && (
+        <div style={{ padding: '4px 8px', borderBottom: '1px dashed var(--error)', color: 'var(--error)', fontSize: 8, fontWeight: 800 }}>
+          REJECTED PROPOSAL
+        </div>
+      )}
+      {approvalError && (
+        <div style={{ padding: '3px 8px', color: 'var(--error)', fontSize: 8 }}>{approvalError}</div>
+      )}
       {/* header compartment */}
       <div style={{ padding: '7px 10px', borderBottom: members.length > 0 || !isRealized ? '1px solid var(--border-dim)' : 'none' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

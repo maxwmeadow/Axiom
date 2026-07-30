@@ -11,13 +11,24 @@ import (
 // FileVec is a sparse TF-IDF vector for a single file.
 type FileVec map[string]float64
 
-// BuildTFIDF computes TF-IDF vectors for all files using symbol names and filenames.
+// BuildTFIDF computes TF-IDF vectors from authored filenames and parsed symbol
+// names. Directory components are deliberately excluded: names are semantic
+// vocabulary, while folder placement is only storage location.
 // fileSymbols maps fileID → []db.Symbol.
 func BuildTFIDF(files []db.File, fileSymbols map[string][]db.Symbol) map[string]FileVec {
-	// Collect tokens per file (filename + all symbol names)
+	const filenameZoneWeight = 3
+
+	// Collect semantic tokens per file from authored filenames and parser output.
 	fileTokens := make(map[string][]string, len(files))
 	for _, f := range files {
-		tokens := tokenizeIdent(filenameBase(f.RelPath))
+		var tokens []string
+		base := filenameBase(f.RelPath)
+		if !isGenericFilename(base) {
+			nameTokens := tokenizeIdent(base)
+			for i := 0; i < filenameZoneWeight; i++ {
+				tokens = append(tokens, nameTokens...)
+			}
+		}
 		for _, s := range fileSymbols[f.ID] {
 			tokens = append(tokens, tokenizeIdent(s.Name)...)
 		}
@@ -121,6 +132,15 @@ func filenameBase(relPath string) string {
 		base = base[:idx]
 	}
 	return base
+}
+
+func isGenericFilename(base string) bool {
+	switch strings.ToLower(base) {
+	case "", "__init__", "index", "mod":
+		return true
+	default:
+		return false
+	}
 }
 
 // tfidfStopWords are words that carry no clustering signal.

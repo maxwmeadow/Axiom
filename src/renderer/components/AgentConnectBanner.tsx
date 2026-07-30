@@ -1,92 +1,80 @@
-import React, { useState } from 'react'
-import { useGraphStore } from '../store/graphStore'
+import { useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
+import { useGraphStore } from '../store/graphStore'
 
-/**
- * AgentConnectBanner — shown after raw indexing completes.
- * Prompts user to connect an AI agent via MCP to semantically classify the project.
- */
+const MCP_ENDPOINT = 'http://127.0.0.1:7743/mcp'
+
+type CopyState = 'idle' | 'copied' | 'failed'
+
 export function AgentConnectBanner() {
   const [dismissed, setDismissed] = useState(false)
-  const { isIndexing, files } = useGraphStore(useShallow(s => ({ isIndexing: s.isIndexing, files: s.files })))
+  const { files, isIndexing, workspaceId } = useGraphStore(useShallow(state => ({
+    files: state.files,
+    isIndexing: state.isIndexing,
+    workspaceId: state.currentProject?.id ?? '',
+  })))
 
-  // Show only after indexing completes and there are unclassified files
-  const unclassified = files.filter(f => !f.systemId).length
+  useEffect(() => {
+    setDismissed(false)
+  }, [workspaceId])
+
+  const unclassified = files.filter(file => !file.systemId).length
   if (isIndexing || dismissed || unclassified === 0) return null
 
-  const mcpEndpoint = 'http://127.0.0.1:7743/mcp'
-
   return (
-    <div className="axiom-floating-surface" style={{
-      position: 'fixed',
-      bottom: 36,
-      left: '50%',
-      transform: 'translateX(-50%)',
-      zIndex: 500,
-      border: '1px solid var(--accent)',
-      padding: '14px 20px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 16,
-      animation: 'fadeIn 0.3s ease-out',
-      maxWidth: 560,
-    }}>
-      <div style={{
-        width: 10, height: 10, borderRadius: '50%',
-        background: 'var(--accent)',
-        flexShrink: 0,
-        animation: 'pulse 2s ease-in-out infinite',
-      }} />
-
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 3 }}>
-          {unclassified} files unclassified — connect an agent to map architecture
-        </div>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          Point your AI agent at the MCP endpoint to create systems and assign files.
-        </div>
+    <aside className="axiom-agent-connect" aria-label="Agent connection required">
+      <span className="axiom-agent-connect__signal" aria-hidden="true" />
+      <div className="axiom-agent-connect__copy">
+        <strong>{unclassified} {unclassified === 1 ? 'file' : 'files'} awaiting architectural classification</strong>
+        <span>Connect an AI agent through MCP to create systems and assign the remaining source files.</span>
       </div>
-
-      <CopyButton text={mcpEndpoint} />
-
+      <CopyEndpointButton endpoint={MCP_ENDPOINT} />
       <button
+        type="button"
+        className="axiom-agent-connect__dismiss"
         onClick={() => setDismissed(true)}
-        title="Dismiss"
-        style={{ color: 'var(--text-dim)', fontSize: 16, padding: '2px 6px', flexShrink: 0, opacity: 0.6 }}
-        onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-        onMouseLeave={e => (e.currentTarget.style.opacity = '0.6')}
+        aria-label="Dismiss agent connection notice"
       >
         ×
       </button>
-    </div>
+    </aside>
   )
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  const handle = () => {
-    navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+function CopyEndpointButton({ endpoint }: { endpoint: string }) {
+  const [state, setState] = useState<CopyState>('idle')
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current)
+  }, [])
+
+  const copy = async () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current)
+    try {
+      await navigator.clipboard.writeText(endpoint)
+      setState('copied')
+    } catch {
+      setState('failed')
+    }
+    resetTimer.current = setTimeout(() => setState('idle'), 2000)
   }
+
+  const label = state === 'copied'
+    ? 'Endpoint copied'
+    : state === 'failed'
+      ? 'Copy failed'
+      : endpoint
+
   return (
     <button
-      onClick={handle}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '6px 12px',
-        background: 'var(--bg-raised)',
-        border: `1px solid ${copied ? 'var(--ok)' : 'var(--border)'}`,
-        borderRadius: 0,
-        fontSize: 11, fontWeight: 600,
-        color: copied ? 'var(--ok)' : 'var(--text-secondary)',
-        flexShrink: 0,
-        transition: 'all 0.2s ease',
-        fontFamily: 'monospace',
-        whiteSpace: 'nowrap',
-      }}
+      type="button"
+      className="axiom-agent-connect__endpoint"
+      data-copy-state={state}
+      onClick={() => void copy()}
+      aria-label={`Copy MCP endpoint ${endpoint}`}
     >
-      {copied ? '✓ Copied' : text}
+      {label}
     </button>
   )
 }

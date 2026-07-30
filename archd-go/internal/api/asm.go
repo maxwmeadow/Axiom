@@ -53,10 +53,11 @@ type agentSheetNode struct {
 }
 
 type agentSheetEdge struct {
-	Kind   string `json:"kind"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Note   string `json:"note,omitempty"`
+	Kind    string `json:"kind"`
+	Source  string `json:"source"`
+	Target  string `json:"target"`
+	Note    string `json:"note,omitempty"`
+	Planned bool   `json:"planned,omitempty"`
 }
 
 type agentSheetContext struct {
@@ -123,7 +124,9 @@ func renderAgentSheetContext(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 	}
 	plannedByID := make(map[string]db.PlannedNode, len(planned))
 	for _, p := range planned {
-		plannedByID[p.ID] = p
+		if p.ApprovalStatus == "approved" {
+			plannedByID[p.ID] = p
+		}
 	}
 	floorLayoutByID := make(map[string]db.FloorLayout, len(floorLayouts))
 	for _, layout := range floorLayouts {
@@ -221,7 +224,7 @@ func renderAgentSheetContext(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 		nodes = append(nodes, n)
 	}
 	for _, p := range planned {
-		if p.Status == "flattened" {
+		if p.ApprovalStatus != "approved" || p.Status == "flattened" {
 			continue
 		}
 		n := agentSheetNode{
@@ -253,6 +256,16 @@ func renderAgentSheetContext(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 		}
 	}
 	for _, e := range edges {
+		if e.SrcPlanned != nil {
+			if _, approved := plannedByID[*e.SrcPlanned]; !approved {
+				continue
+			}
+		}
+		if e.DstPlanned != nil {
+			if _, approved := plannedByID[*e.DstPlanned]; !approved {
+				continue
+			}
+		}
 		source, target := "", ""
 		if e.SrcPlanned != nil {
 			id := "planned:" + *e.SrcPlanned
@@ -266,7 +279,9 @@ func renderAgentSheetContext(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 		} else if e.DstLive != nil {
 			target = liveURI(*e.DstLive)
 		}
-		contextEdges = append(contextEdges, agentSheetEdge{Kind: e.Kind, Source: source, Target: target, Note: e.Note})
+		contextEdges = append(contextEdges, agentSheetEdge{
+			Kind: e.Kind, Source: source, Target: target, Note: e.Note, Planned: true,
+		})
 	}
 
 	ctx := agentSheetContext{
@@ -457,7 +472,9 @@ func renderBuildSpec(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 	}
 	plannedByID := make(map[string]db.PlannedNode, len(planned))
 	for _, p := range planned {
-		plannedByID[p.ID] = p
+		if p.ApprovalStatus == "approved" {
+			plannedByID[p.ID] = p
+		}
 	}
 	liveRef := func(id string) string {
 		if f, ok := fileByID[id]; ok {
@@ -472,8 +489,15 @@ func renderBuildSpec(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 		fmt.Fprintf(&b, "Purpose: %s\n", *sheet.Purpose)
 	}
 	open := 0
+	awaitingApproval := 0
 	b.WriteString("\n## Target additions\n")
 	for _, p := range planned {
+		if p.ApprovalStatus != "approved" {
+			if p.ApprovalStatus == "pending" {
+				awaitingApproval++
+			}
+			continue
+		}
 		if p.Status == "flattened" {
 			continue
 		}
@@ -515,6 +539,16 @@ func renderBuildSpec(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 	if len(edges) > 0 {
 		b.WriteString("\n## Structural intent\n")
 		for _, e := range edges {
+			if e.SrcPlanned != nil {
+				if _, approved := plannedByID[*e.SrcPlanned]; !approved {
+					continue
+				}
+			}
+			if e.DstPlanned != nil {
+				if _, approved := plannedByID[*e.DstPlanned]; !approved {
+					continue
+				}
+			}
 			src, dst := "?", "?"
 			if e.SrcPlanned != nil {
 				if p, ok := plannedByID[*e.SrcPlanned]; ok {
@@ -540,6 +574,9 @@ func renderBuildSpec(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 
 	fmt.Fprintf(&b, "\n%d element(s) awaiting realization. Use Sheet containment and the live Floor context "+
 		"to place the design; Axiom reconciles automatically as code appears and the user watches members turn green.\n", open)
+	if awaitingApproval > 0 {
+		fmt.Fprintf(&b, "%d agent proposal(s) are awaiting user approval and are intentionally excluded from this work order.\n", awaitingApproval)
+	}
 	if context, err := renderAgentSheetContext(sqlDB, sheet); err == nil {
 		b.WriteString("\n## Sheet placement in live Floor context\n```json\n")
 		b.WriteString(context)

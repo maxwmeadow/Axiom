@@ -1,13 +1,16 @@
 import React from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import type { SystemNodeData } from '../sceneTypes'
+import type { LivingInspectionWindow, SystemNodeData } from '../sceneTypes'
 import { EditableNodeTitle } from './EditableNodeTitle'
 import { useInfraService } from '../../store/registryStore'
 import { brandIcon, CATEGORY_GLYPHS, officialServiceIcon } from './infraIcons'
 import { fitPresentationScale } from '../resizeGeometry'
 import { connectionHandleProps } from './connectionChrome'
 import { AxiomNodeResizer } from './AxiomNodeResizer'
+import { AgentPresenceBadge } from './AgentPresenceBadge'
 import { DEPTH_TITLE_PX } from '../frameGeometry'
+import { systemTabChrome } from '../systemChrome'
+import { LIVING_WINDOW_CLOSE_MS } from '../../store/graphStore'
 
 // Drop-target feedback: renders the cell grid only while a node is being
 // dragged over this container (green = free, amber = displaced, red = occupied).
@@ -110,11 +113,56 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
   const infraService = useInfraService(d.umlKind === 'infra' ? (d.umlMetadata?.service ?? '') : '')
   const officialInfraIcon = infraService ? officialServiceIcon(infraService.id) : undefined
   const infraIcon = infraService ? brandIcon(infraService.brand.icon) : null
-  const legend = isDeploymentBoundary
-    ? ['HOSTING', infraService?.provider?.toUpperCase()].filter(Boolean).join(' · ')
-    : 'SYSTEM'
-  const { color: authoredColor, name, source, directChildCount, agentTouched, isChild,
+  const { color: authoredColor, name, source, directChildCount, isChild,
     childrenVisible, selfScale, selfBlur, isDropTarget, onResizeStart, onResizeEnd, depth } = d
+  const incomingLivingWindows = (d.livingWindows ?? []).filter(window =>
+    [window.x, window.y, window.width, window.height].every(Number.isFinite) &&
+    window.width > 0 &&
+    window.height > 0
+  )
+  const livingWindowSignature = incomingLivingWindows
+    .map(window => `${window.originId}:${window.key}`)
+    .join('|')
+  const [renderedLivingWindows, setRenderedLivingWindows] = React.useState<LivingInspectionWindow[]>(
+    incomingLivingWindows,
+  )
+  const [livingWindowsClosing, setLivingWindowsClosing] = React.useState(false)
+  const livingWindowCloseTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  React.useEffect(() => {
+    if (livingWindowCloseTimer.current !== null) {
+      clearTimeout(livingWindowCloseTimer.current)
+      livingWindowCloseTimer.current = null
+    }
+    if (incomingLivingWindows.length > 0) {
+      setLivingWindowsClosing(false)
+      setRenderedLivingWindows(incomingLivingWindows)
+      return
+    }
+    if (renderedLivingWindows.length === 0) return
+
+    // Keep the aperture mounted for a real exit phase. If another signal
+    // arrives before it closes, the timer is cancelled and the same window
+    // remains open instead of flashing the whole system title in between.
+    setLivingWindowsClosing(true)
+    livingWindowCloseTimer.current = setTimeout(() => {
+      setRenderedLivingWindows([])
+      setLivingWindowsClosing(false)
+      livingWindowCloseTimer.current = null
+    }, LIVING_WINDOW_CLOSE_MS)
+    return () => {
+      if (livingWindowCloseTimer.current !== null) {
+        clearTimeout(livingWindowCloseTimer.current)
+        livingWindowCloseTimer.current = null
+      }
+    }
+  }, [livingWindowSignature])
+  React.useEffect(() => () => {
+    if (livingWindowCloseTimer.current !== null) {
+      clearTimeout(livingWindowCloseTimer.current)
+    }
+  }, [])
+  const livingWindows = renderedLivingWindows
+  const livingWindowActive = livingWindows.length > 0
   const color = isDeploymentBoundary
     ? (infraService?.brand.darkColor ?? infraService?.brand.color ?? authoredColor)
     : authoredColor
@@ -126,12 +174,21 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
   const scale = typeof selfScale === 'number' ? selfScale : 1
   const blur  = typeof selfBlur === 'number' ? selfBlur : 0
   const totalCount = directChildCount
-  const presentationScale = fitPresentationScale(
-    width,
-    height,
-    d.presentationBaseWidth ?? width ?? 620,
-    d.presentationBaseHeight ?? height ?? 420,
-  )
+  // Authoritative and canonical: "how far has the user resized this frame from
+  // its design size", with no world-scale term on either side. It must NOT be
+  // recomputed here from `width`/`height` — those are world-scaled, which would
+  // fold nesting depth in a second time (DEPTH_TITLE_PX already carries it) and
+  // would make the chrome grow whenever the frame compressed its interior.
+  // The sheet layer does not project one, so fall back to the local canonical
+  // ratio there.
+  const presentationScale = typeof d.presentationScale === 'number' && d.presentationScale > 0
+    ? d.presentationScale
+    : fitPresentationScale(
+        (width ?? 0) / Math.max(0.0001, d.worldScale ?? 1),
+        (height ?? 0) / Math.max(0.0001, d.worldScale ?? 1),
+        d.presentationBaseWidth ?? width ?? 620,
+        d.presentationBaseHeight ?? height ?? 420,
+      )
 
   // Preview offset — applied as translate so the node visually floats to its predicted post-drop
   // position without moving the React Flow logical position (handles stay at original spot).
@@ -155,10 +212,14 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
 
   const handles = (
     <>
-      <Handle type="source" position={Position.Right}  {...connectionHandleProps(isConnectable, presentationScale, { right: -6 })} />
-      <Handle type="target" position={Position.Left}   {...connectionHandleProps(isConnectable, presentationScale, { left: -6 })} />
-      <Handle type="source" position={Position.Bottom} {...connectionHandleProps(isConnectable, presentationScale, { bottom: -6 })} />
-      <Handle type="target" position={Position.Top}    {...connectionHandleProps(isConnectable, presentationScale, { top: -6 })} />
+      <Handle id="source-top" type="source" position={Position.Top} {...connectionHandleProps(isConnectable, presentationScale, { top: -6 })} />
+      <Handle id="source-right" type="source" position={Position.Right} {...connectionHandleProps(isConnectable, presentationScale, { right: -6 })} />
+      <Handle id="source-bottom" type="source" position={Position.Bottom} {...connectionHandleProps(isConnectable, presentationScale, { bottom: -6 })} />
+      <Handle id="source-left" type="source" position={Position.Left} {...connectionHandleProps(isConnectable, presentationScale, { left: -6 })} />
+      <Handle id="target-top" type="target" position={Position.Top} {...connectionHandleProps(isConnectable, presentationScale, { top: -6 })} />
+      <Handle id="target-right" type="target" position={Position.Right} {...connectionHandleProps(isConnectable, presentationScale, { right: -6 })} />
+      <Handle id="target-bottom" type="target" position={Position.Bottom} {...connectionHandleProps(isConnectable, presentationScale, { bottom: -6 })} />
+      <Handle id="target-left" type="target" position={Position.Left} {...connectionHandleProps(isConnectable, presentationScale, { left: -6 })} />
     </>
   )
 
@@ -179,12 +240,31 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
   // chrome (tab + title band) must fit inside the grid's reserved gap — the
   // layout gives exactly one gridGap of headroom and eight drag/snap sites
   // assume it, so the chrome scales to the budget, never the other way.
-  const tabH = Math.round(reservedGap * 0.38)
-  const titleBandH = reservedGap - tabH
-  const titleFont = Math.min(titlePx, Math.round(titleBandH * 0.72))
+  // All tab geometry comes from one swept, tested model. Crucially it takes
+  // the UNSCALED depth title size, so tab height cannot follow the node width
+  // through presentationScale the way it used to.
+  const chrome = systemTabChrome({
+    shellWidth: shellSize.w,
+    shellHeight: shellSize.h,
+    depthTitlePx: DEPTH_TITLE_PX[depthIdx],
+    titlePx,
+    title: name,
+    count: totalCount,
+    frameStroke: isDropTarget ? 2.5 : 1,
+  })
+  const tabH = chrome.tabHeight
+  const tabW = chrome.tabWidth
+  const tabSlant = chrome.tabSlant
+  const tabBandTop = chrome.bandTop
+  const tabBandH = chrome.bandHeight
+  const titleFont = chrome.titleFont
   const badgeFont = Math.round(titleFont * 0.8)
-  const tabW = Math.min(Math.max(shellSize.w * 0.3, titleFont * 6), shellSize.w * 0.5)
-  const tabSlant = tabH * 0.65
+  const legendFont = chrome.chipFont
+  const chipW = chrome.chipWidth
+  const chipX0 = chrome.chipLeft
+  const chipXTopRight = chrome.chipTopRight
+  const chipXBottomRight = chrome.chipBottomRight
+  const tabGap = Math.max(1.5, tabH * 0.14)
 
   const infraIdentityIcon = (size: number) => {
     if (!isDeploymentBoundary) return null
@@ -210,8 +290,8 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
       gap: bigTitleFont * 0.25,
       zIndex: 15,
       pointerEvents: 'none',
-      opacity: 1 - containerAlpha,
-      transition: 'opacity 0.25s ease',
+      opacity: livingWindowActive ? 0.08 : 1 - containerAlpha,
+      transition: 'opacity 0.5s cubic-bezier(0.22,1,0.36,1)',
       padding: `0 ${padX}px`,
     }}>
       <EditableNodeTitle value={name} onRename={d.onRename} style={{
@@ -245,16 +325,24 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
   const header = (
     <div style={{
       position: 'absolute',
-      top: tabH, left: padX, right: padX,
-      height: titleBandH,
+      // Exactly the chip's band: the title sits wholly within the tab.
+      top: tabBandTop,
+      // Must be the model's inset, not `padX`. padX is derived from titlePx,
+      // which rides presentationScale = min(w/designW, h/designH) — so using
+      // it here moved the title sideways whenever the frame's HEIGHT changed.
+      left: chrome.titleLeft,
+      width: chrome.titleWidth,
+      height: tabBandH,
       display: 'flex',
       alignItems: 'center',
-      gap: dotPx * 0.75,
+      // Depth-relative for the same reason as `left` above: dotPx rides
+      // presentationScale, so a height change would shift anything after it.
+      gap: DEPTH_TITLE_PX[depthIdx] * 0.4,
       zIndex: 20,
       overflow: 'hidden',
       // crossfade partner of the big centered title
-      opacity: containerAlpha,
-      transition: 'opacity 0.25s ease',
+      opacity: livingWindowActive ? 1 : containerAlpha,
+      transition: 'opacity 0.5s cubic-bezier(0.22,1,0.36,1)',
     }}>
       {infraIdentityIcon(Math.max(12, titleFont * 1.05))}
       <EditableNodeTitle value={name} onRename={d.onRename} style={{
@@ -307,30 +395,58 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
       `L 1 ${shellSize.h - deploymentCorner} L 1 ${deploymentCorner} Z`
     : `M 1 ${shellSize.h - 1} L 1 1 L ${tabW} 1 L ${tabW + tabSlant} ${tabH} ` +
       `L ${shellSize.w - 1} ${tabH} L ${shellSize.w - 1} ${shellSize.h - 1} Z`
+  const surfacedFx = d.fx?.kind.startsWith('surface-') ? d.fx : null
+  const surfacedColor = surfacedFx?.kind === 'surface-add'
+    ? '#2fa35d'
+    : surfacedFx?.kind === 'surface-remove'
+      ? '#b6534b'
+      : '#3c8f92'
+  const surfacedCount = surfacedFx?.count ?? 1
+  const surfacedNames = surfacedFx?.originLabels ?? []
+  const surfacedIdentity = surfacedNames.length > 0
+    ? surfacedNames.slice(0, 2).join(', ')
+    : `${surfacedCount} hidden item${surfacedCount === 1 ? '' : 's'}`
+  const surfacedOverflow = surfacedCount > surfacedNames.slice(0, 2).length
+    ? ` +${surfacedCount - surfacedNames.slice(0, 2).length}`
+    : ''
+  const surfacedVerb = surfacedFx?.kind === 'surface-add'
+    ? 'created'
+    : surfacedFx?.kind === 'surface-remove'
+      ? 'removed'
+      : 'edited'
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', userSelect: 'none', cursor: 'grab' }}>
+      <AgentPresenceBadge presence={d.agentPresence} scale={Math.max(0.8, Math.min(1.2, presentationScale))} />
       {/* Shell plane: the silhouette and contents ride preview translate,
           reveal scale, and blur. Interaction chrome (resizer, connection
           handles) lives outside on the raw node frame so selection outlines
           never shift, teleport, or get clipped by the shell's overflow. */}
-      <div ref={shellRef} style={{
+      <div ref={shellRef} className="axiom-system-node__shell" style={{
         position: 'absolute',
         inset: 0,
         // The folder SVG owns ALL chrome — a rect background/border here would
         // fill the tab notch and fight the silhouette (the "two systems" bug).
         background: 'transparent',
         transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
-        filter: blur > 0.1 ? `blur(${blur}px)` : undefined,
+        filter: !livingWindowActive && blur > 0.1 ? `blur(${blur}px)` : undefined,
         opacity: dimmed ? 0.3 : 1,
         transformOrigin: 'center center',
         transition: 'transform 0.22s cubic-bezier(0.25,1,0.5,1), filter 0.18s ease-out, opacity 0.3s ease',
-        overflow: 'hidden',
+        // visible so the folder's hard offset shadow lifts off the board;
+        // contents are inset and never bleed past the silhouette.
+        overflow: 'visible',
+        // Live choreography: a newly-clustered system materializes onto the Floor.
+        animation: d.fx?.kind === 'enter' ? 'axiomMaterialize 0.6s cubic-bezier(0.22,1,0.36,1) both' : undefined,
       }}>
       {/* Semantic systems use a package outline; hosting uses a compute chassis. */}
       <svg
         width={shellSize.w} height={shellSize.h}
-        style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
+        style={{ position: 'absolute', inset: 0, pointerEvents: 'none',
+          overflow: 'visible',
+          // Hard warm-gray offset shadow lifts the folder off the parchment
+          // board (mirrors the mockup's `drop-shadow(4px 4px 0 …)`).
+          filter: 'drop-shadow(4px 4px 0 rgba(76,81,75,0.34))' }}
       >
         <path
           d={shellPath}
@@ -343,37 +459,38 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
           <line x1={deploymentCorner * 0.46} y1={deploymentCorner + 3} x2={deploymentCorner * 0.46} y2={shellSize.h - deploymentCorner - 3} stroke={color} strokeWidth={2.5} />
           <line x1={deploymentCorner * 0.78} y1={deploymentCorner + 3} x2={deploymentCorner * 0.78} y2={shellSize.h - deploymentCorner - 3} stroke={color} strokeWidth={1} opacity={0.45} />
         </> : <line x1={2} y1={2} x2={2} y2={shellSize.h - 2} stroke={color} strokeWidth={3} />}
-        {/* tiny legend identifies the semantic or deployment role. */}
-        <text x={padX * 0.8} y={tabH * 0.72} style={{
-          fontSize: tabH * 0.5, letterSpacing: '0.12em',
-          fill: isDeploymentBoundary ? color : 'var(--text-dim)', fontFamily: 'var(--font-mono)',
-        }}>{legend}</text>
         {/* item count — a small bordered chip nested INSIDE the tab at its
             right end, right edge slanted to echo the tab's cut. */}
         {!isDeploymentBoundary && totalCount > 0 && (() => {
-          const legendFont = tabH * 0.5
-          const yT = 3.5                    // chip inset from the tab's top edge
-          const yB = tabH - 1               // sits low, riding the tab line
-          const gapR = 2.5                  // horizontal clearance to the tab slant
-          // Right edge runs EXACTLY parallel to the tab's slant at gapR.
-          const slope = tabSlant / Math.max(tabH - 1, 1)
-          const chipSlant = slope * (yB - yT)
-          const chipW = legendFont * 0.62 * String(totalCount).length + tabH * 0.55
-          // Anchored at the slant: more digits → chipW grows → x0 moves LEFT;
-          // the right edge never moves.
-          const x1 = tabW + slope * (yT - 1) - gapR  // top-right corner
-          const x0 = x1 - chipW                      // left edge
+          // The chip is a sibling of the frame's own chrome, so it shares the
+          // frame's stroke weight and registers against the frame's lines:
+          //
+          //  - its BOTTOM border sits exactly on y = tabH, the body's long top
+          //    border, so the two strokes are collinear rather than merely
+          //    close;
+          //  - its TOP and RIGHT borders stand off the tab's top border and
+          //    slanted cut by the same gap. Because the cut is slanted, an
+          //    equal *visual* gap needs a larger horizontal offset — hence the
+          //    edge-length term below, which converts a perpendicular gap into
+          //    the horizontal one that produces it.
+          const yT = tabBandTop
+          const yB = tabH
+          const xTopRight = chipXTopRight
+          const xBottomRight = chipXBottomRight
+          const x0 = chipX0
           return (
             <g opacity={containerAlpha} style={{ transition: 'opacity 0.25s ease' }}>
               <path
-                d={`M ${x0} ${yB} L ${x0} ${yT} L ${x1} ${yT} L ${x1 + chipSlant} ${yB} Z`}
+                d={`M ${x0} ${yB} L ${x0} ${yT} L ${xTopRight} ${yT} L ${xBottomRight} ${yB} Z`}
                 fill="var(--bg-raised)"
                 stroke={strokeColor}
-                strokeWidth={1}
+                strokeWidth={chrome.chipStroke}
               />
               <text
-                x={x0 + (chipW + chipSlant * 0.35) / 2} y={tabH * 0.72}
+                x={(x0 + (xTopRight + xBottomRight) / 2) / 2}
+                y={(yT + yB) / 2}
                 textAnchor="middle"
+                dominantBaseline="central"
                 style={{
                   fontSize: legendFont, fontWeight: 700,
                   fill: color, fontFamily: 'var(--font-mono)',
@@ -387,19 +504,121 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
       <GridOverlay d={d} />
       {header}
       {bigTitle}
-      {agentTouched && (
-        <div style={{
-          position: 'absolute', inset: -3,
-          border: '2px solid var(--agent-color, #f59e0b)',
-          animation: 'agentPulse 1.5s ease-out 3',
-          pointerEvents: 'none',
-        }} />
-      )}
       </div>
+      {livingWindowActive && (() => {
+        const pad = Math.max(7, 10 * presentationScale)
+        const windows = livingWindows.map(window => {
+          const x = Math.max(2, window.x - pad)
+          const y = Math.max(2, window.y - pad)
+          return {
+            ...window,
+            x,
+            y,
+            width: Math.max(1, Math.min(shellSize.w - x - 2, window.width + pad * 2)),
+            height: Math.max(1, Math.min(shellSize.h - y - 2, window.height + pad * 2)),
+          }
+        })
+        const maskPath = [
+          `M 0 0 H ${shellSize.w} V ${shellSize.h} H 0 Z`,
+          ...windows.map(window =>
+            `M ${window.x} ${window.y} H ${window.x + window.width} ` +
+            `V ${window.y + window.height} H ${window.x} Z`
+          ),
+        ].join(' ')
+        return (
+          <svg
+            className={
+              `axiom-living-inspection-layer${livingWindowsClosing
+                ? ' axiom-living-inspection-layer--closing'
+                : ''}`
+            }
+            width={shellSize.w}
+            height={shellSize.h}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 28,
+              overflow: 'visible',
+              pointerEvents: 'none',
+              '--living-window-close': `${LIVING_WINDOW_CLOSE_MS}ms`,
+            } as React.CSSProperties}
+          >
+            <path
+              d={maskPath}
+              fill="rgba(42, 50, 47, 0.16)"
+              fillRule="evenodd"
+            />
+            {windows.map(window => {
+              const windowColor = window.kind === 'enter' || window.kind === 'flow-add'
+                ? '#2fa35d'
+                : window.kind === 'exit' || window.kind === 'flow-remove'
+                  ? '#b6534b'
+                  : '#3c8f92'
+              return (
+                <g key={`${window.originId}-${window.key}`}>
+                  <rect
+                    x={window.x}
+                    y={window.y}
+                    width={window.width}
+                    height={window.height}
+                    fill="rgba(242, 240, 229, 0.44)"
+                    stroke={windowColor}
+                    strokeWidth={Math.max(1.5, 2 * presentationScale)}
+                    strokeDasharray={`${Math.max(5, 8 * presentationScale)} ${Math.max(2, 4 * presentationScale)}`}
+                    className="axiom-living-inspection-window"
+                  />
+                </g>
+              )
+            })}
+          </svg>
+        )
+      })()}
+      {surfacedFx && (
+        <div
+          key={`surface-fx-${surfacedFx.key}`}
+          className="axiom-surface-activity-peek"
+          style={{
+            position: 'absolute',
+            right: 0,
+            bottom: Math.max(10, titleFont * 0.8),
+            zIndex: 35,
+            pointerEvents: 'none',
+            maxWidth: '58%',
+            minWidth: Math.min(shellSize.w * 0.34, 180 * presentationScale),
+            border: `1px solid ${surfacedColor}`,
+            borderLeftWidth: Math.max(3, 3 * presentationScale),
+            background: 'var(--bg-raised)',
+            boxShadow: `3px 3px 0 rgba(52, 61, 57, 0.28), 0 0 9px ${surfacedColor}55`,
+            color: 'var(--text-primary)',
+            padding: `${Math.max(4, titleFont * 0.24)}px ${Math.max(6, titleFont * 0.42)}px`,
+            fontFamily: 'var(--font-mono)',
+            transformOrigin: 'right center',
+            animation: 'axiomSurfaceActivityPeek 1.35s cubic-bezier(0.22,1,0.36,1) both',
+          }}
+        >
+          <div style={{
+            color: surfacedColor,
+            fontSize: Math.max(7, titleFont * 0.52),
+            fontWeight: 800,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}>{surfacedVerb}</div>
+          <div style={{
+            overflow: 'hidden',
+            marginTop: Math.max(2, titleFont * 0.12),
+            fontSize: Math.max(8, titleFont * 0.68),
+            fontWeight: 700,
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>{surfacedIdentity}{surfacedOverflow}</div>
+        </div>
+      )}
       <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
         isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
         minWidth={d.minResizeWidth ?? 1}
-        minHeight={d.minResizeHeight ?? 1} color={color}
+        minHeight={d.minResizeHeight ?? 1}
+        minWidthWest={d.minResizeWidthWest}
+        minHeightNorth={d.minResizeHeightNorth} color={color}
         onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
       {handles}
     </div>

@@ -1,32 +1,36 @@
+import { useId } from 'react'
 import type { CSSProperties, FormEventHandler, PropsWithChildren, WheelEventHandler } from 'react'
 
 type DialogFrameProps = PropsWithChildren<{
+  title: string
   width: number
   backdropClassName?: string
   onWheel?: WheelEventHandler<HTMLDivElement>
 }>
 
-export function DialogFrame({ children, width, backdropClassName, onWheel }: DialogFrameProps) {
+export function DialogFrame({ children, title, width, backdropClassName, onWheel }: DialogFrameProps) {
+  const titleId = useId()
+
   return (
     <div className={['axiom-dialog-backdrop', backdropClassName].filter(Boolean).join(' ')} onWheel={onWheel}>
-      <div
-        className="axiom-dialog-surface glass-dialog animate-fade-in"
+      <section
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="axiom-dialog-surface animate-fade-in"
+        role="dialog"
         style={{ '--axiom-dialog-width': `${width}px` } as CSSProperties}
       >
-        {children}
-      </div>
+        <header className="axiom-dialog-header">
+          <h2 className="axiom-dialog-title" id={titleId}>{title}</h2>
+        </header>
+        <div className="axiom-dialog-content">{children}</div>
+      </section>
     </div>
   )
 }
 
-type DialogTitleProps = PropsWithChildren<{ compact?: boolean }>
-
-export function DialogTitle({ children, compact = false }: DialogTitleProps) {
-  return <h3 className={compact ? 'axiom-dialog-title axiom-dialog-title--compact' : 'axiom-dialog-title'}>{children}</h3>
-}
-
 export function DialogError({ children }: PropsWithChildren) {
-  return <div className="axiom-dialog-error">{children}</div>
+  return <div className="axiom-dialog-error" role="alert">{children}</div>
 }
 
 type DialogFormProps = PropsWithChildren<{
@@ -36,6 +40,27 @@ type DialogFormProps = PropsWithChildren<{
 
 export function DialogForm({ children, gap = 16, onSubmit }: DialogFormProps) {
   return <form className={`axiom-dialog-form axiom-dialog-form--gap-${gap}`} onSubmit={onSubmit}>{children}</form>
+}
+
+type DialogFieldProps = PropsWithChildren<{
+  label: string
+  optional?: string
+}>
+
+export function DialogField({ children, label, optional }: DialogFieldProps) {
+  return (
+    <label className="axiom-dialog-field">
+      <span className="axiom-dialog-field__label">
+        {label}
+        {optional && <span className="axiom-dialog-field__optional">{optional}</span>}
+      </span>
+      {children}
+    </label>
+  )
+}
+
+export function DialogNote({ children }: PropsWithChildren) {
+  return <p className="axiom-dialog-note">{children}</p>
 }
 
 type DialogActionsProps = PropsWithChildren<{ inset?: boolean }>

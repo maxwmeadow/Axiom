@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  AgentAction,
   ProjectConfig,
   DbSystem,
   DbFile,
@@ -8,9 +9,37 @@ import type {
   CanvasSnapshot,
   FloorLayout,
   DbGraphPatch,
+  DeltaSummary,
+  FileDeletePatch,
+  FileUpdatePatch,
+  LivingRelationshipChange,
+  DeltaWorkSession,
 } from '../../shared/types'
+import { apiAckDelta, apiGetAgentActions, apiGetDelta } from '../canvas/arcdApi.ts'
+import {
+  agentAttentionFor,
+  expireAttention,
+  mergeAttention,
+  type AgentAttention,
+} from '../canvas/agentActionVisual.ts'
 
-import { handleSheetPatch } from './sheetStore'
+// How long a read keeps a node lit. Long enough to notice an agent sweeping
+// through a region, short enough that the map is not permanently glowing.
+const AGENT_ATTENTION_MS = 2600
+// Recent actions kept in memory for the visual log; archd holds the full log.
+const AGENT_LOG_WINDOW = 300
+
+import { handleSheetPatch } from './sheetStore.ts'
+import type { NodeFx } from '../canvas/sceneTypes'
+import {
+  editNodeFxKind,
+  livingFlowEndpoints,
+  relationshipVisual,
+} from '../canvas/livingChoreography.ts'
+import {
+  activeLivingFlowDiagnostics,
+  recordLivingFlowDiagnostic,
+} from '../canvas/livingDiagnostics.ts'
 
 export interface CallTraceStep {
   callerFile: string
@@ -18,6 +47,14 @@ export interface CallTraceStep {
   calleeFile: string
   calleeSymbol: string
   callCount: number
+}
+
+export type LivingRelationshipFx = LivingRelationshipChange & {
+  key: number
+  startedAt: number
+  delayMs: number
+  travelMs: number
+  eventCount: number
 }
 
 // ─── Runtime layer types (mirror archd-go/internal/runtime) ─────────────────
@@ -159,7 +196,6 @@ interface GraphState {
   selectedNodeId: string | null
   inspectedNodeId: string | null
   infraPickerNodeId: string | null
-  agentTouchedIds: Set<string>
   indexingProgress: { indexed: number; total: number } | null
   isIndexing: boolean
   connectionStatus: 'disconnected' | 'connecting' | 'connected'
@@ -175,6 +211,39 @@ interface GraphState {
   // Data-flow slice — set of file IDs in the current variable-reference slice
   dataFlow: { variable: string; fileIds: Set<string> } | null
   setDataFlow: (flow: { variable: string; fileIds: string[] } | null) => void
+
+  // Live choreography — transient per-node animation intents (enter/edit) set
+  // by applyDbPatch as the map changes, stamped onto nodes and auto-expired so
+  // the canvas visibly reacts to real code edits. Not persisted.
+  nodeFx: Record<string, NodeFx>
+  clearNodeFx: (id: string, key: number) => void
+  relationshipFx: LivingRelationshipFx[]
+  clearRelationshipFx: (key: number) => void
+  pendingFileDeletions: Record<string, number>
+  finalizeFileDeletion: (id: string, key: number) => void
+
+  // Morning Delta — the net architectural diff accumulated while Axiom was
+  // closed or unattended. Loaded on project open and window focus; never
+  // auto-dismissed, because an unreviewed delta is the reason to open Axiom.
+  delta: DeltaSummary | null
+  activeWorkSessions: DeltaWorkSession[]
+
+  // Agent action log — everything an agent did, including reads. The log is
+  // durable in archd; this holds the recent window for the visual log, plus
+  // the transient attention signals the canvas renders. Attention is the ONLY
+  // visual this stream owns; see agentActionVisual.ts for why.
+  agentActions: AgentAction[]
+  agentAttention: Record<string, AgentAttention>
+  applyAgentAction: (action: AgentAction) => void
+  clearAgentAttention: (key: number) => void
+  loadAgentActions: () => Promise<void>
+  deltaReviewing: boolean
+  deltaCursor: number
+  loadDelta: () => Promise<void>
+  startDeltaReview: () => void
+  setDeltaCursor: (cursor: number) => void
+  endDeltaReview: (acknowledge: boolean) => void
+  applyWorkSession: (session: DeltaWorkSession) => void
 
   // Runtime layer — live sessions, watches, per-file activity
   runtimeSessions: RuntimeSession[]
@@ -200,6 +269,7 @@ interface GraphState {
   setCurrentProject: (p: ProjectConfig | null) => void
   setRecentProjects: (ps: ProjectConfig[]) => void
   applySnapshot: (snap: CanvasSnapshot) => void
+  applyClassification: (snap: CanvasSnapshot) => void
   applyDbPatch: (patch: DbGraphPatch) => void
   toggleSystemExpanded: (id: string) => void
   collapseAll: () => void
@@ -212,8 +282,14 @@ interface GraphState {
   setSelectionMode: (active: boolean) => void
   getFile: (id: string) => DbFile | undefined
   getSystem: (id: string) => DbSystem | undefined
-  searchFiles: (query: string) => DbFile[]
 }
+
+// Identity token rather than the promise itself: the cleanup runs inside the
+// promise being created, so it cannot reference that binding before it exists.
+let deltaLoadToken = 0
+let deltaLoadInFlight: { workspaceId: string; token: number; promise: Promise<void> } | null = null
+let deltaAckInFlight: { workspaceId: string; promise: Promise<void> } | null = null
+let deltaRefreshPending = false
 
 export const useGraphStore = create<GraphState>((set, get) => ({
   currentProject: null,
@@ -227,7 +303,6 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   selectedNodeId: null,
   inspectedNodeId: null,
   infraPickerNodeId: null,
-  agentTouchedIds: new Set(),
   indexingProgress: null,
   isIndexing: false,
   connectionStatus: 'disconnected',
@@ -240,6 +315,134 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   activeTrace: null,
   setActiveTrace: (trace) => set({ activeTrace: trace }),
+
+  delta: null,
+  activeWorkSessions: [],
+  agentActions: [],
+  agentAttention: {},
+  applyAgentAction: (action) => set(state => {
+    const attention = agentAttentionFor(action, action.id)
+    if (attention) {
+      // Attention is transient: it says "the agent is looking here NOW".
+      window.setTimeout(
+        () => useGraphStore.getState().clearAgentAttention(action.id),
+        AGENT_ATTENTION_MS,
+      )
+    }
+    return {
+      agentActions: [action, ...state.agentActions].slice(0, AGENT_LOG_WINDOW),
+      agentAttention: mergeAttention(state.agentAttention, attention),
+    }
+  }),
+  clearAgentAttention: (key) => set(state => {
+    const remaining = expireAttention(state.agentAttention, key)
+    return remaining === state.agentAttention ? {} : { agentAttention: remaining }
+  }),
+  loadAgentActions: async () => {
+    const workspaceId = get().currentProject?.id
+    if (!workspaceId) return
+    try {
+      set({ agentActions: await apiGetAgentActions(workspaceId) })
+    } catch (error) {
+      // The log is an observability aid, never a blocker.
+      console.error('[agent-log] load failed', error)
+    }
+  },
+  deltaReviewing: false,
+  deltaCursor: -1,
+  loadDelta: () => {
+    const state = get()
+    const workspaceId = state.currentProject?.id
+    if (!workspaceId) return Promise.resolve()
+
+    // A review is a snapshot: do not move its claims or cursor underneath the
+    // reader. Refresh immediately after they leave the review instead.
+    if (state.deltaReviewing) {
+      deltaRefreshPending = true
+      return Promise.resolve()
+    }
+    if (deltaAckInFlight?.workspaceId === workspaceId) {
+      deltaRefreshPending = true
+      return deltaAckInFlight.promise
+    }
+    if (deltaLoadInFlight?.workspaceId === workspaceId) {
+      return deltaLoadInFlight.promise
+    }
+
+    const token = ++deltaLoadToken
+    const promise = (async () => {
+      try {
+        const summary = await apiGetDelta(workspaceId)
+        const latest = get()
+        // Project switches and reviews can happen while fetch is in flight.
+        if (latest.currentProject?.id !== workspaceId) return
+        if (latest.deltaReviewing) {
+          deltaRefreshPending = true
+          return
+        }
+        set({
+          delta: summary.empty ? null : summary,
+          activeWorkSessions: summary.sessions.filter(session => session.endedAt === 0),
+          deltaCursor: -1,
+        })
+      } catch (error) {
+        // A delta is a review aid, never a blocker: failing to load one must
+        // not stop the project from opening.
+        console.error('[delta] load failed', error)
+      } finally {
+        if (deltaLoadInFlight?.token === token) {
+          deltaLoadInFlight = null
+        }
+      }
+    })()
+    deltaLoadInFlight = { workspaceId, token, promise }
+    return promise
+  },
+  startDeltaReview: () => set(state => (state.delta ? { deltaReviewing: true, deltaCursor: 0 } : {})),
+  setDeltaCursor: (cursor) => set({ deltaCursor: cursor }),
+  endDeltaReview: (acknowledge) => {
+    const { currentProject, delta } = get()
+    // Acknowledge the exact window that was shown — not "now" — so anything
+    // that landed mid-review still appears in the next delta.
+    if (acknowledge && currentProject && delta) {
+      set({ delta: null, deltaReviewing: false, deltaCursor: -1 })
+      const workspaceId = currentProject.id
+      // Always read once more after ack: changes that landed while the review
+      // was open belong to the next window and should surface immediately.
+      deltaRefreshPending = true
+      const promise = apiAckDelta(workspaceId, delta.until)
+        .catch(error => {
+          // The server retains the unacknowledged window; the refresh below
+          // will restore it instead of silently losing the review.
+          console.error('[delta] acknowledge failed', error)
+        })
+        .finally(() => {
+          if (deltaAckInFlight?.promise === promise) {
+            deltaAckInFlight = null
+          }
+          if (get().currentProject?.id === workspaceId && deltaRefreshPending) {
+            deltaRefreshPending = false
+            void get().loadDelta()
+          }
+        })
+      deltaAckInFlight = { workspaceId, promise }
+      return
+    }
+    set({ deltaReviewing: false, deltaCursor: -1 })
+    if (deltaRefreshPending) {
+      deltaRefreshPending = false
+      void get().loadDelta()
+    }
+  },
+  applyWorkSession: (session) => set(state => {
+    if (state.currentProject?.id !== session.workspaceId) return state
+    const remaining = state.activeWorkSessions.filter(item => item.id !== session.id)
+    return {
+      activeWorkSessions: session.endedAt === 0
+        ? [...remaining, session].sort((a, b) => a.startedAt - b.startedAt)
+        : remaining,
+    }
+  }),
 
   dataFlow: null,
   setDataFlow: (flow) => set({
@@ -287,6 +490,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   runtimeWatches: {},
   runtimeNodes: {},
   runtimeInjections: {},
+  nodeFx: {},
+  relationshipFx: [],
+  pendingFileDeletions: {},
 
   applyRuntimeSession: (session, status) => set((state) => ({
     runtimeSessions: status === 'connected'
@@ -364,7 +570,37 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     return { runtimeInjections: injections, runtimeNodes: nodes }
   }),
 
-  setCurrentProject: (p) => set({ currentProject: p, selectedNodeId: null, inspectedNodeId: null, infraPickerNodeId: null }),
+  setCurrentProject: (project) => set((state) => {
+    const switchedWorkspace = state.currentProject?.id !== project?.id
+    if (!switchedWorkspace) {
+      return {
+        currentProject: project,
+        selectedNodeId: null,
+        inspectedNodeId: null,
+        infraPickerNodeId: null,
+      }
+    }
+    deltaRefreshPending = false
+    return {
+      currentProject: project,
+      systems: [],
+      files: [],
+      infraNodes: [],
+      dependencies: [],
+      floorLayouts: [],
+      expandedSystemIds: new Set<string>(),
+      selectedNodeId: null,
+      inspectedNodeId: null,
+      infraPickerNodeId: null,
+      nodeFx: {},
+      relationshipFx: [],
+      pendingFileDeletions: {},
+      delta: null,
+      activeWorkSessions: [],
+      deltaReviewing: false,
+      deltaCursor: -1,
+    }
+  }),
   setRecentProjects: (ps) => set({ recentProjects: ps }),
 
   applySnapshot: (snap) => set({
@@ -375,6 +611,97 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     floorLayouts: snap.floorLayouts ?? [],
     // Start with all top-level systems collapsed
     expandedSystemIds: new Set(),
+    // A full snapshot is the resting baseline — drop any pending enter/edit
+    // intents so a reload doesn't animate the whole map as if freshly built.
+    nodeFx: {},
+    relationshipFx: [],
+    pendingFileDeletions: {},
+  }),
+
+  applyClassification: (snap) => set((state) => {
+    const previousSystems = new Map(state.systems.map(system => [system.id, system]))
+    const previousFiles = new Map(state.files.map(file => [file.id, file]))
+    const nextFx = { ...state.nodeFx }
+    const pendingDeletionIds = new Set(Object.keys(state.pendingFileDeletions))
+    const nextFiles = (snap.files ?? []).filter(file => !pendingDeletionIds.has(file.id))
+    const nextDependencies = (snap.dependencies ?? state.dependencies)
+      .filter(dependency => !pendingDeletionIds.has(dependency.src) && !pendingDeletionIds.has(dependency.dst))
+    const nextFloorLayouts = (snap.floorLayouts ?? state.floorLayouts)
+      .filter(layout => !(layout.nodeType === 'file' && pendingDeletionIds.has(layout.nodeId)))
+
+    for (const system of snap.systems ?? []) {
+      if (previousSystems.has(system.id)) continue
+      const key = nextFxKey()
+      nextFx[system.id] = { kind: 'enter', key }
+      scheduleFxExpiry(system.id, key)
+    }
+
+    for (const file of nextFiles) {
+      const previous = previousFiles.get(file.id)
+      if (!previous || previous.systemId === file.systemId) continue
+      // Do not cut off the stronger green creation signal when classification
+      // lands during the same write burst.
+      if (nextFx[file.id]?.kind === 'enter') continue
+      const key = nextFxKey()
+      nextFx[file.id] = { kind: 'classify', key }
+      scheduleFxExpiry(file.id, key)
+    }
+
+    const nextSystemIds = new Set((snap.systems ?? []).map(system => system.id))
+    return {
+      systems: snap.systems ?? [],
+      files: nextFiles,
+      infraNodes: snap.infraNodes ?? state.infraNodes,
+      dependencies: nextDependencies,
+      floorLayouts: nextFloorLayouts,
+      expandedSystemIds: new Set(
+        [...state.expandedSystemIds].filter(id => nextSystemIds.has(id))
+      ),
+      nodeFx: nextFx,
+    }
+  }),
+
+  clearNodeFx: (id, key) => set((state) => {
+    const current = state.nodeFx[id]
+    if (!current || current.key !== key) return state  // superseded by a newer intent
+    const { [id]: _dropped, ...rest } = state.nodeFx
+    return { nodeFx: rest }
+  }),
+
+  clearRelationshipFx: (key) => set((state) => {
+    const event = state.relationshipFx.find(candidate => candidate.key === key)
+    if (event) {
+      const endpoints = livingFlowEndpoints(event)
+      recordLivingFlowDiagnostic('renderer-expired', {
+        traceId: event.traceId ?? 'legacy',
+        key,
+        route: `${endpoints.source}->${endpoints.target}`,
+        semanticRoute: `${event.src}->${event.dst}`,
+        relationship: event.relationship,
+        change: event.change,
+        eventCount: event.eventCount,
+        active: activeLivingFlowDiagnostics(
+          state.relationshipFx.filter(candidate => candidate.key !== key),
+        ),
+      })
+    }
+    return { relationshipFx: state.relationshipFx.filter(event => event.key !== key) }
+  }),
+
+  finalizeFileDeletion: (id, key) => set((state) => {
+    if (state.pendingFileDeletions[id] !== key) return state
+    const { [id]: _dropped, ...restFx } = state.nodeFx
+    const { [id]: _finished, ...remainingDeletions } = state.pendingFileDeletions
+    return {
+      files: state.files.filter(file => file.id !== id),
+      dependencies: state.dependencies.filter(dep => dep.src !== id && dep.dst !== id),
+      floorLayouts: state.floorLayouts.filter(layout => !(layout.nodeType === 'file' && layout.nodeId === id)),
+      relationshipFx: state.relationshipFx.filter(event => event.src !== id && event.dst !== id),
+      selectedNodeId: state.selectedNodeId === id ? null : state.selectedNodeId,
+      inspectedNodeId: state.inspectedNodeId === id ? null : state.inspectedNodeId,
+      nodeFx: restFx,
+      pendingFileDeletions: remainingDeletions,
+    }
   }),
 
   applyDbPatch: (patch) => {
@@ -385,11 +712,15 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         case 'system:upserted': {
           const sys = patch.payload as DbSystem
           const exists = state.systems.some(s => s.id === sys.id)
-          return {
-            systems: exists
-              ? state.systems.map(s => s.id === sys.id ? sys : s)
-              : [...state.systems, sys],
-          }
+          const systems = exists
+            ? state.systems.map(s => s.id === sys.id ? sys : s)
+            : [...state.systems, sys]
+          // A brand-new system materializes in; an update to an existing one is
+          // silent (its files carry the visible edit signal).
+          if (exists) return { systems }
+          const key = nextFxKey()
+          scheduleFxExpiry(sys.id, key)
+          return { systems, nodeFx: { ...state.nodeFx, [sys.id]: { kind: 'enter', key } } }
         }
         case 'system:deleted': {
           const { id } = patch.payload as { id: string }
@@ -401,12 +732,166 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           }
         }
         case 'file:updated': {
-          const file = patch.payload as DbFile
+          const payload = patch.payload as DbFile | FileUpdatePatch
+          const wrapped = 'file' in payload
+          const file = wrapped ? payload.file : payload
           const exists = state.files.some(f => f.id === file.id)
+          const files = exists
+            ? state.files.map(f => f.id === file.id ? file : f)
+            : [...state.files, file]
+          // The watcher proves whether content changed. Attribution is
+          // irrelevant: every real edit gets the same visible canvas signal.
+          const fxKind = editNodeFxKind(exists, wrapped && payload.animate)
+          const traceId = wrapped ? payload.traceId : undefined
+          if (!fxKind) return { files }
+          const key = nextFxKey()
+          scheduleFxExpiry(file.id, key)
           return {
-            files: exists
-              ? state.files.map(f => f.id === file.id ? file : f)
-              : [...state.files, file],
+            files,
+            nodeFx: {
+              ...state.nodeFx,
+              [file.id]: {
+                kind: fxKind,
+                key,
+                traceId,
+              },
+            },
+          }
+        }
+        case 'file:deleted': {
+          const { id, traceId } = patch.payload as FileDeletePatch
+          if (!state.files.some(file => file.id === id)) return state
+          const key = nextFxKey()
+          scheduleFileDeletion(id, key)
+          return {
+            nodeFx: { ...state.nodeFx, [id]: { kind: 'exit', key, traceId } },
+            pendingFileDeletions: { ...state.pendingFileDeletions, [id]: key },
+          }
+        }
+        case 'relationship:changed': {
+          const relationship = patch.payload as LivingRelationshipChange
+          const traceId = relationship.traceId ?? 'legacy'
+          const visualEndpoints = livingFlowEndpoints(relationship)
+          const route = `${visualEndpoints.source}->${visualEndpoints.target}`
+          recordLivingFlowDiagnostic('renderer-intake', {
+            traceId,
+            route,
+            semanticRoute: `${relationship.src}->${relationship.dst}`,
+            relationship: relationship.relationship,
+            change: relationship.change,
+            reason: relationship.animate ? 'animate=true' : 'animate=false',
+            active: activeLivingFlowDiagnostics(state.relationshipFx),
+          })
+          let dependencies = state.dependencies
+          if (relationship.dependency && relationship.change !== 'removed') {
+            const dep = relationship.dependency
+            const exists = dependencies.some(item => item.id === dep.id ||
+              (item.src === dep.src && item.dst === dep.dst && item.dependencyType === dep.dependencyType))
+            dependencies = exists
+              ? dependencies.map(item =>
+                  item.id === dep.id ||
+                  (item.src === dep.src && item.dst === dep.dst && item.dependencyType === dep.dependencyType)
+                    ? dep : item)
+              : [...dependencies, dep]
+          } else if (relationship.change === 'removed' && relationship.dependencyId) {
+            dependencies = dependencies.filter(item => item.id !== relationship.dependencyId)
+          }
+          if (!relationship.animate) {
+            recordLivingFlowDiagnostic('renderer-ignored', {
+              traceId,
+              route,
+              semanticRoute: `${relationship.src}->${relationship.dst}`,
+              relationship: relationship.relationship,
+              change: relationship.change,
+              reason: 'animate=false',
+              active: activeLivingFlowDiagnostics(state.relationshipFx),
+            })
+            return { dependencies }
+          }
+          const now = Date.now()
+          // A save may report several symbol changes and more than one semantic
+          // relationship for the same pair. Those updates all reach the graph
+          // above, but the human sees one causal route per save. Coalescing by
+          // backend trace prevents stacked pulses and stacked arrival flashes.
+          // Legacy senders without a trace retain a narrow burst window.
+          const duplicate = state.relationshipFx.findLast(event =>
+            sameLivingSave(event, relationship, now) &&
+            sameLivingRoute(event, visualEndpoints)
+          )
+          if (duplicate) {
+            const preferIncoming =
+              livingRelationshipPriority(relationship.relationship) >
+              livingRelationshipPriority(duplicate.relationship)
+            recordLivingFlowDiagnostic('renderer-coalesced', {
+              traceId,
+              key: duplicate.key,
+              route,
+              semanticRoute: `${relationship.src}->${relationship.dst}`,
+              relationship: preferIncoming
+                ? relationship.relationship
+                : duplicate.relationship,
+              change: mergedLivingChange(duplicate.change, relationship.change),
+              eventCount: duplicate.eventCount + 1,
+              reason: preferIncoming
+                ? 'same-save-route/preferred-incoming'
+                : 'same-save-route/retained-existing',
+              active: activeLivingFlowDiagnostics(state.relationshipFx),
+            })
+            return {
+              dependencies,
+              relationshipFx: state.relationshipFx.map(event =>
+                event.key === duplicate.key
+                  ? {
+                      ...event,
+                      ...(preferIncoming ? relationship : {}),
+                      change: mergedLivingChange(event.change, relationship.change),
+                      key: event.key,
+                      startedAt: event.startedAt,
+                      delayMs: event.delayMs,
+                      travelMs: event.travelMs,
+                      eventCount: event.eventCount + 1,
+                    }
+                  : event
+              ),
+            }
+          }
+          const key = nextFxKey()
+          const sameTraceFlowCount = relationship.traceId
+            ? state.relationshipFx.filter(event => event.traceId === relationship.traceId).length
+            : state.relationshipFx.length
+          const delayMs = LIVING_FLOW_LEAD_IN_MS +
+            Math.min(sameTraceFlowCount, 5) * LIVING_FLOW_STAGGER_MS
+          const event: LivingRelationshipFx = {
+            ...relationship,
+            key,
+            startedAt: now,
+            delayMs,
+            travelMs: LIVING_FLOW_TRAVEL_MS,
+            eventCount: 1,
+          }
+          recordLivingFlowDiagnostic('renderer-scheduled', {
+            traceId,
+            key,
+            route,
+            semanticRoute: `${relationship.src}->${relationship.dst}`,
+            relationship: relationship.relationship,
+            change: relationship.change,
+            eventCount: 1,
+            reason: `trace-route-index=${sameTraceFlowCount}`,
+            active: activeLivingFlowDiagnostics([...state.relationshipFx, event]),
+            delayMs,
+            travelMs: LIVING_FLOW_TRAVEL_MS,
+          })
+          scheduleRelationshipFxExpiry(key, delayMs)
+          scheduleRelationshipArrival(
+            visualEndpoints.target,
+            key,
+            delayMs,
+            relationship.traceId,
+          )
+          return {
+            dependencies,
+            relationshipFx: [...state.relationshipFx, event],
           }
         }
         case 'file:assigned': {
@@ -418,11 +903,13 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         case 'infra:upserted': {
           const node = patch.payload as DbInfraNode
           const exists = state.infraNodes.some(n => n.id === node.id)
-          return {
-            infraNodes: exists
-              ? state.infraNodes.map(n => n.id === node.id ? node : n)
-              : [...state.infraNodes, node],
-          }
+          const infraNodes = exists
+            ? state.infraNodes.map(n => n.id === node.id ? node : n)
+            : [...state.infraNodes, node]
+          if (exists) return { infraNodes }
+          const key = nextFxKey()
+          scheduleFxExpiry(node.id, key)
+          return { infraNodes, nodeFx: { ...state.nodeFx, [node.id]: { kind: 'enter', key } } }
         }
         case 'infra:deleted': {
           const { id } = patch.payload as { id: string }
@@ -504,13 +991,6 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   getFile: (id) => get().files.find(f => f.id === id),
   getSystem: (id) => get().systems.find(s => s.id === id),
-
-  searchFiles: (query) => {
-    const q = query.toLowerCase()
-    return get().files
-      .filter(f => f.relPath.toLowerCase().includes(q))
-      .slice(0, 30)
-  },
 }))
 
 // ─── Runtime helpers ─────────────────────────────────────────────────────────
@@ -556,6 +1036,132 @@ function eventLabel(ev: RuntimeEvent): string {
   }
 }
 
+// Live-choreography key: monotonic so a repeat edit on the same node bumps the
+// key and re-fires its animation. Expiry removes the intent after the animation
+// window so the node returns to rest (a newer intent supersedes an older one).
+let fxKeyCounter = 0
+function nextFxKey(): number { return ++fxKeyCounter }
+export const LIVING_FLOW_TRAVEL_MS = 1250
+export const LIVING_FLOW_STAGGER_MS = 90
+export const LIVING_FLOW_LEAD_IN_MS = 240
+// The destination surfaces only when the travelling segment reaches the
+// destination perimeter. Revealing it earlier reads like the flow jumped from
+// the edge into the middle of the card.
+export const LIVING_FLOW_ARRIVAL_FRACTION = 0.96
+export const LIVING_NODE_SIGNAL_MS = 1900
+export const LIVING_ARRIVAL_MS = 1350
+// Exit durations are the single source of truth for both the unmount timer and
+// the CSS fade: the components publish them as custom properties, so the
+// stylesheet can never drift out of sync and unmount an element mid-fade. The
+// aperture outlasts the card inside it so the window is the last thing to close.
+export const LIVING_FILE_SIGNAL_CLOSE_MS = 340
+export const LIVING_WINDOW_CLOSE_MS = 440
+// A deleted file has to outlive its own severed relationships: archd emits the
+// fuse flows before the tombstone, and they radiate outward from this node. The
+// card must stay solid while they burn and dissolve exactly as it unmounts,
+// which is why the node's red exit animation is driven by this same number.
+export const LIVING_FILE_DELETE_MS =
+  LIVING_FLOW_TRAVEL_MS + LIVING_FLOW_STAGGER_MS * 5 + 250
+
+function sameLivingSave(
+  event: LivingRelationshipFx,
+  incoming: LivingRelationshipChange,
+  now: number,
+): boolean {
+  if (incoming.traceId) return event.traceId === incoming.traceId
+  return !event.traceId && now - event.startedAt <= 140
+}
+
+function sameLivingRoute(
+  event: LivingRelationshipFx,
+  incomingEndpoints: { source: string; target: string },
+): boolean {
+  const existingEndpoints = livingFlowEndpoints(event)
+  return existingEndpoints.source === incomingEndpoints.source &&
+    existingEndpoints.target === incomingEndpoints.target
+}
+
+function livingRelationshipPriority(relationship: string): number {
+  if (relationship === 'CALLS') return 3
+  if (relationship === 'IMPORTS') return 2
+  return 1
+}
+
+function mergedLivingChange(
+  existing: LivingRelationshipChange['change'],
+  incoming: LivingRelationshipChange['change'],
+): LivingRelationshipChange['change'] {
+  return existing === incoming ? existing : 'updated'
+}
+
+function scheduleFxExpiry(id: string, key: number, durationMs = LIVING_NODE_SIGNAL_MS): void {
+  setTimeout(() => useGraphStore.getState().clearNodeFx(id, key), durationMs)
+}
+function scheduleRelationshipFxExpiry(key: number, delayMs = 0): void {
+  setTimeout(
+    () => useGraphStore.getState().clearRelationshipFx(key),
+    delayMs + LIVING_FLOW_TRAVEL_MS + 250,
+  )
+}
+function scheduleRelationshipArrival(
+  id: string,
+  key: number,
+  delayMs: number,
+  traceId?: string,
+): void {
+  setTimeout(() => {
+    useGraphStore.setState((state) => {
+      const event = state.relationshipFx.find(event => event.key === key)
+      if (!event) {
+        recordLivingFlowDiagnostic('renderer-arrival-skipped', {
+          traceId: traceId ?? 'legacy',
+          key,
+          reason: 'flow-no-longer-active',
+          active: activeLivingFlowDiagnostics(state.relationshipFx),
+        })
+        return state
+      }
+      const endpoints = livingFlowEndpoints(event)
+      if (state.pendingFileDeletions[id] !== undefined) {
+        recordLivingFlowDiagnostic('renderer-arrival-skipped', {
+          traceId: event.traceId ?? traceId ?? 'legacy',
+          key,
+          route: `${endpoints.source}->${endpoints.target}`,
+          semanticRoute: `${event.src}->${event.dst}`,
+          relationship: event.relationship,
+          change: event.change,
+          reason: 'target-pending-deletion',
+          active: activeLivingFlowDiagnostics(state.relationshipFx),
+        })
+        return state
+      }
+      const kind = relationshipVisual(event).targetKind
+      recordLivingFlowDiagnostic('renderer-arrival', {
+        traceId: event.traceId ?? traceId ?? 'legacy',
+        key,
+        route: `${endpoints.source}->${endpoints.target}`,
+        semanticRoute: `${event.src}->${event.dst}`,
+        relationship: event.relationship,
+        change: event.change,
+        eventCount: event.eventCount,
+        reason: `target=${id};kind=${kind}`,
+        active: activeLivingFlowDiagnostics(state.relationshipFx),
+      })
+      return { nodeFx: { ...state.nodeFx, [id]: { kind, key, traceId } } }
+    })
+    scheduleFxExpiry(id, key, LIVING_ARRIVAL_MS)
+  }, delayMs + LIVING_FLOW_TRAVEL_MS * LIVING_FLOW_ARRIVAL_FRACTION)
+}
+function scheduleFileDeletion(id: string, key: number): void {
+  // Relationship removals are broadcast before the tombstone. Keep the
+  // endpoint in the React Flow model until the longest staggered exit has
+  // completed, while pendingFileDeletions independently guarantees cleanup.
+  setTimeout(
+    () => useGraphStore.getState().finalizeFileDeletion(id, key),
+    LIVING_FILE_DELETE_MS,
+  )
+}
+
 // Runtime events can arrive at up to 100/sec per watch. Batch them and flush
 // on a short interval so the canvas re-renders at most ~12 times per second.
 let pendingRuntimeEvents: RuntimeEvent[] = []
@@ -594,17 +1200,55 @@ export function connectToArchd(wsUrl = 'ws://127.0.0.1:7744/ws'): void {
   const tryConnect = () => {
     if (generation !== wsGeneration) return
     const socket = new WebSocket(wsUrl)
+    let lastSeq: number | null = null
+    let resyncing = false
+    let buffered: Array<{ type: string; payload: unknown; seq?: number }> = []
+
+    const resyncSnapshot = async (reason: string) => {
+      if (resyncing || generation !== wsGeneration) return
+      const workspaceId = useGraphStore.getState().currentProject?.id
+      if (!workspaceId) return
+      resyncing = true
+      try {
+        const response = await fetch(`http://127.0.0.1:7743/api/snapshot/${workspaceId}`)
+        if (!response.ok) throw new Error(`snapshot ${response.status}`)
+        useGraphStore.getState().applySnapshot(await response.json() as CanvasSnapshot)
+        const pending = buffered
+        buffered = []
+        resyncing = false
+        for (const message of pending) handleWsMessage(message)
+      } catch (error) {
+        console.error(`[ws] ${reason} resync failed:`, error)
+        resyncing = false
+        socket.close()
+      }
+    }
     ws = socket
 
     socket.onopen = () => {
       if (generation !== wsGeneration) return
       useGraphStore.getState().setConnectionStatus('connected')
+      void resyncSnapshot('connection')
     }
 
     socket.onmessage = (event) => {
       if (generation !== wsGeneration) return
       try {
-        const msg = JSON.parse(event.data) as { type: string; payload: unknown }
+        const msg = JSON.parse(event.data) as { type: string; payload: unknown; seq?: number }
+        const sequenceGap = typeof msg.seq === 'number' &&
+          lastSeq !== null &&
+          msg.seq !== lastSeq + 1
+        if (typeof msg.seq === 'number') lastSeq = msg.seq
+        if (sequenceGap) {
+          console.warn('[ws] message sequence gap; restoring graph snapshot', { received: msg.seq })
+          buffered.push(msg)
+          void resyncSnapshot('sequence-gap')
+          return
+        }
+        if (resyncing) {
+          buffered.push(msg)
+          return
+        }
         handleWsMessage(msg)
       } catch {
         console.error('ws: failed to parse message', event.data)
@@ -653,6 +1297,9 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
     case 'graph:snapshot':
       store.applySnapshot(msg.payload as CanvasSnapshot)
       break
+    case 'classification:updated':
+      store.applyClassification(msg.payload as CanvasSnapshot)
+      break
     case 'graph:patch':
       store.applyDbPatch(msg.payload as DbGraphPatch)
       break
@@ -661,6 +1308,17 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
       break
     case 'indexing:complete':
       store.setIndexingComplete()
+      break
+    // archd has finished baseline/reconciliation, so the journal is settled
+    // and the Morning Delta can be read without racing the catch-up pass.
+    case 'delta:ready':
+      void store.loadDelta()
+      break
+    case 'agent:action':
+      store.applyAgentAction(msg.payload as AgentAction)
+      break
+    case 'work:session':
+      store.applyWorkSession(msg.payload as DeltaWorkSession)
       break
     case 'agent:activity':
       store.addAgentActivity(msg.payload as { message: string; level: 'info' | 'warn' | 'success' | 'error' })

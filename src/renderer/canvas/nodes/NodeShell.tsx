@@ -80,17 +80,28 @@ function cylinderRimPath(w: number): string {
 // shape; accent/heat expressed as a PERIMETER stroke color shift (quiet =
 // hairline, hot/selected = full accent), never an asymmetric bar glued to
 // one edge — the silhouette IS the highlight surface.
-export const CARD_SHADOW = 'drop-shadow(0px 3px 6px rgba(0,0,0,0.45))'
+// Hard warm-gray offset shadow — a card pinned to the parchment board, never
+// a soft black glow (which muddies on a light surface). Mirrors the mockup's
+// `3px 3px 0` material pass.
+export const CARD_SHADOW = 'drop-shadow(3px 3px 0 rgba(86,91,85,0.38))'
 
-export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed }: {
+export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = 'var(--bg-surface)', headBand, headBandOpacity = 1 }: {
   shape: ShellShape
   stroke: string
   strokeWidth?: number
   dashed?: boolean
+  fill?: string
+  // Optional header shelf: a darker band across the top of the card, clipped to
+  // the silhouette so it follows chamfers/tab cuts (the mockup's leaf-head).
+  // Height is in the card's base-pixel coordinate space; 0/undefined = none.
+  headBand?: number
+  headBandOpacity?: number
 }) {
+  const clipId = React.useId()
   const ref = useRef<SVGSVGElement>(null)
   const pathRef = useRef<SVGPathElement>(null)
   const rimRef = useRef<SVGPathElement>(null)
+  const clipRef = useRef<SVGPathElement>(null)
   useLayoutEffect(() => {
     const svg = ref.current
     const el = svg?.parentElement
@@ -101,6 +112,7 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed }: {
       const h = Number.isFinite(height) && height > 0 ? height : 1
       svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
       pathRef.current?.setAttribute('d', shellPath(shape, w, h))
+      clipRef.current?.setAttribute('d', shellPath(shape, w, h))
       rimRef.current?.setAttribute('d', cylinderRimPath(w))
     }
     const computed = getComputedStyle(el)
@@ -135,12 +147,20 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed }: {
         ref={pathRef}
         className="axiom-shape-backdrop-path"
         d={shellPath(shape, 180, 72)}
-        fill="var(--bg-surface)"
+        fill={fill}
         stroke={stroke}
         strokeWidth={strokeWidth}
         strokeDasharray={dashed ? '6 4' : undefined}
         style={{ filter: CARD_SHADOW, transition: 'stroke 0.2s ease' }}
       />
+      {headBand ? (
+        <>
+          <clipPath id={clipId}><path ref={clipRef} d={shellPath(shape, 180, 72)} /></clipPath>
+          <rect x={0} y={0} width="100%" height={headBand} clipPath={`url(#${clipId})`}
+            fill="var(--card-head)" opacity={headBandOpacity}
+            style={{ transition: 'opacity 0.25s ease' }} />
+        </>
+      ) : null}
       {shape === 'cylinder' && (
         <path ref={rimRef} d={cylinderRimPath(180)} fill="none" stroke={stroke} strokeWidth={strokeWidth}
           strokeDasharray={dashed ? '6 4' : undefined} style={{ transition: 'stroke 0.2s ease' }} />

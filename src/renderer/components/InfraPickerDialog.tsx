@@ -3,14 +3,36 @@ import type { InfraService } from '../../shared/types'
 import { brandIcon, CATEGORY_GLYPHS, officialServiceIcon } from '../canvas/nodes/infraIcons'
 import { plannedMetadata, type PlannedNode, useSheetStore } from '../store/sheetStore'
 import { useRegistryStore } from '../store/registryStore'
+import { DialogButton, DialogError } from './ui/DialogPrimitives'
 
 type GroupMode = 'type' | 'provider'
 type QuickFilter = 'all' | 'hosting' | 'database' | 'storage' | 'messaging' | 'data' | 'integrations' | 'security' | 'observability'
 
+type InfraPickerDialogProps =
+  | {
+      mode: 'assign'
+      node: PlannedNode
+      onClose: () => void
+    }
+  | {
+      mode: 'create'
+      onCreate: (service: InfraService, name: string) => Promise<void>
+      onClose: () => void
+    }
+
 const TYPE_NAMES: Record<string, string> = {
-  platform: 'Hosting & compute', database: 'Databases', storage: 'Storage', queue: 'Queues & messaging',
-  cache: 'Caches', search: 'Search', api: 'External APIs', auth: 'Authentication', llm: 'AI & language models',
-  cdn: 'CDN & delivery', observability: 'Observability', email: 'Email',
+  platform: 'Hosting & compute',
+  database: 'Databases',
+  storage: 'Storage',
+  queue: 'Queues & messaging',
+  cache: 'Caches',
+  search: 'Search',
+  api: 'External APIs',
+  auth: 'Authentication',
+  llm: 'AI & language models',
+  cdn: 'CDN & delivery',
+  observability: 'Observability',
+  email: 'Email',
 }
 
 const QUICK_FILTERS: Array<{ id: QuickFilter; label: string; categories: string[] }> = [
@@ -27,32 +49,59 @@ const QUICK_FILTERS: Array<{ id: QuickFilter; label: string; categories: string[
 
 function ServiceIcon({ service, size = 26 }: { service: InfraService; size?: number }) {
   const official = officialServiceIcon(service.id)
-  if (official) return <img src={official} width={size} height={size} alt="" style={{ flexShrink: 0 }} />
+  if (official) return <img className="axiom-infra-picker__service-icon" src={official} width={size} height={size} alt="" />
+
   const icon = brandIcon(service.brand.icon)
-  if (icon) return <svg viewBox="0 0 24 24" width={size} height={size} aria-label={icon.title} style={{ flexShrink: 0 }}>
-    <path d={icon.path} fill={service.brand.darkColor ?? service.brand.color} />
-  </svg>
-  return <svg viewBox="0 0 24 24" width={size} height={size} aria-label={service.category} style={{ flexShrink: 0 }}>
-    <path d={CATEGORY_GLYPHS[service.category] ?? CATEGORY_GLYPHS.api} fill={service.brand.darkColor ?? service.brand.color ?? 'var(--text-secondary)'} />
-  </svg>
+  if (icon) {
+    return (
+      <svg className="axiom-infra-picker__service-icon" viewBox="0 0 24 24" width={size} height={size} aria-label={icon.title}>
+        <path d={icon.path} fill={service.brand.darkColor ?? service.brand.color} />
+      </svg>
+    )
+  }
+
+  return (
+    <svg className="axiom-infra-picker__service-icon" viewBox="0 0 24 24" width={size} height={size} aria-label={service.category}>
+      <path
+        d={CATEGORY_GLYPHS[service.category] ?? CATEGORY_GLYPHS.api}
+        fill={service.brand.darkColor ?? service.brand.color ?? 'var(--text-secondary)'}
+      />
+    </svg>
+  )
 }
 
-export function InfraPickerDialog({ node, onClose }: { node: PlannedNode; onClose: () => void }) {
+/**
+ * The one infrastructure catalog used by every selection flow. Assign mode
+ * updates an existing planned node immediately; create mode adds the naming
+ * step and delegates persistence to its caller.
+ */
+export function InfraPickerDialog(props: InfraPickerDialogProps) {
   const [query, setQuery] = React.useState('')
   const [groupMode, setGroupMode] = React.useState<GroupMode>('type')
   const [quickFilter, setQuickFilter] = React.useState<QuickFilter>('all')
+  const [selected, setSelected] = React.useState<InfraService | null>(null)
+  const [name, setName] = React.useState('')
+  const [creating, setCreating] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
   const { services, loaded, fetchRegistry } = useRegistryStore()
   const updatePlanned = useSheetStore(s => s.updatePlanned)
-  const hasContainedNodes = useSheetStore(s => [
+  const containedParentId = props.mode === 'assign' ? `planned:${props.node.id}` : null
+  const hasContainedNodes = useSheetStore(s => containedParentId !== null && [
     ...s.planned.map(child => child.parentSystemId),
     ...s.elements.map(child => child.parentSystemId),
-  ].includes(`planned:${node.id}`))
-  React.useEffect(() => { if (!loaded) void fetchRegistry() }, [loaded, fetchRegistry])
+  ].includes(containedParentId))
+
   React.useEffect(() => {
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
+    if (!loaded) void fetchRegistry()
+  }, [loaded, fetchRegistry])
+
+  React.useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !creating) props.onClose()
+    }
     window.addEventListener('keydown', close)
     return () => window.removeEventListener('keydown', close)
-  }, [onClose])
+  }, [creating, props.onClose])
 
   const normalized = query.trim().toLowerCase()
   const filterCategories = QUICK_FILTERS.find(filter => filter.id === quickFilter)?.categories ?? []
@@ -73,14 +122,21 @@ export function InfraPickerDialog({ node, onClose }: { node: PlannedNode; onClos
 
   const choose = (service: InfraService) => {
     if (hasContainedNodes && !service.capabilities?.includes('container')) return
-    const metadata = plannedMetadata(node)
+
+    if (props.mode === 'create') {
+      setSelected(service)
+      setError(null)
+      return
+    }
+
+    const metadata = plannedMetadata(props.node)
     const currentService = services.find(candidate => candidate.id === metadata.service)
     // Service-generated titles follow service changes. Once the user gives the
     // node an intentional name, infrastructure selection no longer owns it.
-    const currentNameIsGenerated = /^NewInfra$/i.test(node.name) || currentService?.name === node.name
-    void updatePlanned(node.workspaceId, {
-      ...node,
-      name: currentNameIsGenerated ? service.name : node.name,
+    const currentNameIsGenerated = /^NewInfra$/i.test(props.node.name) || currentService?.name === props.node.name
+    void updatePlanned(props.node.workspaceId, {
+      ...props.node,
+      name: currentNameIsGenerated ? service.name : props.node.name,
       color: service.brand.darkColor ?? service.brand.color,
       metadata: {
         ...metadata,
@@ -91,74 +147,170 @@ export function InfraPickerDialog({ node, onClose }: { node: PlannedNode; onClos
         capabilities: service.capabilities ?? [],
         config: {},
       },
-    }).then(onClose)
+    }).then(props.onClose)
   }
 
-  return <div className="nodrag nopan" role="dialog" aria-modal="true" aria-label="Choose infrastructure"
-    onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()} style={{
-      position: 'absolute', inset: 0, zIndex: 5000, background: 'rgba(6, 8, 12, 0.88)',
-      backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 28,
-    }}>
-    <div style={{
-      width: 'min(940px, 92%)', height: 'min(720px, 88%)', minHeight: 420,
-      background: 'var(--bg-surface)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-card)',
-      display: 'flex', flexDirection: 'column', overflow: 'hidden',
-    }}>
-      <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 14, alignItems: 'center' }}>
-        <div style={{ minWidth: 190 }}>
-          <div style={{ color: 'var(--text-primary)', fontSize: 17, fontWeight: 700 }}>Choose infrastructure</div>
-          <div style={{ color: 'var(--text-dim)', fontSize: 10, marginTop: 3 }}>Assign behavior, metadata, and visual identity</div>
-        </div>
-        <input autoFocus className="glass-input" value={query} onChange={event => setQuery(event.target.value)}
-          placeholder="Search services, providers, or infrastructure types…" style={{ flex: 1, padding: '9px 11px', fontSize: 12 }} />
-        <button onClick={onClose} style={{ color: 'var(--text-secondary)', fontSize: 20, padding: 5 }}>×</button>
-      </div>
-      <div style={{ padding: '10px 20px', borderBottom: '1px solid var(--border-dim)', display: 'flex', flexDirection: 'column', gap: 9 }}>
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span style={{ color: 'var(--text-dim)', fontSize: 8, fontWeight: 800, letterSpacing: '0.08em', marginRight: 3 }}>SHOW</span>
-          {QUICK_FILTERS.map(filter => <button key={filter.id} onClick={() => setQuickFilter(filter.id)} style={{
-            padding: '5px 8px', border: `1px solid ${quickFilter === filter.id ? 'var(--accent)' : 'var(--border)'}`,
-            color: quickFilter === filter.id ? 'var(--accent)' : 'var(--text-secondary)',
-            background: quickFilter === filter.id ? 'var(--bg-raised)' : 'transparent', fontSize: 9, fontWeight: 700,
-          }}>{filter.label}</button>)}
-        </div>
-        <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-          <span style={{ color: 'var(--text-dim)', fontSize: 8, fontWeight: 800, letterSpacing: '0.08em', marginRight: 3 }}>GROUP RESULTS</span>
-          {(['type', 'provider'] as GroupMode[]).map(mode => <button key={mode} onClick={() => setGroupMode(mode)} style={{
-            padding: '5px 8px', border: `1px solid ${groupMode === mode ? 'var(--accent)' : 'var(--border)'}`,
-            color: groupMode === mode ? 'var(--accent)' : 'var(--text-secondary)', background: groupMode === mode ? 'var(--bg-raised)' : 'transparent',
-            fontSize: 9, fontWeight: 700,
-          }}>{mode === 'type' ? 'Infrastructure type' : 'Provider'}</button>)}
-          <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', fontSize: 10 }}>{matches.length} services</span>
-        </div>
-      </div>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px 24px' }}>
-        {!loaded && <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>Loading infrastructure registry…</div>}
-        {loaded && matches.length === 0 && <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>No infrastructure matches “{query}”.</div>}
-        {sortedGroups.map(([group, items]) => <section key={group} style={{ marginBottom: 22 }}>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>
-            {groupMode === 'type' ? TYPE_NAMES[group] ?? group : group}
+  const handleCreate = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (props.mode !== 'create') return
+    if (!selected) {
+      setError('Pick a service')
+      return
+    }
+
+    setCreating(true)
+    setError(null)
+    try {
+      await props.onCreate(selected, name.trim() || selected.name)
+      props.onClose()
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : 'Failed to create infrastructure node')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  return (
+    <div
+      className="axiom-infra-picker nodrag nopan nowheel"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Choose infrastructure"
+      onPointerDown={event => event.stopPropagation()}
+      onWheel={event => event.stopPropagation()}
+    >
+      <div className="axiom-infra-picker__window">
+        <header className="axiom-infra-picker__header">
+          <div className="axiom-infra-picker__heading">
+            <h2>Choose infrastructure</h2>
+            <p>
+              {props.mode === 'create'
+                ? 'Add a service, platform, or infrastructure resource'
+                : 'Assign behavior, metadata, and visual identity'}
+            </p>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 8 }}>
-            {items.sort((a, b) => a.name.localeCompare(b.name)).map(service => {
-              const incompatible = hasContainedNodes && !service.capabilities?.includes('container')
-              return <button key={service.id} disabled={incompatible} onClick={() => choose(service)} title={incompatible ? 'This node contains hosted elements and must remain container-capable' : undefined} style={{
-              minHeight: 68, display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left', padding: '11px 12px',
-              border: '1px solid var(--border)', background: 'var(--bg-raised)', color: 'var(--text-primary)', cursor: 'pointer',
-              opacity: incompatible ? 0.35 : 1,
-            }} onMouseEnter={event => { event.currentTarget.style.borderColor = service.brand.darkColor ?? service.brand.color }}
-              onMouseLeave={event => { event.currentTarget.style.borderColor = 'var(--border)' }}>
-              <ServiceIcon service={service} />
-              <span style={{ minWidth: 0 }}>
-                <span style={{ display: 'block', fontSize: 11, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{service.name}</span>
-                <span style={{ display: 'block', marginTop: 3, fontSize: 9, color: 'var(--text-dim)', textTransform: 'capitalize' }}>
-                  {service.provider} · {TYPE_NAMES[service.category] ?? service.category}{service.subtype ? ` / ${service.subtype}` : ''}
-                </span>
+          <input
+            autoFocus
+            aria-label="Search infrastructure catalog"
+            className="axiom-infra-picker__search"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Search services, providers, or infrastructure types…"
+          />
+          <button
+            type="button"
+            className="axiom-infra-picker__close"
+            aria-label="Close infrastructure picker"
+            onClick={props.onClose}
+            disabled={creating}
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="axiom-infra-picker__filters">
+          <div className="axiom-infra-picker__filter-row">
+            <span className="axiom-infra-picker__filter-label">Show</span>
+            {QUICK_FILTERS.map(filter => (
+              <button
+                key={filter.id}
+                type="button"
+                className="axiom-infra-picker__filter-button"
+                aria-pressed={quickFilter === filter.id}
+                onClick={() => setQuickFilter(filter.id)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="axiom-infra-picker__filter-row">
+            <span className="axiom-infra-picker__filter-label">Group results</span>
+            {(['type', 'provider'] as GroupMode[]).map(mode => (
+              <button
+                key={mode}
+                type="button"
+                className="axiom-infra-picker__filter-button"
+                aria-pressed={groupMode === mode}
+                onClick={() => setGroupMode(mode)}
+              >
+                {mode === 'type' ? 'Infrastructure type' : 'Provider'}
+              </button>
+            ))}
+            <output className="axiom-infra-picker__result-count">{matches.length} services</output>
+          </div>
+        </div>
+
+        <div className="axiom-infra-picker__catalog">
+          {!loaded && <div className="axiom-infra-picker__empty">Loading infrastructure registry…</div>}
+          {loaded && matches.length === 0 && <div className="axiom-infra-picker__empty">No infrastructure matches “{query}”.</div>}
+          {sortedGroups.map(([group, items]) => (
+            <section className="axiom-infra-picker__group" key={group}>
+              <h3 className="axiom-infra-picker__group-title">
+                {groupMode === 'type' ? TYPE_NAMES[group] ?? group : group}
+              </h3>
+              <div className="axiom-infra-picker__service-grid">
+                {[...items].sort((a, b) => a.name.localeCompare(b.name)).map(service => {
+                  const incompatible = hasContainedNodes && !service.capabilities?.includes('container')
+                  const isSelected = props.mode === 'create' && selected?.id === service.id
+                  return (
+                    <button
+                      key={service.id}
+                      type="button"
+                      className="axiom-infra-picker__service"
+                      aria-pressed={isSelected}
+                      data-incompatible={incompatible || undefined}
+                      disabled={incompatible}
+                      onClick={() => choose(service)}
+                      title={incompatible ? 'This node contains hosted elements and must remain container-capable' : undefined}
+                      style={{ '--axiom-infra-service-accent': service.brand.darkColor ?? service.brand.color } as React.CSSProperties}
+                    >
+                      <ServiceIcon service={service} />
+                      <span className="axiom-infra-picker__service-copy">
+                        <strong>{service.name}</strong>
+                        <span>
+                          {service.provider} · {TYPE_NAMES[service.category] ?? service.category}{service.subtype ? ` / ${service.subtype}` : ''}
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+
+        {props.mode === 'create' && (
+          <form
+            className="axiom-infra-picker__footer"
+            onSubmit={handleCreate}
+          >
+            <label className="axiom-infra-picker__name-field">
+              <span>
+                Name <small>optional — defaults to the service name</small>
               </span>
-            </button>})}
-          </div>
-        </section>)}
+              <input
+                className="axiom-infra-picker__name-input"
+                value={name}
+                onChange={event => setName(event.target.value)}
+                placeholder={selected ? `e.g. "Primary ${selected.name}"` : 'Select a service first'}
+                disabled={creating}
+              />
+            </label>
+            <div className="axiom-infra-picker__footer-actions">
+              {error && <DialogError>{error}</DialogError>}
+              <div className="axiom-infra-picker__buttons">
+                <DialogButton type="button" onClick={props.onClose} disabled={creating} variant="secondary">
+                  Cancel
+                </DialogButton>
+                <DialogButton type="submit" disabled={creating || !selected} disabledOpacity={0.6} variant="primary">
+                  {creating ? 'Adding…' : 'Add to Canvas'}
+                </DialogButton>
+              </div>
+            </div>
+          </form>
+        )}
       </div>
     </div>
-  </div>
+  )
 }

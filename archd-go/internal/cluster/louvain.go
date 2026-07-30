@@ -1,7 +1,7 @@
-// Package cluster implements multi-signal community detection for codebase files.
-// Louvain Phase 1 (local greedy moves) runs on a combined similarity graph
-// built from four signals: import topology, directory proximity, naming
-// conventions, TF-IDF semantic similarity, and git co-change history.
+// Package cluster implements semantic community detection for codebase files.
+// Louvain Phase 1 runs on import topology, authored filename/symbol similarity,
+// and git co-change history. Filesystem directories never contribute
+// membership edges.
 package cluster
 
 import (
@@ -20,14 +20,12 @@ type ClusterInput struct {
 	Cochange     map[CochangePair]float64 // sorted pair → Ochiai score
 }
 
-// Signal weights. Naming and co-change are strongest; imports are demoted
-// because import topology alone is too weak for sub-system discovery.
+// Structural and lexical coupling are co-primary; historical evidence fills
+// gaps without deciding a boundary on its own.
 const (
-	wNaming   = 3.0
-	wTFIDF    = 2.0
+	wTFIDF    = 3.0
 	wCochange = 1.5 // supplementary — commit-size normalised, but can still be noisy
-	wImport   = 0.5
-	wDir      = 0.3
+	wImport   = 3.0
 
 	tfidfMinSim = 0.10 // cosine similarity threshold below which no edge is added
 )
@@ -41,10 +39,54 @@ type graph struct {
 }
 
 func buildGraph(input ClusterInput) *graph {
-	// Sort files by ID for deterministic node ordering across runs.
+	// File IDs are random UUIDs, so using them as Louvain's traversal order can
+	// produce a different local optimum for identical source on every fresh
+	// index. Order by semantic evidence only. Directory components are absent,
+	// so moving the same files cannot perturb the classifier.
+	baseByID := make(map[string]string, len(input.Files))
+	neighborsByID := make(map[string][]string, len(input.Files))
+	for _, file := range input.Files {
+		baseByID[file.ID] = filenameBase(file.RelPath)
+	}
+	for _, dependency := range input.Dependencies {
+		if dependency.DependencyType != "IMPORTS" {
+			continue
+		}
+		srcBase, srcOK := baseByID[dependency.Src]
+		dstBase, dstOK := baseByID[dependency.Dst]
+		if !srcOK || !dstOK {
+			continue
+		}
+		neighborsByID[dependency.Src] = append(neighborsByID[dependency.Src], dstBase)
+		neighborsByID[dependency.Dst] = append(neighborsByID[dependency.Dst], srcBase)
+	}
+	for id := range neighborsByID {
+		sort.Strings(neighborsByID[id])
+	}
+
 	sorted := make([]db.File, len(input.Files))
 	copy(sorted, input.Files)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	orderKeys := make(map[string]string, len(sorted))
+	for _, file := range sorted {
+		terms := make([]string, 0, len(input.TFIDF[file.ID]))
+		for term := range input.TFIDF[file.ID] {
+			terms = append(terms, term)
+		}
+		sort.Strings(terms)
+		orderKeys[file.ID] = strings.Join([]string{
+			baseByID[file.ID],
+			strings.ToLower(file.Language),
+			strings.Join(terms, ","),
+			strings.Join(neighborsByID[file.ID], ","),
+		}, "\x00")
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		left, right := orderKeys[sorted[i].ID], orderKeys[sorted[j].ID]
+		if left != right {
+			return left < right
+		}
+		return sorted[i].ID < sorted[j].ID
+	})
 
 	g := &graph{nodeIdx: make(map[string]int, len(sorted))}
 	for _, f := range sorted {
@@ -69,7 +111,7 @@ func buildGraph(input ClusterInput) *graph {
 		g.totalW += w
 	}
 
-	// ── Signal 1: Import dependencies (downweighted — topology alone is weak) ──
+	// ── Signal 1: Import dependencies ─────────────────────────────────────────
 	for _, d := range input.Dependencies {
 		if d.DependencyType != "IMPORTS" {
 			continue
@@ -82,40 +124,7 @@ func buildGraph(input ClusterInput) *graph {
 		addEdge(ai, bi, wImport)
 	}
 
-	// ── Signal 2: Directory proximity (ties files with no imports to neighbors) ─
-	byDir := make(map[string][]int)
-	for _, f := range sorted {
-		dir := "__root__"
-		if idx := strings.LastIndex(f.RelPath, "/"); idx >= 0 {
-			dir = f.RelPath[:idx]
-		}
-		byDir[dir] = append(byDir[dir], g.nodeIdx[f.ID])
-	}
-	for _, members := range byDir {
-		for i := 0; i < len(members); i++ {
-			for j := i + 1; j < len(members); j++ {
-				addEdge(members[i], members[j], wDir)
-			}
-		}
-	}
-
-	// ── Signal 3: Naming prefix (CamelCase head match is a strong developer signal)
-	byHead := make(map[string][]int)
-	for _, f := range sorted {
-		head := CamelHead(filenameBase(f.RelPath))
-		if head != "" {
-			byHead[head] = append(byHead[head], g.nodeIdx[f.ID])
-		}
-	}
-	for _, members := range byHead {
-		for i := 0; i < len(members); i++ {
-			for j := i + 1; j < len(members); j++ {
-				addEdge(members[i], members[j], wNaming)
-			}
-		}
-	}
-
-	// ── Signal 4: TF-IDF semantic similarity ──────────────────────────────────
+	// ── Signal 2: TF-IDF semantic similarity ──────────────────────────────────
 	if input.TFIDF != nil {
 		for i := 0; i < len(sorted); i++ {
 			vi := input.TFIDF[sorted[i].ID]
@@ -128,7 +137,7 @@ func buildGraph(input ClusterInput) *graph {
 		}
 	}
 
-	// ── Signal 5: Git co-change (Ochiai-normalised) ───────────────────────────
+	// ── Signal 3: Git co-change (Ochiai-normalised) ───────────────────────────
 	if input.Cochange != nil {
 		for pair, score := range input.Cochange {
 			ai, aok := g.nodeIdx[pair[0]]

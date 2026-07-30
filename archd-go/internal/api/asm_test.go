@@ -57,3 +57,40 @@ func TestAgentSheetContextIncludesLiveFloorAndAuthoredPlacement(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildSpecExcludesUnapprovedAgentProposals(t *testing.T) {
+	sqlDB, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.UpsertWorkspace(sqlDB, db.Workspace{ID: "ws", Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	sheet := db.Sheet{ID: "sheet", WorkspaceID: "ws", Name: "Next increment"}
+	if err := db.CreateSheet(sqlDB, &sheet); err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range []db.PlannedNode{
+		{ID: "approved", SheetID: sheet.ID, WorkspaceID: "ws", Name: "Checkout", DeclaredPath: "checkout.go"},
+		{ID: "proposal", SheetID: sheet.ID, WorkspaceID: "ws", Name: "SpeculativeCache", DeclaredPath: "cache.go", CreatedBy: "agent"},
+	} {
+		if err := db.UpsertPlannedNode(sqlDB, &node); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	spec, err := renderBuildSpec(sqlDB, &sheet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(spec, `class "Checkout"`) {
+		t.Fatalf("approved user intent missing:\n%s", spec)
+	}
+	if strings.Contains(spec, "SpeculativeCache") {
+		t.Fatalf("pending proposal leaked into executable work order:\n%s", spec)
+	}
+	if !strings.Contains(spec, "1 agent proposal(s) are awaiting user approval") {
+		t.Fatalf("pending proposal was not disclosed:\n%s", spec)
+	}
+}

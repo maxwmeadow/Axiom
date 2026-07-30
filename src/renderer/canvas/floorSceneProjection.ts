@@ -1,13 +1,16 @@
 import type { Node } from '@xyflow/react'
 import type { DbFile, DbInfraNode, DbSystem, FloorNodeType } from '../../shared/types'
 import { countDirectChildren } from './directChildCounts.ts'
-import { FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, type FrameGeometry } from './frameGeometry.ts'
-import { minimumContainerSize } from './resizeGeometry.ts'
+import { frameContentInsets, type FrameGeometry } from './frameGeometry.ts'
+import { fitPresentationScale, minimumContainerSize } from './resizeGeometry.ts'
 import type { FileNodeData, InfraNodeData, SystemNodeData } from './sceneTypes'
 
 const BASE_FILE_WIDTH = 220
 const BASE_FILE_HEIGHT = 110
-const SYSTEM_PALETTE = ['#5B8A9A', '#C4956A', '#7A9E7E', '#A07B8A']
+// Depth accents for the warm workbench Floor. Darkened green/tan/olive/rose so
+// each reads against the parchment board and cream cards (mirrors the scoped
+// canvas material tokens in global.css).
+const SYSTEM_PALETTE = ['#3c7d76', '#a06a34', '#5a7d4f', '#8a5a67']
 
 export interface FloorSceneDescriptor {
   id: string
@@ -15,7 +18,10 @@ export interface FloorSceneDescriptor {
   parentId: string | null
   depth: number
   geometry: FrameGeometry
+  /** World scale of this frame itself. */
   worldScale: number
+  /** World scale this frame hands to its children (own scale x interiorScale). */
+  contentScale: number
 }
 
 interface FloorSceneProjectionInput {
@@ -26,7 +32,7 @@ interface FloorSceneProjectionInput {
   siblingsByParent: Map<string | null, string[]>
   geometryById: Map<string, FrameGeometry>
   worldScaleById: Map<string, number>
-  agentTouchedIds: Set<string>
+  contentScaleById: Map<string, number>
   currentZoom: number
 }
 
@@ -51,13 +57,25 @@ export function projectFloorNodes({
   siblingsByParent,
   geometryById,
   worldScaleById,
-  agentTouchedIds,
+  contentScaleById,
   currentZoom,
 }: FloorSceneProjectionInput): Node[] {
   const systemsById = new Map(systems.map(system => [system.id, system]))
   const filesById = new Map(files.map(file => [file.id, file]))
   const infraById = new Map(infraNodes.map(infra => [infra.id, infra]))
   const directChildCounts = countDirectChildren(descriptors)
+
+  /**
+   * How far the user has resized this frame away from its authored design size.
+   *
+   * Both terms are CANONICAL — neither carries world scale — so the value says
+   * nothing about nesting depth and nothing about interior compression. That
+   * isolation is the whole point: chrome sized from it cannot react to a
+   * container shrinking its contents, and depth stays expressed exactly once,
+   * through DEPTH_TITLE_PX.
+   */
+  const presentationScaleFor = (geometry: FrameGeometry, base: { width: number; height: number }) =>
+    fitPresentationScale(geometry.width, geometry.height, base.width, base.height)
 
   const defaultSize = (id: string) => {
     const system = systemsById.get(id)
@@ -68,47 +86,70 @@ export function projectFloorNodes({
     return infra?.category === 'platform' ? { width: 760, height: 520 } : { width: 260, height: 160 }
   }
 
-  const resizeMinimumFor = (id: string, geometry: FrameGeometry, worldScale: number) => {
+  const resizeMinimumFor = (id: string, geometry: FrameGeometry, worldScale: number, descriptorDepth: number) => {
+    const base = defaultSize(id)
+    // Children are authored in the frame's CONTENT space. The minimum size is a
+    // statement about the frame's OWN space, so interior compression has to be
+    // folded in here — a compressed interior genuinely does need less room.
+    const interior = geometry.interiorScale
     const childRects = (siblingsByParent.get(id) ?? []).flatMap(childId => {
       const child = geometryById.get(childId)
       return child ? [{
-        x: child.x,
-        y: child.y,
-        width: child.width * child.scale,
-        height: child.height * child.scale,
+        x: child.x * interior,
+        y: child.y * interior,
+        width: child.width * child.scale * interior,
+        height: child.height * child.scale * interior,
       }] : []
     })
     const minimum = minimumContainerSize(
       { width: geometry.width, height: geometry.height },
       childRects,
-      { left: FRAME_CONTENT_PADDING, right: FRAME_CONTENT_PADDING, top: FRAME_HEADER_HEIGHT, bottom: FRAME_CONTENT_PADDING },
+      // The same insets every other path uses: one gap on three sides, and the
+      // frame's real tab band plus that gap on top. A flat top constant used to
+      // let a north handle pull the frame edge down past its own tab, leaving
+      // the first child under the header.
+      frameContentInsets(geometry.height, descriptorDepth, worldScale),
       { width: 1, height: 1 },
     )
-    return { width: minimum.width * worldScale, height: minimum.height * worldScale }
+    return {
+      width: minimum.width * worldScale,
+      height: minimum.height * worldScale,
+      westWidth: minimum.westWidth * worldScale,
+      northHeight: minimum.northHeight * worldScale,
+    }
   }
 
   return descriptors.map(descriptor => {
-    const { id, parentId, geometry, worldScale, depth } = descriptor
-    const parentWorldScale = parentId ? (worldScaleById.get(parentId) ?? 1) : 1
-    const position = { x: geometry.x * parentWorldScale, y: geometry.y * parentWorldScale }
+    const { id, parentId, geometry, worldScale, contentScale, depth } = descriptor
+    // A child sits in its parent's CONTENT space, so its position rides the
+    // parent's contentScale — not the parent's own world scale. The two are
+    // equal for every frame that does not compress its interior.
+    const parentContentScale = parentId ? (contentScaleById.get(parentId) ?? worldScaleById.get(parentId) ?? 1) : 1
+    const position = { x: geometry.x * parentContentScale, y: geometry.y * parentContentScale }
     const style = { width: geometry.width * worldScale, height: geometry.height * worldScale }
 
     if (descriptor.nodeType === 'system') {
       const system = systemsById.get(id)!
       const color = system.color ?? systemColor(depth)
-      const resizeMinimum = resizeMinimumFor(id, geometry, worldScale)
+      const resizeMinimum = resizeMinimumFor(id, geometry, worldScale, depth)
       const presentationBase = defaultSize(id)
       return {
         id, type: 'system', parentId: parentId ?? undefined, position, style,
+        initialWidth: style.width, initialHeight: style.height,
         data: {
           id, name: system.name, source: system.source, color, colorRgb: hexToRgb(color),
           description: system.description, agentNotes: system.agentNotes, depth,
-          directChildCount: directChildCounts.get(id) ?? 0, agentTouched: agentTouchedIds.has(id),
+          directChildCount: directChildCounts.get(id) ?? 0,
           currentZoom, isChild: !!parentId, childrenVisible: 0, nodeW: style.width,
-          nodeH: style.height, frameScale: geometry.scale, worldScale,
-          minResizeWidth: resizeMinimum.width, minResizeHeight: resizeMinimum.height,
-          presentationBaseWidth: presentationBase.width * worldScale,
-          presentationBaseHeight: presentationBase.height * worldScale,
+          nodeH: style.height, frameScale: geometry.scale, worldScale, contentScale,
+          interiorScale: geometry.interiorScale,
+          minResizeWidth: resizeMinimum.width,
+          minResizeWidthWest: resizeMinimum.westWidth,
+          minResizeHeight: resizeMinimum.height,
+          minResizeHeightNorth: resizeMinimum.northHeight,
+          presentationBaseWidth: presentationBase.width,
+          presentationBaseHeight: presentationBase.height,
+          presentationScale: presentationScaleFor(geometry, presentationBase),
         } as unknown as Record<string, unknown>,
         draggable: true, selectable: true,
       }
@@ -118,11 +159,12 @@ export function projectFloorNodes({
       const file = filesById.get(id)!
       return {
         id, type: 'file', parentId: parentId ?? undefined, position, style,
+        initialWidth: style.width, initialHeight: style.height,
         data: {
           id, label: file.relPath.split('/').pop() ?? file.relPath, relPath: file.relPath,
           language: file.language, lineCount: file.lineCount, churnScore: file.churnScore,
           shape: (file.shapeOverride || file.shape || '') as FileNodeData['shape'],
-          displayName: file.displayName ?? '', agentTouched: agentTouchedIds.has(id), depth,
+          displayName: file.displayName ?? '', depth,
           currentZoom, childrenVisible: 0, frameScale: geometry.scale, worldScale,
         } satisfies FileNodeData as unknown as Record<string, unknown>,
         draggable: true, selectable: true,
@@ -132,19 +174,25 @@ export function projectFloorNodes({
     const infra = infraById.get(id)!
     if (infra.category === 'platform') {
       const color = '#6b8afd'
-      const resizeMinimum = resizeMinimumFor(id, geometry, worldScale)
+      const resizeMinimum = resizeMinimumFor(id, geometry, worldScale, depth)
       const presentationBase = defaultSize(id)
       return {
         id, type: 'system', parentId: parentId ?? undefined, position, style,
+        initialWidth: style.width, initialHeight: style.height,
         data: {
           id, name: infra.name, source: 'user', color, colorRgb: hexToRgb(color),
           description: null, agentNotes: null, depth,
-          directChildCount: directChildCounts.get(id) ?? 0, agentTouched: agentTouchedIds.has(id),
+          directChildCount: directChildCounts.get(id) ?? 0,
           currentZoom, isChild: !!parentId, childrenVisible: 0, nodeW: style.width,
-          nodeH: style.height, frameScale: geometry.scale, worldScale, umlKind: 'infra',
-          minResizeWidth: resizeMinimum.width, minResizeHeight: resizeMinimum.height,
-          presentationBaseWidth: presentationBase.width * worldScale,
-          presentationBaseHeight: presentationBase.height * worldScale,
+          nodeH: style.height, frameScale: geometry.scale, worldScale, contentScale,
+          umlKind: 'infra', interiorScale: geometry.interiorScale,
+          minResizeWidth: resizeMinimum.width,
+          minResizeWidthWest: resizeMinimum.westWidth,
+          minResizeHeight: resizeMinimum.height,
+          minResizeHeightNorth: resizeMinimum.northHeight,
+          presentationBaseWidth: presentationBase.width,
+          presentationBaseHeight: presentationBase.height,
+          presentationScale: presentationScaleFor(geometry, presentationBase),
           umlMetadata: { version: 1, category: infra.category, provider: infra.provider, service: infra.service, subtype: infra.subtype },
         } as unknown as Record<string, unknown>,
         draggable: true, selectable: true,
@@ -153,11 +201,12 @@ export function projectFloorNodes({
 
     return {
       id, type: 'infra', parentId: parentId ?? undefined, position, style,
+      initialWidth: style.width, initialHeight: style.height,
       data: {
         id, label: infra.name, name: infra.name, infraType: infra.infraType,
         category: infra.category ?? 'api', provider: infra.provider ?? 'generic',
         service: infra.service ?? '', subtype: infra.subtype ?? '', status: infra.status ?? 'confirmed',
-        agentTouched: agentTouchedIds.has(id), frameScale: geometry.scale, worldScale,
+        frameScale: geometry.scale, worldScale,
       } satisfies InfraNodeData as unknown as Record<string, unknown>,
       draggable: true, selectable: true,
     }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 )
@@ -13,11 +14,21 @@ import (
 type Message struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
+	Seq     uint64          `json:"seq"`
 }
 
 type client struct {
 	conn *websocket.Conn
 	send chan []byte
+	done chan struct{}
+	once sync.Once
+}
+
+func (c *client) close() {
+	c.once.Do(func() {
+		close(c.done)
+		_ = c.conn.Close()
+	})
 }
 
 // Hub maintains the set of active WebSocket connections.
@@ -27,6 +38,7 @@ type Hub struct {
 
 	tapMu sync.RWMutex
 	tap   func(msgType string, payload json.RawMessage)
+	seq   atomic.Uint64
 }
 
 func New() *Hub {
@@ -45,7 +57,7 @@ func (h *Hub) SetTap(fn func(msgType string, payload json.RawMessage)) {
 
 // Register adds a new WebSocket connection and starts its write pump.
 func (h *Hub) Register(conn *websocket.Conn) {
-	c := &client{conn: conn, send: make(chan []byte, 64)}
+	c := &client{conn: conn, send: make(chan []byte, 64), done: make(chan struct{})}
 	h.mu.Lock()
 	h.clients[c] = struct{}{}
 	h.mu.Unlock()
@@ -58,11 +70,16 @@ func (h *Hub) Register(conn *websocket.Conn) {
 
 func (c *client) writePump(onDone func()) {
 	defer func() {
-		c.conn.Close()
+		c.close()
 		onDone()
 	}()
-	for msg := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+	for {
+		select {
+		case msg := <-c.send:
+			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		case <-c.done:
 			return
 		}
 	}
@@ -75,7 +92,7 @@ func (h *Hub) Broadcast(msgType string, payload any) {
 		log.Printf("hub: marshal %s: %v", msgType, err)
 		return
 	}
-	msg, err := json.Marshal(Message{Type: msgType, Payload: raw})
+	msg, err := json.Marshal(Message{Type: msgType, Payload: raw, Seq: h.seq.Add(1)})
 	if err != nil {
 		log.Printf("hub: marshal envelope: %v", err)
 		return
@@ -92,8 +109,9 @@ func (h *Hub) Broadcast(msgType string, payload any) {
 		select {
 		case c.send <- msg:
 		default:
-			// slow client — drop message rather than block
-			log.Printf("hub: dropping message for slow client")
+			// Disconnect rather than silently dropping part of a graph update.
+			log.Printf("hub: disconnecting slow client for snapshot resync")
+			c.close()
 		}
 	}
 }
@@ -101,6 +119,13 @@ func (h *Hub) Broadcast(msgType string, payload any) {
 // BroadcastSnapshot sends a full graph:snapshot event.
 func (h *Hub) BroadcastSnapshot(payload any) {
 	h.Broadcast("graph:snapshot", payload)
+}
+
+// BroadcastClassification sends a complete semantic reconciliation without
+// treating it as a cold-load snapshot. The renderer preserves interaction
+// state and choreographs files moving into newly proposed systems.
+func (h *Hub) BroadcastClassification(payload any) {
+	h.Broadcast("classification:updated", payload)
 }
 
 // BroadcastPatch sends a graph:patch event with incremental changes.

@@ -23,10 +23,13 @@ type Workspace struct {
 }
 
 type Root struct {
-	ID          string `json:"id"`
-	WorkspaceID string `json:"workspaceId"`
-	Path        string `json:"path"`
-	IndexedAt   *int64 `json:"indexedAt"`
+	ID                         string   `json:"id"`
+	WorkspaceID                string   `json:"workspaceId"`
+	Path                       string   `json:"path"`
+	IndexedAt                  *int64   `json:"indexedAt"`
+	ClassifierVersion          int      `json:"classifierVersion"`
+	IgnoredPaths               []string `json:"ignoredPaths"`
+	SourceBoundariesReviewedAt *int64   `json:"sourceBoundariesReviewedAt"`
 }
 
 type System struct {
@@ -34,7 +37,7 @@ type System struct {
 	WorkspaceID string   `json:"workspaceId"`
 	Name        string   `json:"name"`
 	ParentID    *string  `json:"parentId"`
-	Source      string   `json:"source"` // 'directory'|'user'|'agent'
+	Source      string   `json:"source"` // 'cluster'|'user'|'agent' ('directory' is legacy auto-owned)
 	Color       *string  `json:"color"`
 	Description *string  `json:"description"`
 	AgentNotes  *string  `json:"agentNotes"`
@@ -85,6 +88,7 @@ type Symbol struct {
 	Kind      string `json:"kind"` // 'function'|'class'|'interface'|'type'|'variable'|'method'
 	LineStart int    `json:"lineStart"`
 	LineEnd   int    `json:"lineEnd"`
+	BodyHash  string `json:"-"`
 }
 
 type Dependency struct {
@@ -154,16 +158,32 @@ func GetWorkspace(db *sql.DB, id string) (*Workspace, error) {
 // ─── Roots ────────────────────────────────────────────────────────────────────
 
 func UpsertRoot(db *sql.DB, r Root) error {
-	_, err := db.Exec(`
-		INSERT INTO roots (id, workspace_id, path, indexed_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET path=excluded.path`,
-		r.ID, r.WorkspaceID, r.Path, r.IndexedAt)
+	ignoredJSON, err := json.Marshal(r.IgnoredPaths)
+	if err != nil {
+		return fmt.Errorf("encode ignored paths: %w", err)
+	}
+	_, err = db.Exec(`
+		INSERT INTO roots
+			(id, workspace_id, path, indexed_at, classifier_version,
+			 ignored_paths_json, source_boundaries_reviewed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			path=excluded.path,
+			ignored_paths_json=excluded.ignored_paths_json,
+			source_boundaries_reviewed_at=COALESCE(
+				excluded.source_boundaries_reviewed_at,
+				roots.source_boundaries_reviewed_at
+			)`,
+		r.ID, r.WorkspaceID, r.Path, r.IndexedAt, r.ClassifierVersion,
+		string(ignoredJSON), r.SourceBoundariesReviewedAt)
 	return err
 }
 
 func GetRoots(db *sql.DB, workspaceID string) ([]Root, error) {
-	rows, err := db.Query(`SELECT id, workspace_id, path, indexed_at FROM roots WHERE workspace_id = ?`, workspaceID)
+	rows, err := db.Query(`
+		SELECT id, workspace_id, path, indexed_at, classifier_version,
+		       ignored_paths_json, source_boundaries_reviewed_at
+		FROM roots WHERE workspace_id = ?`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -171,17 +191,29 @@ func GetRoots(db *sql.DB, workspaceID string) ([]Root, error) {
 	var roots []Root
 	for rows.Next() {
 		var r Root
-		if err := rows.Scan(&r.ID, &r.WorkspaceID, &r.Path, &r.IndexedAt); err != nil {
+		var ignoredJSON string
+		if err := rows.Scan(
+			&r.ID, &r.WorkspaceID, &r.Path, &r.IndexedAt, &r.ClassifierVersion,
+			&ignoredJSON, &r.SourceBoundariesReviewedAt,
+		); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(ignoredJSON), &r.IgnoredPaths); err != nil {
+			return nil, fmt.Errorf("decode ignored paths for root %s: %w", r.ID, err)
 		}
 		roots = append(roots, r)
 	}
 	return roots, rows.Err()
 }
 
-func MarkRootIndexed(db *sql.DB, rootID string) error {
+func MarkRootIndexed(db *sql.DB, rootID string, classifierVersion int) error {
 	now := time.Now().UnixMilli()
-	_, err := db.Exec(`UPDATE roots SET indexed_at = ? WHERE id = ?`, now, rootID)
+	_, err := db.Exec(`UPDATE roots SET indexed_at = ?, classifier_version = ? WHERE id = ?`, now, classifierVersion, rootID)
+	return err
+}
+
+func MarkRootClassifierVersion(db *sql.DB, rootID string, classifierVersion int) error {
+	_, err := db.Exec(`UPDATE roots SET classifier_version = ? WHERE id = ?`, classifierVersion, rootID)
 	return err
 }
 
@@ -270,6 +302,139 @@ func DeleteDirectorySystemsByWorkspace(db *sql.DB, workspaceID string) error {
 func DeleteSystemsBySource(db *sql.DB, workspaceID, source string) error {
 	_, err := db.Exec(`DELETE FROM systems WHERE workspace_id=? AND source=?`, workspaceID, source)
 	return err
+}
+
+// FileSystemAssignment is one semantic ownership change produced by the
+// clustering planner. A nil SystemID deliberately leaves the file visible at
+// the Floor root until the classifier has a credible group for it.
+type FileSystemAssignment struct {
+	FileID   string
+	SystemID *string
+}
+
+// ApplyClusterPlan commits one complete auto-classification reconciliation.
+//
+// Cluster systems use stable IDs, so the conflict path intentionally updates
+// only classifier-owned fields. Authored color, notes, geometry, and creation
+// time survive every live recluster. Files are moved before stale systems are
+// removed, preventing ON DELETE SET NULL from producing an observable partial
+// state. The whole plan is transactional so snapshots can never see half of a
+// new architecture.
+func ApplyClusterPlan(
+	db *sql.DB,
+	workspaceID string,
+	systems []System,
+	assignments []FileSystemAssignment,
+	staleSystemIDs []string,
+) (err error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	now := time.Now().UnixMilli()
+	for _, system := range systems {
+		createdAt := system.CreatedAt
+		if createdAt == 0 {
+			createdAt = now
+		}
+		if _, err = tx.Exec(`
+			INSERT INTO systems
+				(id, workspace_id, name, parent_id, source, color, description, agent_notes,
+				 depth, position_x, position_y, width, height, created_at, updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT(id) DO UPDATE SET
+				name=excluded.name,
+				parent_id=excluded.parent_id,
+				source='cluster',
+				depth=excluded.depth,
+				updated_at=excluded.updated_at
+			WHERE systems.source IN ('cluster','directory')`,
+			system.ID, workspaceID, system.Name, system.ParentID, "cluster",
+			system.Color, system.Description, system.AgentNotes, system.Depth,
+			system.PositionX, system.PositionY, system.Width, system.Height,
+			createdAt, now,
+		); err != nil {
+			return fmt.Errorf("upsert cluster system %q: %w", system.Name, err)
+		}
+	}
+
+	layoutChanged := false
+	for _, assignment := range assignments {
+		// A prior classifier can leave root/part-of layout containment that
+		// contradicts semantic ownership. Remove only those contradictory
+		// semantic layouts; hosted_by is deliberately visual-only and survives.
+		result, deleteErr := tx.Exec(`
+			DELETE FROM floor_layouts
+			WHERE workspace_id=? AND node_type='file' AND node_id=?
+			  AND containment_kind IN ('root','part_of')
+			  AND COALESCE(
+				CASE
+					WHEN containment_kind='part_of' AND parent_node_type='system'
+					THEN parent_node_id
+					ELSE ''
+				END,
+				''
+			  ) <> COALESCE(?, '')`,
+			workspaceID, assignment.FileID, assignment.SystemID,
+		)
+		if deleteErr != nil {
+			return fmt.Errorf("reconcile clustered file layout %s: %w", assignment.FileID, deleteErr)
+		}
+		if affected, affectedErr := result.RowsAffected(); affectedErr == nil && affected > 0 {
+			layoutChanged = true
+		}
+
+		if _, err = tx.Exec(`
+			UPDATE files
+			SET system_id=?
+			WHERE id=? AND root_id IN (
+				SELECT id FROM roots WHERE workspace_id=?
+			)
+			AND (
+				system_id IS NULL OR system_id IN (
+					SELECT id FROM systems WHERE source IN ('cluster','directory')
+				)
+			)`,
+			assignment.SystemID, assignment.FileID, workspaceID,
+		); err != nil {
+			return fmt.Errorf("assign clustered file %s: %w", assignment.FileID, err)
+		}
+	}
+
+	for _, id := range staleSystemIDs {
+		result, deleteErr := tx.Exec(`
+			DELETE FROM systems
+			WHERE id=? AND workspace_id=? AND source IN ('cluster','directory')`,
+			id, workspaceID,
+		)
+		if deleteErr != nil {
+			return fmt.Errorf("delete stale cluster system %s: %w", id, deleteErr)
+		}
+		if affected, affectedErr := result.RowsAffected(); affectedErr == nil && affected > 0 {
+			layoutChanged = true
+		}
+	}
+
+	if layoutChanged {
+		if _, err = tx.Exec(`
+			INSERT INTO floor_layout_revisions(workspace_id,revision) VALUES(?,1)
+			ON CONFLICT(workspace_id) DO UPDATE SET revision=revision+1`,
+			workspaceID,
+		); err != nil {
+			return fmt.Errorf("advance floor layout revision: %w", err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func UpdateSystemPosition(db *sql.DB, id string, x, y float64) error {
@@ -455,6 +620,26 @@ func DeleteFilesByRoot(db *sql.DB, rootID string) error {
 	return err
 }
 
+// DeleteFileByID removes one live file and every relationship that is not
+// protected by a foreign-key cascade. Symbols, call_graph rows, variable refs,
+// and Floor geometry are cascaded/triggered by the files delete; generic
+// dependencies intentionally use polymorphic IDs and therefore need an
+// explicit sweep in the same transaction.
+func DeleteFileByID(db *sql.DB, fileID string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`DELETE FROM dependencies WHERE src=? OR dst=?`, fileID, fileID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM files WHERE id=?`, fileID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // DeleteFilesByWorkspace deletes all files for every root belonging to a workspace.
 // Used before re-indexing to wipe stale rows from prior runs (which may have used different root IDs).
 func DeleteFilesByWorkspace(db *sql.DB, workspaceID string) error {
@@ -495,9 +680,9 @@ func UpsertSymbols(db *sql.DB, fileID string, symbols []Symbol) error {
 			s.ID = uuid.New().String()
 		}
 		if _, err := tx.Exec(`
-			INSERT INTO symbols (id, file_id, name, kind, line_start, line_end)
-			VALUES (?,?,?,?,?,?)`,
-			s.ID, fileID, s.Name, s.Kind, s.LineStart, s.LineEnd); err != nil {
+			INSERT INTO symbols (id, file_id, name, kind, line_start, line_end, body_hash)
+			VALUES (?,?,?,?,?,?,?)`,
+			s.ID, fileID, s.Name, s.Kind, s.LineStart, s.LineEnd, s.BodyHash); err != nil {
 			return err
 		}
 	}
@@ -652,7 +837,7 @@ func DeleteInvestigation(db *sql.DB, id string) error {
 
 func GetSymbolsByFile(db *sql.DB, fileID string) ([]Symbol, error) {
 	rows, err := db.Query(`
-		SELECT id, file_id, name, kind, line_start, line_end
+		SELECT id, file_id, name, kind, line_start, line_end, body_hash
 		FROM symbols WHERE file_id=? ORDER BY line_start`, fileID)
 	if err != nil {
 		return nil, err
@@ -661,7 +846,7 @@ func GetSymbolsByFile(db *sql.DB, fileID string) ([]Symbol, error) {
 	var symbols []Symbol
 	for rows.Next() {
 		var s Symbol
-		if err := rows.Scan(&s.ID, &s.FileID, &s.Name, &s.Kind, &s.LineStart, &s.LineEnd); err != nil {
+		if err := rows.Scan(&s.ID, &s.FileID, &s.Name, &s.Kind, &s.LineStart, &s.LineEnd, &s.BodyHash); err != nil {
 			return nil, err
 		}
 		symbols = append(symbols, s)
@@ -673,7 +858,7 @@ func GetSymbolsByFile(db *sql.DB, fileID string) ([]Symbol, error) {
 // Single query instead of one-per-file for efficient bulk use during clustering.
 func GetSymbolsByRoot(sqlDB *sql.DB, rootID string) (map[string][]Symbol, error) {
 	rows, err := sqlDB.Query(`
-		SELECT s.id, s.file_id, s.name, s.kind, s.line_start, s.line_end
+		SELECT s.id, s.file_id, s.name, s.kind, s.line_start, s.line_end, s.body_hash
 		FROM symbols s
 		JOIN files f ON s.file_id = f.id
 		WHERE f.root_id = ?`, rootID)
@@ -684,7 +869,7 @@ func GetSymbolsByRoot(sqlDB *sql.DB, rootID string) (map[string][]Symbol, error)
 	result := make(map[string][]Symbol)
 	for rows.Next() {
 		var s Symbol
-		if err := rows.Scan(&s.ID, &s.FileID, &s.Name, &s.Kind, &s.LineStart, &s.LineEnd); err != nil {
+		if err := rows.Scan(&s.ID, &s.FileID, &s.Name, &s.Kind, &s.LineStart, &s.LineEnd, &s.BodyHash); err != nil {
 			return nil, err
 		}
 		result[s.FileID] = append(result[s.FileID], s)
@@ -735,9 +920,42 @@ func GetDependencies(db *sql.DB, workspaceID string) ([]Dependency, error) {
 	return deps, rows.Err()
 }
 
+// GetOutgoingDependenciesByFile returns the authored relationships whose
+// source is one file. Live reindexing diffs this set before/after a parse; it
+// must not include inbound edges, which are owned by other source files.
+func GetOutgoingDependenciesByFile(db *sql.DB, workspaceID, fileID string) ([]Dependency, error) {
+	rows, err := db.Query(`
+		SELECT id, workspace_id, src, dst, src_type, dst_type, dependency_type, weight, created_by, evidence
+		FROM dependencies WHERE workspace_id=? AND src=?`, workspaceID, fileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var deps []Dependency
+	for rows.Next() {
+		var d Dependency
+		if err := rows.Scan(
+			&d.ID, &d.WorkspaceID, &d.Src, &d.Dst,
+			&d.SrcType, &d.DstType, &d.DependencyType, &d.Weight, &d.CreatedBy, &d.Evidence,
+		); err != nil {
+			return nil, err
+		}
+		deps = append(deps, d)
+	}
+	return deps, rows.Err()
+}
+
 // DeleteDependency removes a single edge by id.
 func DeleteDependency(db *sql.DB, id string) error {
 	_, err := db.Exec(`DELETE FROM dependencies WHERE id=?`, id)
+	return err
+}
+
+// DeleteOutgoingDependenciesByFile clears only relationships authored by the
+// file being reparsed. Inbound edges belong to their own source files and must
+// survive a target-file edit.
+func DeleteOutgoingDependenciesByFile(db *sql.DB, fileID string) error {
+	_, err := db.Exec(`DELETE FROM dependencies WHERE src=?`, fileID)
 	return err
 }
 
@@ -926,6 +1144,77 @@ type CallEdge struct {
 	CalleeFile   string `json:"calleeFile"`
 	CalleeSymbol string `json:"calleeSymbol"`
 	CallCount    int    `json:"callCount"`
+}
+
+func GetCallEdgesByCaller(db *sql.DB, fileID string) ([]CallEdge, error) {
+	rows, err := db.Query(`
+		SELECT caller_file, caller_symbol, callee_file, callee_symbol, call_count
+		FROM call_graph WHERE caller_file=?`, fileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var edges []CallEdge
+	for rows.Next() {
+		var edge CallEdge
+		if err := rows.Scan(
+			&edge.CallerFile, &edge.CallerSymbol,
+			&edge.CalleeFile, &edge.CalleeSymbol, &edge.CallCount,
+		); err != nil {
+			return nil, err
+		}
+		edges = append(edges, edge)
+	}
+	return edges, rows.Err()
+}
+
+func GetCallEdgesByFile(db *sql.DB, fileID string) ([]CallEdge, error) {
+	rows, err := db.Query(`
+		SELECT caller_file, caller_symbol, callee_file, callee_symbol, call_count
+		FROM call_graph WHERE caller_file=? OR callee_file=?`, fileID, fileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var edges []CallEdge
+	for rows.Next() {
+		var edge CallEdge
+		if err := rows.Scan(
+			&edge.CallerFile, &edge.CallerSymbol,
+			&edge.CalleeFile, &edge.CalleeSymbol, &edge.CallCount,
+		); err != nil {
+			return nil, err
+		}
+		edges = append(edges, edge)
+	}
+	return edges, rows.Err()
+}
+
+// GetCallEdgesByRoot returns the resolved project call graph in one snapshot.
+// Live reindexing diffs this set when a symbol addition/removal can change
+// callers outside the file that triggered the watcher event.
+func GetCallEdgesByRoot(db *sql.DB, rootID string) ([]CallEdge, error) {
+	rows, err := db.Query(`
+		SELECT cg.caller_file, cg.caller_symbol, cg.callee_file, cg.callee_symbol, cg.call_count
+		FROM call_graph cg
+		JOIN files caller ON caller.id = cg.caller_file
+		WHERE caller.root_id=?`, rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var edges []CallEdge
+	for rows.Next() {
+		var edge CallEdge
+		if err := rows.Scan(
+			&edge.CallerFile, &edge.CallerSymbol,
+			&edge.CalleeFile, &edge.CalleeSymbol, &edge.CallCount,
+		); err != nil {
+			return nil, err
+		}
+		edges = append(edges, edge)
+	}
+	return edges, rows.Err()
 }
 
 func UpsertCallEdges(db *sql.DB, fileID string, calls []CallEdge) error {

@@ -500,8 +500,8 @@ func (s *Server) handleSheetElements(w http.ResponseWriter, r *http.Request, she
 	}
 }
 
-// handlePlannedByID: PUT /api/planned/:id/position, DELETE /api/planned/:id,
-// PUT /api/planned/:id (full update).
+// handlePlannedByID: GET status, POST approval/layout mutations,
+// PUT full update, DELETE.
 func (s *Server) handlePlannedByID(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/planned/")
 	parts := strings.Split(rest, "/")
@@ -511,6 +511,47 @@ func (s *Server) handlePlannedByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.Method == http.MethodGet && len(parts) == 1:
+		workspaceID := r.URL.Query().Get("workspace")
+		sqlDB, err := s.dbFor(workspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		planned, err := db.GetPlannedNode(sqlDB, id)
+		if err != nil || planned == nil || planned.WorkspaceID != workspaceID {
+			jsonError(w, "planned node not found", 404)
+			return
+		}
+		jsonOK(w, planned)
+
+	case r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "approval":
+		var body struct {
+			WorkspaceID string `json:"workspaceId"`
+			Decision    string `json:"decision"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "bad request", 400)
+			return
+		}
+		sqlDB, err := s.dbFor(body.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		planned, err := db.GetPlannedNode(sqlDB, id)
+		if err != nil || planned == nil || planned.WorkspaceID != body.WorkspaceID {
+			jsonError(w, "planned node not found", 404)
+			return
+		}
+		planned, err = db.SetPlannedApproval(sqlDB, id, body.Decision)
+		if err != nil {
+			jsonError(w, err.Error(), 409)
+			return
+		}
+		s.broadcastPatch("planned:upserted", planned)
+		jsonOK(w, planned)
+
 	case r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "position":
 		var body struct {
 			WorkspaceID string  `json:"workspaceId"`
@@ -729,6 +770,12 @@ func (s *Server) handleCanvasSend(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m.SheetContext = context
+		spec, specErr := renderBuildSpec(sqlDB, sheet)
+		if specErr != nil {
+			jsonError(w, specErr.Error(), 500)
+			return
+		}
+		m.BuildSpec = spec
 	}
 	if err := db.EnqueueCanvasMessage(sqlDB, &m); err != nil {
 		jsonError(w, err.Error(), 500)

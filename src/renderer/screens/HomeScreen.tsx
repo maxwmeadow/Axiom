@@ -1,188 +1,343 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ProjectConfig } from '../../shared/types'
+import { AxiomMark, WorkbenchTitleBar } from '../components/ui/WorkbenchTitleBar'
 
 interface HomeScreenProps {
   onOpenProject: (config: ProjectConfig) => void
   onOpenDialog: () => void
+  onCreateProject: (config: ProjectConfig) => void
 }
 
-export function HomeScreen({ onOpenProject, onOpenDialog }: HomeScreenProps) {
+interface CommandDeckStatus {
+  workspaceId: string
+  indexed: boolean
+  files: number
+  systems: number
+  unreviewedClaims: number
+  unexplained: number
+  unexpected: number
+  activeWork: Array<{ id: string; agent?: string; goal: string; startedAt: number }>
+  openPlans: number
+  pendingProposals: number
+  lastActivityAt: number
+}
+
+const WORKBENCH_CAPABILITIES = [
+  { index: '01', title: 'Live source model', detail: 'The map follows the repository as agents rewrite it.' },
+  { index: '02', title: 'Semantic zoom', detail: 'Move from systems to symbols without changing tools.' },
+  { index: '03', title: 'Draw → dispatch → build', detail: 'Design what should exist; watch the agent fill it in.' },
+] as const
+
+// Mirror of the folder-name sanitiser in main.ts, for the live path preview.
+function safeFolderName(name: string): string {
+  return name
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/^[.\s-]+|[.\s-]+$/g, '')
+}
+
+export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: HomeScreenProps) {
   const [recentProjects, setRecentProjects] = useState<ProjectConfig[]>([])
+  const [deckStatus, setDeckStatus] = useState<Record<string, CommandDeckStatus>>({})
+
+  // New Project flow
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newLocation, setNewLocation] = useState<string | null>(null)
+  const [createBusy, setCreateBusy] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   useEffect(() => {
+    let active = true
     if (window.axiom) {
-      window.axiom.listRecentProjects().then(setRecentProjects)
-    } else {
-      setRecentProjects([])
+      void window.axiom.listRecentProjects()
+        .then(async projects => {
+          if (!active) return
+          setRecentProjects(projects)
+          const statuses = await Promise.all(projects.slice(0, 6).map(async project => {
+            try {
+              const response = await fetch(
+                `http://127.0.0.1:7743/api/command-deck?workspace=${encodeURIComponent(project.id)}`,
+              )
+              if (!response.ok) return null
+              return await response.json() as CommandDeckStatus
+            } catch {
+              return null
+            }
+          }))
+          if (!active) return
+          setDeckStatus(Object.fromEntries(
+            statuses.filter((status): status is CommandDeckStatus => Boolean(status))
+              .map(status => [status.workspaceId, status]),
+          ))
+        })
+        .catch(() => { if (active) setRecentProjects([]) })
     }
+    return () => { active = false }
   }, [])
 
-  const removeProject = async (e: React.MouseEvent, projectId: string) => {
-    e.stopPropagation()
-    if (window.axiom) {
-      await window.axiom.removeProject(projectId)
-      setRecentProjects(prev => prev.filter(p => p.id !== projectId))
+  const removeProject = async (projectId: string) => {
+    if (!window.axiom) return
+    await window.axiom.removeProject(projectId)
+    setRecentProjects(previous => previous.filter(project => project.id !== projectId))
+  }
+
+  const openDialog = () => {
+    if (window.axiom) { onOpenDialog(); return }
+    // Browser demo fallback
+    onOpenProject({
+      id: 'demo', name: 'Demo Project', rootPath: '/demo', ignoredPaths: [],
+      languageOverrides: {}, layoutPreferences: { zoom: 0.5, panX: 0, panY: 0 }, openedAt: Date.now(),
+    })
+  }
+
+  const startNew = () => {
+    if (!window.axiom) {
+      onCreateProject({
+        id: 'demo-new', name: 'Untitled Model', rootPath: '/demo-new', ignoredPaths: [],
+        languageOverrides: {}, layoutPreferences: { zoom: 1, panX: 0, panY: 0 }, openedAt: Date.now(),
+      })
+      return
+    }
+    setNewName(''); setNewLocation(null); setCreateError(null); setCreating(true)
+  }
+
+  const chooseLocation = async () => {
+    if (!window.axiom) return
+    const dir = await window.axiom.chooseDirectory()
+    if (dir) { setNewLocation(dir); setCreateError(null) }
+  }
+
+  const confirmCreate = async () => {
+    if (!window.axiom || !newLocation || !safeFolderName(newName)) return
+    setCreateBusy(true); setCreateError(null)
+    try {
+      const config = await window.axiom.createProject(newLocation, newName)
+      onCreateProject(config)
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : 'Could not create the project.')
+      setCreateBusy(false)
     }
   }
 
-  const openDialog = async () => {
-    if (window.axiom) {
-      onOpenDialog()
-    } else {
-      // Demo mode in browser: open a fake project
-      const demoConfig: ProjectConfig = {
-        id: 'demo',
-        name: 'Demo Project',
-        rootPath: '/demo',
-        ignoredPaths: [],
-        languageOverrides: {},
-        layoutPreferences: { zoom: 0.5, panX: 0, panY: 0 },
-        openedAt: Date.now(),
-      }
-      onOpenProject(demoConfig)
-    }
-  }
+  const safeName = safeFolderName(newName)
+  const canCreate = !!newLocation && !!safeName && !createBusy
 
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      height: '100%', gap: 32,
-      background: 'var(--bg-base)',
-    }}>
-      {/* Logo + title */}
-      <div style={{ textAlign: 'center' }}>
-        <AxiomHeroLogo />
-        <h1 style={{ fontSize: 32, fontWeight: 800, letterSpacing: '-0.04em', marginBottom: 8, background: 'linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-          Axiom
-        </h1>
-        <p style={{ fontSize: 15, color: 'var(--text-secondary)', maxWidth: 400, lineHeight: 1.6 }}>
-          Live architectural intelligence for the AI development era.
-          Your codebase as a living, interactive canvas.
-        </p>
+    <main className="axiom-launcher">
+      <WorkbenchTitleBar className="axiom-launcher__titlebar" context="Project Navigator" status="READY" />
+
+      <div className="axiom-launcher__body">
+        <section className="axiom-launcher__introduction" aria-labelledby="axiom-launcher-title">
+          <div className="axiom-launcher__eyebrow">SOFTWARE ARCHITECTURE / WORKBENCH</div>
+          <AxiomMark />
+          <h1 id="axiom-launcher-title">Axiom</h1>
+          <p className="axiom-launcher__statement">
+            Map the system you have.<br />
+            Build the system you intend.
+          </p>
+          <p className="axiom-launcher__description">
+            A living architecture environment wired to your source. Start a fresh model or open an existing
+            codebase — then watch the Floor stay true as you and your agents build.
+          </p>
+
+          <ol className="axiom-launcher__capabilities">
+            {WORKBENCH_CAPABILITIES.map(capability => (
+              <li key={capability.index}>
+                <span>{capability.index}</span>
+                <div>
+                  <strong>{capability.title}</strong>
+                  <p>{capability.detail}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <section className="axiom-launcher__workspace" aria-labelledby="axiom-workspace-title">
+          <div className="axiom-launcher__workspace-heading">
+            <span>START</span>
+            <div>
+              <h2 id="axiom-workspace-title">Command Deck</h2>
+              <p>See what changed, what agents are doing, and what intent is still open — then enter the map.</p>
+            </div>
+          </div>
+
+          <div className="axiom-launcher__forks">
+            <button className="axiom-launcher__fork axiom-launcher__fork--new" onClick={startNew}>
+              <span className="axiom-launcher__fork-glyph" aria-hidden="true">＋</span>
+              <span className="axiom-launcher__fork-copy">
+                <strong>New Project</strong>
+                <small>Create an empty workspace and build it live with an agent.</small>
+              </span>
+              <span className="axiom-launcher__fork-arrow" aria-hidden="true">→</span>
+            </button>
+
+            <button className="axiom-launcher__fork axiom-launcher__fork--open" onClick={openDialog}>
+              <span className="axiom-launcher__fork-glyph" aria-hidden="true">▤</span>
+              <span className="axiom-launcher__fork-copy">
+                <strong>Open Codebase</strong>
+                <small>Index an existing repository into a living architecture map.</small>
+              </span>
+              <span className="axiom-launcher__fork-arrow" aria-hidden="true">→</span>
+            </button>
+          </div>
+
+          {recentProjects.length > 0 && (
+            <div className="axiom-launcher__recent">
+              <div className="axiom-launcher__section-label">
+                <span>RECENTLY OPENED</span>
+                <small>{recentProjects.slice(0, 6).length} PROJECTS</small>
+              </div>
+              <ul>
+                {recentProjects.slice(0, 6).map(project => (
+                  <li key={project.id}>
+                    <button
+                      className="axiom-launcher__recent-open"
+                      onClick={() => onOpenProject(project)}
+                      aria-label={`Open ${project.name}`}
+                    >
+                      <span className="axiom-launcher__project-index" aria-hidden="true">◆</span>
+                      <span className="axiom-launcher__project-copy">
+                        <strong>{project.name}</strong>
+                        <small title={project.rootPath}>{project.rootPath}</small>
+                        <ProjectDeckSignals status={deckStatus[project.id]} />
+                      </span>
+                      <time dateTime={new Date(project.openedAt).toISOString()}>{timeAgo(project.openedAt)}</time>
+                    </button>
+                    <button
+                      className="axiom-launcher__recent-remove"
+                      onClick={() => void removeProject(project.id)}
+                      aria-label={`Remove ${project.name} from recent projects`}
+                      title="Remove from recents and delete the cached index"
+                    >
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <footer className="axiom-launcher__local-note">
+            <span aria-hidden="true" />
+            <p><strong>LOCAL WORKSPACE</strong> Project indexes and layout state remain on this machine.</p>
+          </footer>
+        </section>
       </div>
 
-      {/* Open project button */}
-      <button
-        onClick={openDialog}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          padding: '12px 24px',
-          background: 'var(--accent)',
-          borderRadius: 0,
-          fontSize: 14, fontWeight: 600,
-          color: '#fff',
-          boxShadow: '0 0 20px var(--accent-glow)',
-          transition: 'transform 0.1s, box-shadow 0.1s',
-        }}
-        onMouseEnter={e => {
-          e.currentTarget.style.transform = 'translateY(-1px)'
-          e.currentTarget.style.boxShadow = '0 4px 24px var(--accent-glow)'
-        }}
-        onMouseLeave={e => {
-          e.currentTarget.style.transform = ''
-          e.currentTarget.style.boxShadow = '0 0 20px var(--accent-glow)'
-        }}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-        </svg>
-        Open Project
-      </button>
+      {creating && (
+        <div className="axiom-create__scrim" onClick={() => !createBusy && setCreating(false)}>
+          <div
+            className="axiom-create"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="axiom-create-title"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="axiom-create__head">
+              <span className="axiom-create__kicker">NEW PROJECT</span>
+              <h3 id="axiom-create-title">Create a model from scratch</h3>
+              <button className="axiom-create__close" onClick={() => setCreating(false)} aria-label="Cancel" disabled={createBusy}>×</button>
+            </div>
 
-      {/* Recent projects */}
-      {recentProjects.length > 0 && (
-        <div style={{ width: 420 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-dim)', marginBottom: 8, letterSpacing: '0.08em' }}>
-            RECENT
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {recentProjects.slice(0, 6).map(p => (
-              <button
-                key={p.id}
-                onClick={() => onOpenProject(p)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '10px 14px',
-                  background: 'var(--bg-surface)',
-                  border: '1px solid var(--border)',
-                  borderRadius: 0,
-                  textAlign: 'left',
-                  transition: 'border-color 0.15s, background 0.15s',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.borderColor = 'var(--accent)'
-                  e.currentTarget.style.background = 'var(--bg-raised)'
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = 'var(--border)'
-                  e.currentTarget.style.background = 'var(--bg-surface)'
-                }}
-              >
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{p.name}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>{p.rootPath}</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{timeAgo(p.openedAt)}</span>
-                  <button
-                    onClick={(e) => removeProject(e, p.id)}
-                    title="Remove from recents (deletes cached index)"
-                    style={{
-                      fontSize: 14, color: 'var(--text-dim)', padding: '0 2px',
-                      lineHeight: 1, opacity: 0.5,
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-                    onMouseLeave={e => (e.currentTarget.style.opacity = '0.5')}
-                  >×</button>
-                </div>
+            <label className="axiom-create__field">
+              <span>PROJECT NAME</span>
+              <input
+                autoFocus
+                value={newName}
+                onChange={event => { setNewName(event.target.value); setCreateError(null) }}
+                onKeyDown={event => { if (event.key === 'Enter' && canCreate) void confirmCreate() }}
+                placeholder="e.g. pose-engine"
+                spellCheck={false}
+              />
+            </label>
+
+            <label className="axiom-create__field">
+              <span>LOCATION</span>
+              <button type="button" className="axiom-create__location" onClick={() => void chooseLocation()}>
+                {newLocation
+                  ? <code title={newLocation}>{newLocation}</code>
+                  : <em>Choose a parent folder…</em>}
+                <span aria-hidden="true">⌕</span>
               </button>
-            ))}
+            </label>
+
+            {newLocation && safeName && (
+              <p className="axiom-create__preview">
+                Creates <code>{newLocation}{newLocation.includes('\\') ? '\\' : '/'}{safeName}</code>
+              </p>
+            )}
+
+            {createError && <div className="axiom-create__error" role="alert">{createError}</div>}
+
+            <div className="axiom-create__actions">
+              <button className="axiom-create__cancel" onClick={() => setCreating(false)} disabled={createBusy}>Cancel</button>
+              <button className="axiom-create__go" onClick={() => void confirmCreate()} disabled={!canCreate}>
+                {createBusy ? 'Creating…' : 'Create & Open'} <span aria-hidden="true">→</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
-
-      {/* Features */}
-      <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
-        {[
-          { icon: '⬡', title: 'Live Canvas', desc: 'Auto-syncs with every file save' },
-          { icon: '⟷', title: 'Agent Native', desc: 'MCP server on port 7743' },
-          { icon: '◎', title: 'Infinite Zoom', desc: 'INFRA → SERVICE → MODULE → FILE → SYMBOL' },
-        ].map(f => (
-          <div key={f.title} style={{
-            width: 140, padding: 14, textAlign: 'center',
-            background: 'var(--bg-surface)', borderRadius: 0, border: '1px solid var(--border)',
-          }}>
-            <div style={{ fontSize: 20, marginBottom: 6 }}>{f.icon}</div>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>{f.title}</div>
-            <div style={{ fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.5 }}>{f.desc}</div>
-          </div>
-        ))}
-      </div>
-    </div>
+    </main>
   )
 }
 
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts
-  const mins = Math.floor(diff / 60000)
+function ProjectDeckSignals({ status }: { status?: CommandDeckStatus }) {
+  if (!status) {
+    return <span className="axiom-launcher__deck-signals axiom-launcher__deck-signals--loading">READING MAP…</span>
+  }
+  if (!status.indexed) {
+    return <span className="axiom-launcher__deck-signals">NOT INDEXED</span>
+  }
+  const signals: Array<{ label: string; tone?: string }> = []
+  if (status.activeWork.length > 0) {
+    signals.push({
+      label: `${status.activeWork.length} AGENT${status.activeWork.length === 1 ? '' : 'S'} ACTIVE`,
+      tone: 'live',
+    })
+  }
+  if (status.unreviewedClaims > 0) {
+    signals.push({ label: `${status.unreviewedClaims} TO REVIEW`, tone: 'review' })
+  }
+  if (status.unexplained > 0) {
+    signals.push({ label: `${status.unexplained} UNEXPLAINED`, tone: 'attention' })
+  }
+  if (status.unexpected > 0) {
+    signals.push({ label: `${status.unexpected} DRIFT`, tone: 'attention' })
+  }
+  if (status.openPlans > 0) {
+    signals.push({ label: `${status.openPlans} OPEN PLAN${status.openPlans === 1 ? '' : 'S'}` })
+  }
+  if (status.pendingProposals > 0) {
+    signals.push({ label: `${status.pendingProposals} PROPOSAL${status.pendingProposals === 1 ? '' : 'S'}` })
+  }
+  if (signals.length === 0) {
+    signals.push({ label: `${status.systems} SYSTEMS · MAP CLEAN`, tone: 'clean' })
+  }
+  return (
+    <span className="axiom-launcher__deck-signals">
+      {signals.slice(0, 3).map(signal => (
+        <span
+          key={signal.label}
+          className={signal.tone
+            ? `axiom-launcher__deck-signal axiom-launcher__deck-signal--${signal.tone}`
+            : 'axiom-launcher__deck-signal'}
+        >
+          {signal.label}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+export function timeAgo(ts: number, now = Date.now()): string {
+  const diff = Math.max(0, now - ts)
+  const mins = Math.floor(diff / 60_000)
   if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.floor(hrs / 24)}d ago`
-}
-
-function AxiomHeroLogo() {
-  return (
-    <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{ margin: '0 auto 12px', display: 'block' }}>
-      <polygon points="32,4 60,18 60,46 32,60 4,46 4,18" fill="rgba(91,138,154,0.08)" stroke="rgba(91,138,154,0.4)" strokeWidth="1.5"/>
-      <polygon points="32,14 50,22 50,42 32,50 14,42 14,22" fill="rgba(91,138,154,0.05)" stroke="rgba(91,138,154,0.25)" strokeWidth="1"/>
-      <circle cx="32" cy="32" r="8" fill="rgba(91,138,154,0.3)" stroke="var(--accent)" strokeWidth="1.5"/>
-      <circle cx="32" cy="32" r="3" fill="var(--accent)"/>
-      {/* Spokes */}
-      {[[32,4],[60,18],[60,46],[32,60],[4,46],[4,18]].map(([x,y], i) => (
-        <line key={i} x1={32} y1={32} x2={x} y2={y} stroke="var(--accent)" strokeWidth="0.75" opacity="0.3"/>
-      ))}
-    </svg>
-  )
 }

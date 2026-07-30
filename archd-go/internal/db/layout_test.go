@@ -123,3 +123,72 @@ func TestFloorSystemContainmentUpdatesSemanticHierarchyAndDepth(t *testing.T) {
 }
 
 func stringPtr(value string) *string { return &value }
+
+// Interior compression is a persistent property of a container, distinct from
+// its own scale. It has to survive a round trip, and a client that predates it
+// must not be able to silently reset one that already exists.
+func TestFloorLayoutInteriorScaleRoundTrips(t *testing.T) {
+	sqlDB, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := UpsertWorkspace(sqlDB, Workspace{ID: "ws", Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertSystem(sqlDB, System{ID: "frame", WorkspaceID: "ws", Name: "Frame", Source: "user"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ApplyFloorLayoutBatch(sqlDB, "ws", []FloorLayout{{
+		NodeID: "frame", NodeType: "system",
+		Width: 620, Height: 420, Scale: 1, InteriorScale: 0.75,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	layouts, err := GetFloorLayouts(sqlDB, "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(layouts) != 1 || layouts[0].InteriorScale != 0.75 {
+		t.Fatalf("interior scale did not round trip: %#v", layouts)
+	}
+	// A frame's own scale and its interior scale must stay independent.
+	if layouts[0].Scale != 1 {
+		t.Fatalf("interior compression leaked into the frame's own scale: %#v", layouts[0])
+	}
+
+	// A legacy client omits the field entirely, which decodes as zero.
+	if _, err := ApplyFloorLayoutBatch(sqlDB, "ws", []FloorLayout{{
+		NodeID: "frame", NodeType: "system", Width: 620, Height: 420, Scale: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	layouts, err = GetFloorLayouts(sqlDB, "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layouts[0].InteriorScale != 1 {
+		t.Fatalf("omitted interior scale = %v, want the normalized 1", layouts[0].InteriorScale)
+	}
+}
+
+func TestFloorLayoutRejectsNegativeInteriorScale(t *testing.T) {
+	sqlDB, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := UpsertWorkspace(sqlDB, Workspace{ID: "ws", Name: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertSystem(sqlDB, System{ID: "frame", WorkspaceID: "ws", Name: "Frame", Source: "user"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyFloorLayoutBatch(sqlDB, "ws", []FloorLayout{{
+		NodeID: "frame", NodeType: "system",
+		Width: 620, Height: 420, Scale: 1, InteriorScale: -0.5,
+	}}); err == nil {
+		t.Fatal("expected a negative interior scale to be rejected")
+	}
+}

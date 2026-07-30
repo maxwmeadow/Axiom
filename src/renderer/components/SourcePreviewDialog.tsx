@@ -117,9 +117,9 @@ export function SourcePreviewDialog({ fileId, workspaceId, symbol, onClose }: So
       }}
       onWheel={event => event.stopPropagation()}
     >
-      <section className="source-preview-dialog glass-dialog" role="dialog" aria-modal="true" aria-label={`${symbol.name} in ${title}`}>
+      <section className="source-preview-dialog" role="dialog" aria-modal="true" aria-label={`${symbol.name} in ${title}`}>
         <header className="source-preview-header">
-          <div style={{ minWidth: 0 }}>
+          <div className="source-preview-heading">
             <div className="source-preview-path" title={title}>{title}</div>
             <div className="source-preview-location">
               {symbol.kind} {symbol.name} · {range.start === range.end ? `line ${range.start}` : `lines ${range.start}–${range.end}`}

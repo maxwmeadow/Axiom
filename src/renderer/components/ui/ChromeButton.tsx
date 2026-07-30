@@ -1,13 +1,27 @@
-import type { PropsWithChildren } from 'react'
+import type { AriaAttributes, PropsWithChildren } from 'react'
 
 type ChromeButtonProps = PropsWithChildren<{
   onClick: () => void
   label: string
+  visualLabel?: string
   shortcut?: string
   active?: boolean
+  ariaControls?: string
+  ariaExpanded?: boolean
+  ariaHasPopup?: AriaAttributes['aria-haspopup']
 }>
 
-export function ChromeButton({ onClick, label, shortcut, active = false, children }: ChromeButtonProps) {
+export function ChromeButton({
+  onClick,
+  label,
+  visualLabel,
+  shortcut,
+  active = false,
+  ariaControls,
+  ariaExpanded,
+  ariaHasPopup,
+  children,
+}: ChromeButtonProps) {
   return (
     <button
       type="button"
@@ -15,8 +29,12 @@ export function ChromeButton({ onClick, label, shortcut, active = false, childre
       onClick={onClick}
       title={shortcut ? `${label} (${shortcut})` : label}
       aria-label={label}
+      aria-controls={ariaControls}
+      aria-expanded={ariaExpanded}
+      aria-haspopup={ariaHasPopup}
     >
       {children}
+      <span className="axiom-chrome-button__label">{visualLabel ?? label}</span>
       {shortcut && <kbd className="axiom-chrome-button__shortcut">{shortcut}</kbd>}
     </button>
   )

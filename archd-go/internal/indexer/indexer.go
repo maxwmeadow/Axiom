@@ -8,11 +8,11 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -42,11 +42,22 @@ var skipDirs = map[string]bool{
 	"target":       true, // Rust/Maven
 }
 
+var livingTraceCounter atomic.Uint64
+
+func nextLivingTraceID() string {
+	return fmt.Sprintf("L%06d", livingTraceCounter.Add(1))
+}
+
 var supportedExts = map[string]bool{
 	".ts": true, ".tsx": true, ".js": true, ".mjs": true,
 	".jsx": true, ".py": true, ".go": true, ".rs": true, ".cs": true,
 	".cpp": true, ".cc": true, ".cxx": true, ".hpp": true, ".hxx": true, ".rb": true, ".java": true,
 }
+
+// ClassifierVersion invalidates persisted inferred systems when the membership
+// contract changes. Version 3 restores authored filename evidence (but never
+// directory adjacency) and rebuilds persisted structural evidence before use.
+const ClassifierVersion = 3
 
 // IndexRoot walks the root directory and indexes all source files.
 // After parsing, runs Louvain clustering and assigns files to cluster systems.
@@ -54,45 +65,8 @@ var supportedExts = map[string]bool{
 func IndexRoot(sqlDB *sql.DB, h *hub.Hub, root db.Root, ignoredPaths []string) error {
 	log.Printf("[indexer] IndexRoot called: root=%s ignoredPaths=%v", root.Path, ignoredPaths)
 
-	// Build a set of normalised absolute directory paths to skip.
-	ignoredAbsDirs := make(map[string]bool)
-	for _, p := range ignoredPaths {
-		native := filepath.FromSlash(p)
-		native = strings.TrimSuffix(native, string(filepath.Separator)+"**")
-		native = strings.TrimSuffix(native, "/**")
-		clean := filepath.Clean(native)
-		if clean != "" && clean != "." {
-			key := strings.ToLower(clean)
-			ignoredAbsDirs[key] = true
-			log.Printf("[indexer] will ignore: %q (key=%q)", p, key)
-		}
-	}
-	isIgnored := func(absPath string) bool {
-		key := strings.ToLower(absPath)
-		hit := ignoredAbsDirs[key]
-		if hit {
-			log.Printf("[indexer] skipping dir: %s", absPath)
-		}
-		return hit
-	}
-
-	// Collect all candidate file paths first so we can report progress.
-	var paths []string
-	if err := filepath.WalkDir(root.Path, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable dirs
-		}
-		if d.IsDir() {
-			if skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".") || isIgnored(path) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if supportedExts[strings.ToLower(filepath.Ext(path))] {
-			paths = append(paths, path)
-		}
-		return nil
-	}); err != nil {
+	paths, err := collectSourcePaths(root, ignoredPaths)
+	if err != nil {
 		return err
 	}
 
@@ -147,12 +121,13 @@ func IndexRoot(sqlDB *sql.DB, h *hub.Hub, root db.Root, ignoredPaths []string) e
 		log.Printf("indexer: build call graph: %v", err)
 	}
 
-	// Cluster files by import topology and assign to systems.
-	if err := clusterAndAssign(sqlDB, root); err != nil {
+	// Cluster files by import topology and assign to systems. The initial
+	// index establishes the baseline, so its systems are not drift.
+	if err := clusterAndAssign(sqlDB, root, false); err != nil {
 		log.Printf("indexer: cluster: %v", err)
 	}
 
-	if err := db.MarkRootIndexed(sqlDB, root.ID); err != nil {
+	if err := db.MarkRootIndexed(sqlDB, root.ID, ClassifierVersion); err != nil {
 		log.Printf("indexer: mark indexed: %v", err)
 	}
 
@@ -160,15 +135,129 @@ func IndexRoot(sqlDB *sql.DB, h *hub.Hub, root db.Root, ignoredPaths []string) e
 	return nil
 }
 
-// ClusterOnly runs just the clustering pass without re-parsing any files.
-// Used on project re-open when the files are already indexed but no systems exist yet.
+// ClusterOnly rebuilds derived semantic evidence from the already-indexed
+// files, then runs classification. Persisted imports/calls may have been
+// produced by an older resolver, so classifying them without this refresh can
+// turn a connected project into an arbitrary graph of isolated files.
 func ClusterOnly(sqlDB *sql.DB, root db.Root) error {
-	return clusterAndAssign(sqlDB, root)
+	if err := rebuildSemanticEvidence(sqlDB, root); err != nil {
+		return fmt.Errorf("rebuild semantic evidence: %w", err)
+	}
+	// A classifier-contract migration reshapes systems wholesale. That is a
+	// change in how Axiom reads the code, not a change in the code, so it must
+	// never appear in the user's delta as if their agents did it.
+	if err := clusterAndAssign(sqlDB, root, false); err != nil {
+		return err
+	}
+	return db.MarkRootClassifierVersion(sqlDB, root.ID, ClassifierVersion)
+}
+
+func rebuildSemanticEvidence(sqlDB *sql.DB, root db.Root) error {
+	if err := buildImportDependencies(sqlDB, root); err != nil {
+		return err
+	}
+	return rebuildAllCallGraph(sqlDB, root)
+}
+
+func rebuildAllCallGraph(sqlDB *sql.DB, root db.Root) error {
+	files, err := db.GetFilesByRoot(sqlDB, root.ID)
+	if err != nil {
+		return err
+	}
+	var rawCalls sync.Map
+	for _, file := range files {
+		result, err := parser.ParseFile(file.Path, file.RelPath)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", file.RelPath, err)
+		}
+		// Store empty call sets too, so evidence removed since the old index is
+		// removed from call_graph rather than surviving the migration.
+		rawCalls.Store(file.ID, result.Calls)
+	}
+	return buildCallGraph(sqlDB, root, &rawCalls)
+}
+
+func projectFileDependencies(sqlDB *sql.DB, workspaceID string) ([]db.Dependency, error) {
+	all, err := db.GetDependencies(sqlDB, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]db.Dependency, 0, len(all))
+	for _, dep := range all {
+		if dep.SrcType == "file" && dep.DstType == "file" && dep.DependencyType == "IMPORTS" {
+			result = append(result, dep)
+		}
+	}
+	return result, nil
+}
+
+func symbolNameSet(symbols []db.Symbol) map[string]struct{} {
+	result := make(map[string]struct{}, len(symbols))
+	for _, symbol := range symbols {
+		result[symbol.Name] = struct{}{}
+	}
+	return result
+}
+
+func symbolResolutionChanged(before, after []db.Symbol) bool {
+	left := symbolNameSet(before)
+	right := symbolNameSet(after)
+	if len(left) != len(right) {
+		return true
+	}
+	for name := range left {
+		if _, exists := right[name]; !exists {
+			return true
+		}
+	}
+	return false
+}
+
+func symbolHashesByName(symbols []db.Symbol) map[string][]string {
+	result := make(map[string][]string)
+	for _, symbol := range symbols {
+		if symbol.Kind != "function" && symbol.Kind != "method" {
+			continue
+		}
+		result[symbol.Name] = append(result[symbol.Name], symbol.BodyHash)
+	}
+	for name := range result {
+		sort.Strings(result[name])
+	}
+	return result
+}
+
+// changedSymbolTouches returns stable file+symbol identities for functions
+// whose definitions actually changed. Relationship updates use this evidence
+// instead of promoting every retained call after any file write.
+func changedSymbolTouches(fileID string, before, after []db.Symbol, contentChanged bool) map[string]struct{} {
+	left := symbolHashesByName(before)
+	right := symbolHashesByName(after)
+	names := make(map[string]struct{}, len(left)+len(right))
+	for name := range left {
+		names[name] = struct{}{}
+	}
+	for name := range right {
+		names[name] = struct{}{}
+	}
+	result := make(map[string]struct{})
+	for name := range names {
+		if !slices.Equal(left[name], right[name]) {
+			result[touchedSymbolKey(fileID, name)] = struct{}{}
+		}
+	}
+	// Calls outside a named function carry an empty CallerSymbol. They have no
+	// symbol body to hash, so a real file edit is the narrowest available proof.
+	if contentChanged {
+		result[touchedSymbolKey(fileID, "")] = struct{}{}
+	}
+	return result
 }
 
 // ReindexFile re-parses a single file and updates its symbols and edges.
 // Called by the watcher on file change events.
 func ReindexFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error {
+	traceID := nextLivingTraceID()
 	relPath, _ := filepath.Rel(root.Path, absPath)
 	relPath = filepath.ToSlash(relPath)
 	existing, _ := buildExistingMap(sqlDB, root.ID)
@@ -180,21 +269,72 @@ func ReindexFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error 
 		prev = &p
 		prevSyms, _ = db.GetSymbolsByFile(sqlDB, p.ID)
 	}
+	beforeDeps, err := projectFileDependencies(sqlDB, root.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	beforeCalls, err := db.GetCallEdgesByRoot(sqlDB, root.ID)
+	if err != nil {
+		return err
+	}
 
 	if err := indexOneFile(sqlDB, root, relPath, absPath, existing, nil); err != nil {
 		return err
 	}
-	// Rebuild dependencies for this file only
-	if err := rebuildDependenciesForFile(sqlDB, root, relPath); err != nil {
-		log.Printf("indexer: rebuild dependencies for %s: %v", relPath, err)
-	}
-
 	file, err := db.GetFileByRelPath(sqlDB, root.ID, relPath)
 	if err != nil || file == nil {
 		return err
 	}
+	newSyms, _ := db.GetSymbolsByFile(sqlDB, file.ID)
+	actor, contentChanged := recordActivity(sqlDB, root.WorkspaceID, prev, prevSyms, file, absPath)
+	resolutionChanged := prev == nil || symbolResolutionChanged(prevSyms, newSyms)
 
-	recordActivity(sqlDB, root.WorkspaceID, prev, prevSyms, file, absPath)
+	// A new file can satisfy imports that were previously external/unresolved.
+	// Existing-file edits only need their own outgoing import set rebuilt.
+	if prev == nil {
+		if err := buildImportDependencies(sqlDB, root); err != nil {
+			log.Printf("indexer: rebuild project dependencies after creating %s: %v", relPath, err)
+		}
+	} else if err := rebuildDependenciesForFile(sqlDB, root, relPath); err != nil {
+		log.Printf("indexer: rebuild dependencies for %s: %v", relPath, err)
+	}
+
+	// Adding/removing a symbol can change resolution for callers anywhere in
+	// the project. A body-only change keeps topology stable and only requires
+	// the edited caller's raw call sites to be refreshed.
+	if resolutionChanged {
+		if err := rebuildAllCallGraph(sqlDB, root); err != nil {
+			log.Printf("indexer: rebuild project call graph after %s: %v", relPath, err)
+		}
+	} else if err := rebuildCallGraphForFile(sqlDB, root, *file); err != nil {
+		log.Printf("indexer: rebuild call graph for %s: %v", relPath, err)
+	}
+
+	afterDeps, err := projectFileDependencies(sqlDB, root.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	afterCalls, err := db.GetCallEdgesByRoot(sqlDB, root.ID)
+	if err != nil {
+		return err
+	}
+	touchedSymbols := changedSymbolTouches(file.ID, prevSyms, newSyms, contentChanged)
+	relationships := diffRelationshipChanges(
+		beforeDeps, afterDeps, beforeCalls, afterCalls, touchedSymbols,
+	)
+	for i := range relationships {
+		relationships[i].TraceID = traceID
+		relationships[i].OriginID = file.ID
+	}
+	touchedNames := make([]string, 0, len(touchedSymbols))
+	for key := range touchedSymbols {
+		_, name, _ := strings.Cut(key, "\x00")
+		if name == "" {
+			name = "<module>"
+		}
+		touchedNames = append(touchedNames, name)
+	}
+	sort.Strings(touchedNames)
 
 	// Reconcile planned UML elements against the new reality — this is how
 	// the user's drawn boxes turn green as the agent builds them.
@@ -210,19 +350,137 @@ func ReindexFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error 
 	if norm, err := normalizedChurn(sqlDB, root.WorkspaceID, file.ID); err == nil {
 		file.ChurnScore = norm
 	}
+	change := "updated"
+	if prev == nil {
+		change = "created"
+	}
+
+	// Journal the same facts we are about to broadcast, so the Morning Delta
+	// can show this change to a user who was not watching. A pure no-op save
+	// (unchanged content) is not an architectural fact and is not journaled.
+	if actor == "" {
+		actor = activity.ActorFor(root.WorkspaceID)
+	}
+	if contentChanged || prev == nil {
+		labeler := newSystemLabeler(sqlDB, root)
+		kind := db.EventFileUpdated
+		if prev == nil {
+			kind = db.EventFileCreated
+		}
+		journalFileChange(sqlDB, root, labeler, file, kind, actor, traceID)
+		journalRelationships(sqlDB, root, labeler, relationships, actor, traceID)
+	}
+
 	h.BroadcastPatch(map[string]any{
-		"type":    "file:updated",
-		"payload": file,
+		"type": "file:updated",
+		"payload": FileUpdatePatch{
+			File: file, Change: change, Animate: contentChanged || prev == nil, TraceID: traceID,
+		},
+	})
+	log.Printf(
+		"[living-flow] stage=backend-save trace=%s file=%s change=%s contentChanged=%t touched=%v relationships=%d",
+		traceID, relPath, change, contentChanged, touchedNames, len(relationships),
+	)
+	for _, relationship := range relationships {
+		log.Printf(
+			"[living-flow] stage=backend-emit trace=%s origin=%s relationship=%s/%s semantic=%s->%s caller=%q callee=%q animate=%t",
+			traceID, relationship.OriginID, relationship.Relationship, relationship.Change,
+			relationship.Src, relationship.Dst,
+			relationship.CallerSymbol, relationship.CalleeSymbol, relationship.Animate,
+		)
+		h.BroadcastPatch(map[string]any{
+			"type": "relationship:changed", "payload": relationship,
+		})
+	}
+	return nil
+}
+
+// RemoveFile removes one watcher-deleted source file and broadcasts the
+// relationship exits before the file tombstone, allowing the renderer to draw
+// red directional pulses while both endpoints still exist on the Floor.
+func RemoveFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error {
+	traceID := nextLivingTraceID()
+	relPath, _ := filepath.Rel(root.Path, absPath)
+	relPath = filepath.ToSlash(relPath)
+	file, err := db.GetFileByRelPath(sqlDB, root.ID, relPath)
+	if err != nil || file == nil {
+		return err
+	}
+
+	beforeDeps, err := projectFileDependencies(sqlDB, root.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	beforeCalls, err := db.GetCallEdgesByRoot(sqlDB, root.ID)
+	if err != nil {
+		return err
+	}
+
+	// Capture labels while the file and its membership still exist — the
+	// journal has to be able to describe what was lost after it is gone.
+	labeler := newSystemLabeler(sqlDB, root)
+	lostSystemID, lostSystemName := labeler.systemOf(file.ID)
+
+	if err := db.DeleteFileByID(sqlDB, file.ID); err != nil {
+		return err
+	}
+	if err := buildImportDependencies(sqlDB, root); err != nil {
+		return fmt.Errorf("rebuild imports after deleting %s: %w", relPath, err)
+	}
+	if err := rebuildAllCallGraph(sqlDB, root); err != nil {
+		return fmt.Errorf("rebuild calls after deleting %s: %w", relPath, err)
+	}
+	afterDeps, err := projectFileDependencies(sqlDB, root.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	afterCalls, err := db.GetCallEdgesByRoot(sqlDB, root.ID)
+	if err != nil {
+		return err
+	}
+
+	relationships := diffRelationshipChanges(
+		beforeDeps, afterDeps, beforeCalls, afterCalls, nil,
+	)
+	log.Printf(
+		"[living-flow] stage=backend-delete trace=%s file=%s relationships=%d",
+		traceID, relPath, len(relationships),
+	)
+	for i := range relationships {
+		relationships[i].TraceID = traceID
+		relationships[i].OriginID = file.ID
+	}
+
+	actor := activity.ActorFor(root.WorkspaceID)
+	journalRelationships(sqlDB, root, labeler, relationships, actor, traceID)
+	journalFileDeleted(sqlDB, root, lostSystemID, lostSystemName, file, actor, traceID)
+
+	for _, relationship := range relationships {
+		log.Printf(
+			"[living-flow] stage=backend-emit trace=%s origin=%s relationship=%s/%s semantic=%s->%s caller=%q callee=%q animate=%t",
+			traceID, relationship.OriginID, relationship.Relationship, relationship.Change,
+			relationship.Src, relationship.Dst,
+			relationship.CallerSymbol, relationship.CalleeSymbol, relationship.Animate,
+		)
+		h.BroadcastPatch(map[string]any{
+			"type": "relationship:changed", "payload": relationship,
+		})
+	}
+	h.BroadcastPatch(map[string]any{
+		"type": "file:deleted",
+		"payload": FileDeletePatch{
+			ID: file.ID, RelPath: file.RelPath, TraceID: traceID,
+		},
 	})
 	return nil
 }
 
 // recordActivity turns one watcher-detected save into a weighted edit burst
 // (see internal/activity). No-op saves (unchanged content hash) are dropped.
-func recordActivity(sqlDB *sql.DB, workspaceID string, prev *db.File, prevSyms []db.Symbol, file *db.File, absPath string) {
+func recordActivity(sqlDB *sql.DB, workspaceID string, prev *db.File, prevSyms []db.Symbol, file *db.File, absPath string) (actor string, contentChanged bool) {
 	raw, err := os.ReadFile(absPath)
 	if err != nil {
-		return
+		return "", false
 	}
 	sum := sha256.Sum256(raw)
 	hash := hex.EncodeToString(sum[:])
@@ -234,7 +492,7 @@ func recordActivity(sqlDB *sql.DB, workspaceID string, prev *db.File, prevSyms [
 		prevScore, prevAt = prev.ActivityScore, prev.ActivityAt
 	}
 	if hash == prevHash {
-		return // formatter/editor no-op save — not activity
+		return "", false // formatter/editor no-op save — not activity
 	}
 
 	newSyms, _ := db.GetSymbolsByFile(sqlDB, file.ID)
@@ -243,21 +501,22 @@ func recordActivity(sqlDB *sql.DB, workspaceID string, prev *db.File, prevSyms [
 	if linesDelta < 0 {
 		linesDelta = -linesDelta
 	}
-	actor := activity.ActorFor(workspaceID)
+	actor = activity.ActorFor(workspaceID)
 	weight := activity.Weight(linesDelta, symDelta, true, actor)
 
 	newScore, now, err := activity.RecordBurst(sqlDB, workspaceID, file.ID, actor, weight, linesDelta, symDelta, prevScore, prevAt)
 	if err != nil {
 		log.Printf("indexer: record activity for %s: %v", file.RelPath, err)
-		return
+		return actor, true
 	}
 	if err := db.UpdateFileActivity(sqlDB, file.ID, newScore, now, hash); err != nil {
 		log.Printf("indexer: persist activity for %s: %v", file.RelPath, err)
-		return
+		return actor, true
 	}
 	file.ActivityScore, file.ActivityAt, file.ContentHash = newScore, now, hash
 	log.Printf("[activity] %s burst: actor=%s weight=%.2f (Δlines=%d Δsymbols=%d) score=%.2f",
 		file.RelPath, actor, weight, linesDelta, symDelta, newScore)
+	return actor, true
 }
 
 // diffSymbols counts added, removed, and moved symbols between two parses.
@@ -459,6 +718,18 @@ func aggregateVarRefs(fileID string, refs []parser.VarRef) []db.VarRefRow {
 //     tiebreaker. If imports narrow it to one file, record that. Otherwise skip to avoid noise.
 //
 // This deliberately avoids language-specific logic so it extends to any language Axiom supports.
+func rebuildCallGraphForFile(sqlDB *sql.DB, root db.Root, file db.File) error {
+	result, err := parser.ParseFile(file.Path, file.RelPath)
+	if err != nil {
+		return err
+	}
+	var rawCalls sync.Map
+	// Store even an empty slice: removing the final call from a function must
+	// clear the previous caller rows and emit a red relationship delta.
+	rawCalls.Store(file.ID, result.Calls)
+	return buildCallGraph(sqlDB, root, &rawCalls)
+}
+
 func buildCallGraph(sqlDB *sql.DB, root db.Root, rawCallsMap *sync.Map) error {
 	rawCalls := make(map[string][]parser.RawCall)
 	rawCallsMap.Range(func(k, v any) bool {
@@ -586,9 +857,6 @@ func buildCallGraph(sqlDB *sql.DB, root db.Root, rawCallsMap *sync.Map) error {
 			}
 		}
 
-		if len(counts) == 0 {
-			continue
-		}
 		callTraces := make([]db.CallEdge, 0, len(counts))
 		for key, count := range counts {
 			callTraces = append(callTraces, db.CallEdge{
@@ -616,26 +884,149 @@ const minClusterFiles = 4
 // Files are assigned at whatever level recursion stops.
 const maxClusterDepth = 4
 
+// liveClusterMinFiles keeps a lone new file visible at the Floor root. One
+// file is not enough evidence for an architectural system; the next write
+// burst can classify it once semantic relationship evidence exists.
+const liveClusterMinFiles = 2
+
+type clusterPlan struct {
+	systems            map[string]db.System
+	assignments        map[string]*string
+	protectedSystemIDs map[string]struct{}
+}
+
+func newClusterPlan(files []db.File, protectedSystemIDs map[string]struct{}) *clusterPlan {
+	assignments := make(map[string]*string, len(files))
+	for _, file := range files {
+		assignments[file.ID] = nil
+	}
+	return &clusterPlan{
+		systems:            make(map[string]db.System),
+		assignments:        assignments,
+		protectedSystemIDs: protectedSystemIDs,
+	}
+}
+
+func (p *clusterPlan) assign(files []db.File, systemID *string) int {
+	for _, file := range files {
+		p.assignments[file.ID] = systemID
+	}
+	if systemID == nil {
+		return 0
+	}
+	return len(files)
+}
+
+func stableClusterSystemID(workspaceID string, parentID *string, name string) string {
+	parent := "root"
+	if parentID != nil {
+		parent = *parentID
+	}
+	canonical := strings.ToLower(strings.TrimSpace(name))
+	sum := sha256.Sum256([]byte(workspaceID + "\x00" + parent + "\x00" + canonical))
+	return "cluster_" + hex.EncodeToString(sum[:12])
+}
+
+// clusterScope separates classifier-owned reality from authored intent.
+// A file is eligible only when it is unassigned or every system in its
+// ancestry is classifier-owned. A cluster nested under a user/agent system is
+// protected together with that authored boundary.
+func clusterScope(files []db.File, systems []db.System) (managed []db.File, pruneableSystemIDs map[string]struct{}) {
+	byID := make(map[string]db.System, len(systems))
+	for _, system := range systems {
+		byID[system.ID] = system
+	}
+
+	autoMemo := make(map[string]bool, len(systems))
+	var isAutoSystem func(string, map[string]struct{}) bool
+	isAutoSystem = func(id string, visiting map[string]struct{}) bool {
+		if value, ok := autoMemo[id]; ok {
+			return value
+		}
+		system, ok := byID[id]
+		if !ok || (system.Source != "cluster" && system.Source != "directory") {
+			autoMemo[id] = false
+			return false
+		}
+		if _, cycle := visiting[id]; cycle {
+			autoMemo[id] = false
+			return false
+		}
+		if system.ParentID == nil {
+			autoMemo[id] = true
+			return true
+		}
+		visiting[id] = struct{}{}
+		auto := isAutoSystem(*system.ParentID, visiting)
+		delete(visiting, id)
+		autoMemo[id] = auto
+		return auto
+	}
+
+	pruneableSystemIDs = make(map[string]struct{})
+	for _, system := range systems {
+		if isAutoSystem(system.ID, make(map[string]struct{})) {
+			pruneableSystemIDs[system.ID] = struct{}{}
+		}
+	}
+
+	for _, file := range files {
+		if file.SystemID == nil || isAutoSystem(*file.SystemID, make(map[string]struct{})) {
+			managed = append(managed, file)
+		}
+	}
+	return managed, pruneableSystemIDs
+}
+
+// ClusterLive runs only when a watcher burst introduced unclassified files and
+// there is enough evidence to form a useful group. Ordinary edits never
+// reshuffle an already-classified architecture.
+func ClusterLive(sqlDB *sql.DB, root db.Root) (bool, error) {
+	files, err := db.GetFilesByRoot(sqlDB, root.ID)
+	if err != nil {
+		return false, err
+	}
+	systems, err := db.GetSystems(sqlDB, root.WorkspaceID)
+	if err != nil {
+		return false, err
+	}
+	managed, _ := clusterScope(files, systems)
+	hasUnclassified := false
+	for _, file := range managed {
+		if file.SystemID == nil {
+			hasUnclassified = true
+			break
+		}
+	}
+	if !hasUnclassified || len(managed) < liveClusterMinFiles {
+		return false, nil
+	}
+	// Live re-clustering happens because real new code arrived, so a system
+	// born here is genuine architectural drift worth reviewing.
+	if err := clusterAndAssign(sqlDB, root, true); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // clusterAndAssign runs hierarchical multi-signal clustering on the indexed files.
 // It builds TF-IDF vectors and git co-change scores once, then recursively
 // subdivides large clusters using all signals combined.
-func clusterAndAssign(sqlDB *sql.DB, root db.Root) error {
+// journalDrift is false for baseline and migration passes, which reshape
+// systems wholesale for reasons that have nothing to do with the user's code.
+func clusterAndAssign(sqlDB *sql.DB, root db.Root, journalDrift bool) error {
 	log.Printf("[cluster] clusterAndAssign START workspace=%s root=%s", root.WorkspaceID, root.Path)
-
-	if err := db.DeleteSystemsBySource(sqlDB, root.WorkspaceID, "cluster"); err != nil {
-		return fmt.Errorf("delete stale clusters: %w", err)
-	}
-	log.Printf("[cluster] deleted stale cluster systems")
 
 	files, err := db.GetFilesByRoot(sqlDB, root.ID)
 	if err != nil {
 		return err
 	}
-	log.Printf("[cluster] got %d files for root", len(files))
-	if len(files) == 0 {
-		log.Printf("[cluster] no files — skipping clustering")
-		return nil
+	systems, err := db.GetSystems(sqlDB, root.WorkspaceID)
+	if err != nil {
+		return err
 	}
+	managedFiles, pruneableSystemIDs := clusterScope(files, systems)
+	log.Printf("[cluster] got %d files for root (%d classifier-managed)", len(files), len(managedFiles))
 
 	dependencies, err := db.GetDependencies(sqlDB, root.WorkspaceID)
 	if err != nil {
@@ -651,57 +1042,86 @@ func clusterAndAssign(sqlDB *sql.DB, root db.Root) error {
 	}
 	var tfidf map[string]cluster.FileVec
 	if fileSymbols != nil {
-		tfidf = cluster.BuildTFIDF(files, fileSymbols)
+		tfidf = cluster.BuildTFIDF(managedFiles, fileSymbols)
 		log.Printf("[cluster] TF-IDF built for %d files", len(tfidf))
 	} else {
 		log.Printf("[cluster] TF-IDF disabled (no symbols)")
 	}
 
 	// Build co-change matrix from git history (skipped gracefully if git unavailable).
-	cochange := cluster.BuildCochange(root.Path, files)
+	cochange := cluster.BuildCochange(root.Path, managedFiles)
 	log.Printf("[cluster] co-change matrix: %d pairs", len(cochange))
 
 	// Sample first few file paths for debugging.
 	sampleN := 5
-	if len(files) < sampleN {
-		sampleN = len(files)
+	if len(managedFiles) < sampleN {
+		sampleN = len(managedFiles)
 	}
 	for i := 0; i < sampleN; i++ {
-		log.Printf("[cluster]   sample file[%d]: %s", i, files[i].RelPath)
+		log.Printf("[cluster]   sample file[%d]: %s", i, managedFiles[i].RelPath)
 	}
 
 	input := cluster.ClusterInput{
-		Files:        files,
+		Files:        managedFiles,
 		Dependencies: dependencies,
 		TFIDF:        tfidf,
 		Cochange:     cochange,
 	}
 
-	assigned, err := clusterLevel(sqlDB, root, input, nil, map[string]struct{}{}, 0)
+	protectedSystemIDs := make(map[string]struct{})
+	for _, system := range systems {
+		if _, pruneable := pruneableSystemIDs[system.ID]; !pruneable {
+			protectedSystemIDs[system.ID] = struct{}{}
+		}
+	}
+	plan := newClusterPlan(managedFiles, protectedSystemIDs)
+	assigned, err := clusterLevel(plan, root, input, nil, map[string]struct{}{}, 0)
 	if err != nil {
 		return err
 	}
-	log.Printf("[cluster] clusterAndAssign DONE: %d/%d files assigned to systems", assigned, len(files))
+
+	plannedSystems := make([]db.System, 0, len(plan.systems))
+	for _, system := range plan.systems {
+		plannedSystems = append(plannedSystems, system)
+		delete(pruneableSystemIDs, system.ID)
+	}
+	sort.Slice(plannedSystems, func(i, j int) bool {
+		if plannedSystems[i].Depth != plannedSystems[j].Depth {
+			return plannedSystems[i].Depth < plannedSystems[j].Depth
+		}
+		if plannedSystems[i].Name != plannedSystems[j].Name {
+			return plannedSystems[i].Name < plannedSystems[j].Name
+		}
+		return plannedSystems[i].ID < plannedSystems[j].ID
+	})
+
+	assignments := make([]db.FileSystemAssignment, 0, len(plan.assignments))
+	for fileID, systemID := range plan.assignments {
+		assignments = append(assignments, db.FileSystemAssignment{FileID: fileID, SystemID: systemID})
+	}
+	sort.Slice(assignments, func(i, j int) bool { return assignments[i].FileID < assignments[j].FileID })
+
+	staleSystemIDs := make([]string, 0, len(pruneableSystemIDs))
+	for id := range pruneableSystemIDs {
+		staleSystemIDs = append(staleSystemIDs, id)
+	}
+	sort.Strings(staleSystemIDs)
+
+	if err := db.ApplyClusterPlan(sqlDB, root.WorkspaceID, plannedSystems, assignments, staleSystemIDs); err != nil {
+		return fmt.Errorf("apply cluster plan: %w", err)
+	}
+	if journalDrift {
+		journalSystemPlan(sqlDB, root, systems, plannedSystems, staleSystemIDs)
+	}
+	log.Printf("[cluster] clusterAndAssign DONE: %d/%d managed files assigned, %d stable systems, %d stale removed",
+		assigned, len(managedFiles), len(plannedSystems), len(staleSystemIDs))
 	return nil
 }
 
-// clusterLevel is the three-tier hierarchical clustering entry point.
-//
-// Tier 1 — Directory structure: if files span multiple non-trivial directories,
-//
-//	use directory as the primary grouping (most reliable signal).
-//
-// Tier 2 — Naming prefix: within a flat directory, group by CamelCase/snake_case
-//
-//	filename prefix. Residuals are assigned to the nearest group via TF-IDF.
-//
-// Tier 3 — Louvain fallback: when neither directory nor naming gives structure,
-//
-//	run multi-signal Louvain (TF-IDF + imports + co-change).
-//
-// TFIDF and Cochange are built once at the top level and passed through all
-// recursive calls unchanged; only Files is narrowed at each level.
-func clusterLevel(sqlDB *sql.DB, root db.Root, input cluster.ClusterInput, parentID *string, ancestorNames map[string]struct{}, depth int) (int, error) {
+// clusterLevel recursively discovers semantic communities from dependency
+// topology, symbol similarity, and git co-change. Filesystem directories are
+// deliberately absent: moving files cannot alter architectural membership.
+func clusterLevel(plan *clusterPlan, root db.Root, input cluster.ClusterInput, parentID *string, ancestorNames map[string]struct{}, depth int) (int, error) {
 	files := input.Files
 	if len(files) == 0 {
 		return 0, nil
@@ -712,85 +1132,15 @@ func clusterLevel(sqlDB *sql.DB, root db.Root, input cluster.ClusterInput, paren
 	// Too small to subdivide or at depth cap — assign directly to parent.
 	if (len(files) < minClusterFiles && parentID != nil) || depth >= maxClusterDepth {
 		log.Printf("[cluster] depth=%d: too small (%d files) or at depth cap — assigning directly to parent", depth, len(files))
-		return assignAll(sqlDB, files, parentID)
+		return assignAll(plan, files, parentID)
 	}
 
-	// ── Tier 1: Directory structure ───────────────────────────────────────────
-	dirGroups := groupByDirectory(files)
-	log.Printf("[cluster] depth=%d: dir groups=%d meaningful=%v", depth, len(dirGroups), isMeaningfulDirSplit(dirGroups))
-	if isMeaningfulDirSplit(dirGroups) {
-		// Merge directories that share the same base name (e.g. src/auth/ and
-		// lib/auth/ both become "auth"). This is correct — they belong together.
-		// However if ALL directories collapse to the same base name (e.g. every
-		// path ends in /Editor/), len(named)==1 and we have no new structure —
-		// fall through to naming/Louvain instead of creating a wasteful same-name chain.
-		named := make(map[string][]db.File, len(dirGroups))
-		for dir, members := range dirGroups {
-			named[dirBaseName(dir)] = append(named[dirBaseName(dir)], members...)
-		}
-		if len(named) >= 2 {
-			log.Printf("[cluster] depth=%d dir-split: %d groups from %d files", depth, len(named), len(files))
-			return applyGroupClustering(sqlDB, root, named, input, parentID, ancestorNames, depth)
-		}
-		log.Printf("[cluster] depth=%d: dir names collapsed to %d unique base names — falling through", depth, len(named))
-		// All directories share the same base name — fall through.
-	}
-
-	// ── Tier 2: Naming prefix ─────────────────────────────────────────────────
-	prefixGroups, residuals := groupByPrefix(files)
-	if len(prefixGroups) >= 2 {
-		// Assign each residual to the TF-IDF nearest prefix group (or parent if none).
-		for _, rf := range residuals {
-			if g := nearestPrefixGroup(rf, prefixGroups, input.TFIDF); g != "" {
-				prefixGroups[g] = append(prefixGroups[g], rf)
-			} else if parentID != nil {
-				if err := db.AssignFileToSystem(sqlDB, rf.ID, *parentID); err != nil {
-					log.Printf("indexer: assign residual %s: %v", rf.RelPath, err)
-				}
-			}
-		}
-		log.Printf("[cluster] depth=%d prefix-split: %d groups, %d residuals from %d files",
-			depth, len(prefixGroups), len(residuals), len(files))
-		return applyGroupClustering(sqlDB, root, prefixGroups, input, parentID, ancestorNames, depth)
-	}
-
-	// ── Tier 2b: Suffix grouping (*Controller, *Service, *Driver, etc.) ──────
-	// Only fires when: ≥1 shared suffix group exists AND there are residuals
-	// (files that don't share the suffix), meaning a real split is present.
-	// Residuals stay as direct files of the parent — they're the base/core files.
-	suffixGroups, suffixResiduals := groupBySuffix(files)
-	// For a single suffix group, require it to cover ≥60% of files — this catches
-	// dominant-pattern groups like *Driver (9/12) while ignoring thin splits like
-	// *Manager (2/8) or *Definition (2/7) where Louvain produces better clusters.
-	// Two or more suffix groups always qualify (e.g. *Controller + *Service in MVC).
-	totalInSuffixGroups := 0
-	for _, m := range suffixGroups {
-		totalInSuffixGroups += len(m)
-	}
-	dominantSuffix := len(suffixGroups) == 1 &&
-		totalInSuffixGroups*100 >= len(files)*60 &&
-		len(suffixResiduals) > 0 &&
-		parentID != nil
-	if len(suffixGroups) >= 2 || dominantSuffix {
-		for _, rf := range suffixResiduals {
-			if parentID != nil {
-				if err := db.AssignFileToSystem(sqlDB, rf.ID, *parentID); err != nil {
-					log.Printf("indexer: assign suffix-residual %s: %v", rf.RelPath, err)
-				}
-			}
-		}
-		log.Printf("[cluster] depth=%d suffix-split: %d groups, %d residuals from %d files",
-			depth, len(suffixGroups), len(suffixResiduals), len(files))
-		return applyGroupClustering(sqlDB, root, suffixGroups, input, parentID, ancestorNames, depth)
-	}
-
-	// ── Tier 3: Louvain fallback ──────────────────────────────────────────────
-	return clusterByLouvain(sqlDB, root, input, parentID, ancestorNames, depth)
+	return clusterByLouvain(plan, root, input, parentID, ancestorNames, depth)
 }
 
-// clusterByLouvain runs multi-signal Louvain with merge-before-recurse naming.
-// Used only when directory and naming signals both fail to find structure.
-func clusterByLouvain(sqlDB *sql.DB, root db.Root, input cluster.ClusterInput, parentID *string, ancestorNames map[string]struct{}, depth int) (int, error) {
+// clusterByLouvain runs semantic Louvain and names each resulting community
+// without allowing naming collisions to merge distinct communities.
+func clusterByLouvain(plan *clusterPlan, root db.Root, input cluster.ClusterInput, parentID *string, ancestorNames map[string]struct{}, depth int) (int, error) {
 	clusterMap := cluster.Cluster(input)
 
 	rawGroups := make(map[int][]db.File)
@@ -799,160 +1149,46 @@ func clusterByLouvain(sqlDB *sql.DB, root db.Root, input cluster.ClusterInput, p
 	}
 
 	if len(rawGroups) <= 1 && parentID != nil {
-		return assignAll(sqlDB, input.Files, parentID)
+		return assignAll(plan, input.Files, parentID)
 	}
 
-	merged := make(map[string][]db.File)
-	for _, members := range rawGroups {
-		name := cluster.NameCluster(members)
-		merged[name] = append(merged[name], members...)
+	groupIDs := make([]int, 0, len(rawGroups))
+	for groupID := range rawGroups {
+		groupIDs = append(groupIDs, groupID)
+	}
+	sort.Ints(groupIDs)
+	named := make(map[string][]db.File, len(rawGroups))
+	nameCounts := make(map[string]int)
+	for _, groupID := range groupIDs {
+		members := rawGroups[groupID]
+		baseName := cluster.NameCluster(members, input.TFIDF)
+		nameCounts[baseName]++
+		name := baseName
+		if nameCounts[baseName] > 1 {
+			name = fmt.Sprintf("%s %d", baseName, nameCounts[baseName])
+		}
+		named[name] = members
 	}
 
-	if len(merged) <= 1 && parentID != nil {
-		return assignAll(sqlDB, input.Files, parentID)
+	if len(named) <= 1 && parentID != nil {
+		return assignAll(plan, input.Files, parentID)
 	}
 
-	log.Printf("[cluster] depth=%d louvain: %d groups from %d files", depth, len(merged), len(input.Files))
-	return applyGroupClustering(sqlDB, root, merged, input, parentID, ancestorNames, depth)
+	log.Printf("[cluster] depth=%d louvain: %d groups from %d files", depth, len(named), len(input.Files))
+	return applyGroupClustering(plan, root, named, input, parentID, ancestorNames, depth)
 }
 
 // ─── Clustering helpers ────────────────────────────────────────────────────────
 
-// groupByDirectory groups files by their immediate parent directory path.
-func groupByDirectory(files []db.File) map[string][]db.File {
-	groups := make(map[string][]db.File)
-	for _, f := range files {
-		dir := ""
-		if idx := strings.LastIndex(f.RelPath, "/"); idx >= 0 {
-			dir = f.RelPath[:idx]
-		}
-		groups[dir] = append(groups[dir], f)
-	}
-	return groups
-}
-
-// isMeaningfulDirSplit returns true if at least 2 directories each hold >= 2 files.
-func isMeaningfulDirSplit(groups map[string][]db.File) bool {
-	n := 0
-	for _, members := range groups {
-		if len(members) >= 2 {
-			if n++; n >= 2 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// dirBaseName returns the last path component of a directory.
-func dirBaseName(dir string) string {
-	if dir == "" {
-		return "Root"
-	}
-	if idx := strings.LastIndex(dir, "/"); idx >= 0 {
-		return dir[idx+1:]
-	}
-	return dir
-}
-
-// groupByPrefix groups files by CamelCase/snake_case filename prefix.
-// Files whose prefix is unique (appears in only 1 file) are returned as residuals.
-func groupByPrefix(files []db.File) (groups map[string][]db.File, residuals []db.File) {
-	byHead := make(map[string][]db.File)
-	for _, f := range files {
-		head := cluster.CamelHead(fileBaseName(f.RelPath))
-		if head != "" {
-			byHead[head] = append(byHead[head], f)
-		} else {
-			residuals = append(residuals, f)
-		}
-	}
-	groups = make(map[string][]db.File)
-	for head, members := range byHead {
-		if len(members) >= 2 {
-			groups[head] = members
-		} else {
-			residuals = append(residuals, members...)
-		}
-	}
-	return
-}
-
-// fileBaseName returns the filename without directory path or extension.
-func fileBaseName(relPath string) string {
-	base := relPath
-	if idx := strings.LastIndex(base, "/"); idx >= 0 {
-		base = base[idx+1:]
-	}
-	if idx := strings.LastIndex(base, "."); idx >= 0 {
-		base = base[:idx]
-	}
-	return base
-}
-
-// groupBySuffix groups files by CamelCase/snake_case/kebab-case filename suffix (CamelTail).
-// Files whose suffix is unique (appears in only 1 file) are returned as residuals.
-func groupBySuffix(files []db.File) (groups map[string][]db.File, residuals []db.File) {
-	byTail := make(map[string][]db.File)
-	for _, f := range files {
-		tail := cluster.CamelTail(fileBaseName(f.RelPath))
-		if tail != "" {
-			byTail[tail] = append(byTail[tail], f)
-		} else {
-			residuals = append(residuals, f)
-		}
-	}
-	groups = make(map[string][]db.File)
-	for tail, members := range byTail {
-		if len(members) >= 2 {
-			groups[tail] = members
-		} else {
-			residuals = append(residuals, members...)
-		}
-	}
-	return
-}
-
-// nearestPrefixGroup returns the prefix group name most similar to f by TF-IDF
-// cosine similarity, or "" if nothing exceeds the minimum threshold.
-func nearestPrefixGroup(f db.File, groups map[string][]db.File, tfidf map[string]cluster.FileVec) string {
-	if tfidf == nil {
-		return ""
-	}
-	fv := tfidf[f.ID]
-	if len(fv) == 0 {
-		return ""
-	}
-	best, bestSim := "", 0.05
-	for name, members := range groups {
-		var sum float64
-		for _, m := range members {
-			sum += cluster.CosineSim(fv, tfidf[m.ID])
-		}
-		if avg := sum / float64(len(members)); avg > bestSim {
-			bestSim = avg
-			best = name
-		}
-	}
-	return best
-}
-
-// assignAll assigns every file to sysID (if non-nil) and returns the count.
-func assignAll(sqlDB *sql.DB, files []db.File, sysID *string) (int, error) {
-	if sysID == nil {
-		return 0, nil
-	}
-	for _, f := range files {
-		if err := db.AssignFileToSystem(sqlDB, f.ID, *sysID); err != nil {
-			log.Printf("indexer: assign %s: %v", f.RelPath, err)
-		}
-	}
-	return len(files), nil
+// assignAll records every assignment in the in-memory plan. Database writes
+// happen only after the complete hierarchy has been computed.
+func assignAll(plan *clusterPlan, files []db.File, sysID *string) (int, error) {
+	return plan.assign(files, sysID), nil
 }
 
 // applyGroupClustering creates one system per named group and recurses into
 // groups that are large enough for further subdivision.
-func applyGroupClustering(sqlDB *sql.DB, root db.Root, groups map[string][]db.File, input cluster.ClusterInput, parentID *string, ancestorNames map[string]struct{}, depth int) (int, error) {
+func applyGroupClustering(plan *clusterPlan, root db.Root, groups map[string][]db.File, input cluster.ClusterInput, parentID *string, ancestorNames map[string]struct{}, depth int) (int, error) {
 	// Sort names for deterministic system creation order.
 	names := make([]string, 0, len(groups))
 	for n := range groups {
@@ -966,29 +1202,35 @@ func applyGroupClustering(sqlDB *sql.DB, root db.Root, groups map[string][]db.Fi
 		if len(members) == 0 {
 			continue
 		}
-		// A single-file group is not worth its own system node — assign to parent.
-		if len(members) < 2 && parentID != nil {
-			n, _ := assignAll(sqlDB, members, parentID)
+		// A single file is not architectural evidence. Keep it directly in the
+		// current scope (or at the Floor root) instead of inventing a system.
+		if len(members) < 2 {
+			n, _ := assignAll(plan, members, parentID)
 			total += n
 			continue
 		}
 		// A group named the same as any ancestor creates uninformative nesting
 		// (e.g. World > World, Editor > Pawn > Editor). Fold into parent instead.
 		if _, forbidden := ancestorNames[name]; forbidden && parentID != nil {
-			n, _ := assignAll(sqlDB, members, parentID)
+			n, _ := assignAll(plan, members, parentID)
 			total += n
 			continue
 		}
-		sysID := uuid.New().String()
-		if err := db.UpsertSystem(sqlDB, db.System{
+		sysID := stableClusterSystemID(root.WorkspaceID, parentID, name)
+		if _, protected := plan.protectedSystemIDs[sysID]; protected {
+			// A user confirmed this exact inferred boundary. New matching files
+			// may join it, but the classifier can never rewrite or prune it.
+			n, _ := assignAll(plan, members, &sysID)
+			total += n
+			continue
+		}
+		plan.systems[sysID] = db.System{
 			ID:          sysID,
 			WorkspaceID: root.WorkspaceID,
 			Name:        name,
 			ParentID:    parentID,
 			Source:      "cluster",
 			Depth:       depth,
-		}); err != nil {
-			return total, fmt.Errorf("upsert system %q depth %d: %w", name, depth, err)
 		}
 
 		if len(members) >= minClusterFiles && depth+1 < maxClusterDepth {
@@ -1004,13 +1246,13 @@ func applyGroupClustering(sqlDB *sql.DB, root db.Root, groups map[string][]db.Fi
 				TFIDF:        input.TFIDF,
 				Cochange:     input.Cochange,
 			}
-			n, err := clusterLevel(sqlDB, root, subInput, &sysID, childAncestors, depth+1)
+			n, err := clusterLevel(plan, root, subInput, &sysID, childAncestors, depth+1)
 			total += n
 			if err != nil {
 				return total, err
 			}
 		} else {
-			n, _ := assignAll(sqlDB, members, &sysID)
+			n, _ := assignAll(plan, members, &sysID)
 			total += n
 		}
 	}
@@ -1039,12 +1281,7 @@ func buildImportDependencies(sqlDB *sql.DB, root db.Root) error {
 	}
 
 	// Build relPath → fileID index for path-based import resolution (JS/TS/Go/Python).
-	relToID := make(map[string]string, len(files))
-	for _, f := range files {
-		relToID[f.RelPath] = f.ID
-		noExt := strings.TrimSuffix(f.RelPath, filepath.Ext(f.RelPath))
-		relToID[noExt] = f.ID
-	}
+	relToID := buildImportPathIndex(files)
 
 	// For C# files: first pass to build namespace → []fileID map.
 	csNsToIDs := buildCSharpNamespaceMap(files)
@@ -1093,7 +1330,7 @@ func buildCSharpDependenciesForFile(sqlDB *sql.DB, root db.Root, f db.File, nsTo
 	if err != nil {
 		return err
 	}
-	if err := db.DeleteDependenciesByFile(sqlDB, f.ID); err != nil {
+	if err := db.DeleteOutgoingDependenciesByFile(sqlDB, f.ID); err != nil {
 		return err
 	}
 	for _, imp := range result.Imports {
@@ -1138,13 +1375,69 @@ func rebuildDependenciesForFile(sqlDB *sql.DB, root db.Root, relPath string) err
 		csNsToIDs := buildCSharpNamespaceMap(files)
 		return buildCSharpDependenciesForFile(sqlDB, root, *f, csNsToIDs)
 	}
-	relToID := make(map[string]string, len(files))
-	for _, f := range files {
-		relToID[f.RelPath] = f.ID
-		noExt := strings.TrimSuffix(f.RelPath, filepath.Ext(f.RelPath))
-		relToID[noExt] = f.ID
-	}
+	relToID := buildImportPathIndex(files)
 	return rebuildDependenciesForFileWithIndex(sqlDB, root, *f, relToID)
+}
+
+func buildImportPathIndex(files []db.File) map[string]string {
+	index := make(map[string]string, len(files)*4)
+	for _, file := range files {
+		relPath := filepath.ToSlash(filepath.Clean(file.RelPath))
+		noExt := strings.TrimSuffix(relPath, filepath.Ext(relPath))
+		index[relPath] = file.ID
+		index[noExt] = file.ID
+
+		if strings.EqualFold(filepath.Ext(relPath), ".py") {
+			modulePath := noExt
+			if strings.EqualFold(filepath.Base(noExt), "__init__") {
+				modulePath = filepath.ToSlash(filepath.Dir(noExt))
+				if modulePath == "." {
+					modulePath = ""
+				}
+			}
+			if modulePath != "" {
+				index[modulePath] = file.ID
+				index[strings.ReplaceAll(modulePath, "/", ".")] = file.ID
+			}
+		}
+	}
+	return index
+}
+
+func resolveImportFileID(file db.File, imported string, index map[string]string) (string, bool) {
+	spec := strings.TrimSpace(imported)
+	if spec == "" {
+		return "", false
+	}
+
+	if strings.EqualFold(file.Language, "python") ||
+		strings.EqualFold(filepath.Ext(file.RelPath), ".py") {
+		if strings.HasPrefix(spec, ".") {
+			dots := 0
+			for dots < len(spec) && spec[dots] == '.' {
+				dots++
+			}
+			base := filepath.ToSlash(filepath.Dir(file.RelPath))
+			for level := 1; level < dots; level++ {
+				base = filepath.ToSlash(filepath.Dir(base))
+			}
+			remainder := strings.ReplaceAll(spec[dots:], ".", "/")
+			spec = filepath.ToSlash(filepath.Clean(filepath.Join(base, remainder)))
+		} else {
+			spec = strings.ReplaceAll(spec, ".", "/")
+		}
+	}
+
+	candidate := filepath.ToSlash(filepath.Clean(spec))
+	if id, ok := index[candidate]; ok {
+		return id, true
+	}
+	for _, ext := range []string{".ts", ".tsx", ".js", ".jsx", ".py", ".go"} {
+		if id, ok := index[candidate+ext]; ok {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 func rebuildDependenciesForFileWithIndex(sqlDB *sql.DB, root db.Root, f db.File, relToID map[string]string) error {
@@ -1152,22 +1445,12 @@ func rebuildDependenciesForFileWithIndex(sqlDB *sql.DB, root db.Root, f db.File,
 	if err != nil {
 		return err
 	}
-	if err := db.DeleteDependenciesByFile(sqlDB, f.ID); err != nil {
+	if err := db.DeleteOutgoingDependenciesByFile(sqlDB, f.ID); err != nil {
 		return err
 	}
 	for _, imp := range result.Imports {
-		dstID, ok := relToID[imp]
-		if !ok {
-			// try with common extensions
-			for _, ext := range []string{".ts", ".tsx", ".js", ".jsx", ".py", ".go"} {
-				if id, found := relToID[imp+ext]; found {
-					dstID = id
-					ok = true
-					break
-				}
-			}
-		}
-		if !ok {
+		dstID, ok := resolveImportFileID(f, imp, relToID)
+		if !ok || dstID == f.ID {
 			continue // external module — skip
 		}
 		d := db.Dependency{

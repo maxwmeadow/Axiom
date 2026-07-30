@@ -10,17 +10,22 @@ export interface StencilDef {
 }
 
 export const STENCILS: StencilDef[] = [
-  { id: 'class',   label: 'Class',      kind: 'class',  shape: 'box',      hint: 'Compartment box — functions/methods inside' },
-  { id: 'file',    label: 'File',       kind: 'file',   shape: 'box',      hint: 'A source file to be created' },
-  { id: 'system',  label: 'System',     kind: 'system', shape: 'folder',   hint: 'Package/module grouping' },
-  { id: 'service', label: 'Service',    kind: 'service', shape: 'hexagon',  hint: 'Service / API surface' },
-  { id: 'infra',   label: 'Infra',      kind: 'infra',   shape: 'box',      hint: 'Choose hosting, database, queue, API, or another provider service' },
-  { id: 'note',    label: 'Note',       kind: 'class',  shape: 'note',     hint: 'Free-floating annotation' },
+  { id: 'class', label: 'Class', kind: 'class', shape: 'box', hint: 'Compartment box — functions/methods inside' },
+  { id: 'file', label: 'File', kind: 'file', shape: 'box', hint: 'A source file to be created' },
+  { id: 'system', label: 'System', kind: 'system', shape: 'folder', hint: 'Package/module grouping' },
+  { id: 'service', label: 'Service', kind: 'service', shape: 'hexagon', hint: 'Service / API surface' },
+  { id: 'infra', label: 'Infra', kind: 'infra', shape: 'box', hint: 'Choose hosting, database, queue, API, or another provider service' },
+  { id: 'note', label: 'Note', kind: 'class', shape: 'note', hint: 'Free-floating annotation' },
 ]
 
 function StencilGlyph({ shape }: { shape: StencilDef['shape'] }) {
-  const stroke = 'var(--text-secondary)'
-  const common = { fill: 'none', stroke, strokeWidth: 1.4, strokeDasharray: '4 3' }
+  const common = {
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.4,
+    strokeDasharray: '4 3',
+  }
+
   switch (shape) {
     case 'folder':
       return <svg width="26" height="20" viewBox="0 0 26 20"><path d="M1 5h9l2 0v0h13v14H1V5zM1 5V2h8v3" {...common} /></svg>
@@ -37,30 +42,24 @@ function StencilGlyph({ shape }: { shape: StencilDef['shape'] }) {
 
 export function SheetPalette() {
   return (
-    <div className="axiom-sheet-palette">
-      <div style={{
-        fontSize: 8, fontFamily: 'var(--font-mono)', fontWeight: 700,
-        letterSpacing: '0.1em', color: 'var(--text-dim)', padding: '0 10px 6px',
-      }}>STENCILS</div>
-      {STENCILS.map(s => (
+    <div className="axiom-sheet-palette" aria-label="Sheet stencils" data-onboarding-target="stencils">
+      <div className="axiom-sheet-palette__title">Stencils</div>
+      {STENCILS.map(stencil => (
         <div
-          key={s.id}
-          title={`${s.hint} — drag onto the canvas`}
+          key={stencil.id}
+          title={`${stencil.hint} — drag onto the canvas`}
           draggable
-          onDragStart={(e) => {
-            e.dataTransfer.setData('application/axiom-stencil', JSON.stringify(s))
-            e.dataTransfer.effectAllowed = 'copy'
+          onDragStart={event => {
+            event.dataTransfer.setData('application/axiom-stencil', JSON.stringify(stencil))
+            event.dataTransfer.effectAllowed = 'copy'
           }}
           className="axiom-sheet-palette__item"
         >
-          <StencilGlyph shape={s.shape} />
-          <span style={{ fontSize: 9.5, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{s.label}</span>
+          <StencilGlyph shape={stencil.shape} />
+          <span>{stencil.label}</span>
         </div>
       ))}
-      <div style={{
-        fontSize: 8, color: 'var(--text-dim)', padding: '6px 8px 2px',
-        borderTop: '1px solid var(--border-dim)', lineHeight: 1.5,
-      }}>
+      <div className="axiom-sheet-palette__hint">
         drag to place · type name · double-click fields to edit
       </div>
     </div>

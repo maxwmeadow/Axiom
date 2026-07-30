@@ -38,7 +38,6 @@ import {
   applyEdgeChanges,
   SelectionMode,
   Panel,
-  MarkerType,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 // ELK removed
@@ -58,15 +57,51 @@ import { plannedMembers, plannedMetadata, sheetElementMetadata, useSheetStore } 
 import type { PlannedNodeKind, PlannedNodeMetadata, SheetLayoutMutation } from '../store/sheetStore'
 import { filenameForLanguage, languageFromFilename } from './languages'
 import { apiUpdateSystem, apiSaveNodePosition, apiSaveFloorLayouts } from './arcdApi'
-import { contentRect, FRAME_CONTENT_PADDING, FRAME_HEADER_HEIGHT, frameHeaderAllowance, normalizeGeometry } from './frameGeometry'
+import { contentRectFor, FRAME_ITEM_GAP, FRAME_ROOT_GAP, frameContentInsets, normalizeGeometry } from './frameGeometry'
 import { packFrame, placeIncoming } from './packing'
 import { resizeChanged, type NodeResizeParams } from './resizeGeometry'
 import { planFloorResize, planSheetResize, replaceFloorLayouts, type ResizeSessionStart } from './resizePersistence'
 import { projectFloorNodes, type FloorSceneDescriptor } from './floorSceneProjection'
+import { canPersistGeneratedFrame, growFrameToContainChildren, orderFramePlacementCandidates } from './incrementalFrameLayout'
 import { easeViewportTowardZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, nextWheelZoomTarget, ZOOM_SNAP_EPSILON, zoomViewportAroundPoint } from './viewportMath'
 import { emptySelection, selectionAfterNodeChanges, singleNodeSelection, stampSelection } from './selectionController'
 import { planFloorDrop, planSheetDrop } from './dropPersistence'
 import { applyZoomVisibility, makeFullyVisible } from './semanticZoom'
+import { livingVisibilityIndex, surfaceLivingNodeFx } from './livingVisibility'
+import { applyDeltaMarks, buildDeltaReview, claimFocusTargets, clampClaimCursor } from './deltaReview'
+import { applyAgentAttention, surfaceAgentAttention } from './agentAttentionProjection'
+import { stampAgentPresence } from './agentPresence'
+import { LivingFlowOverlay } from './LivingFlowOverlay'
+import { inspectFloorScene, partitionCanvasNodeChanges } from './sceneIntegrity'
+import { routeWheelEvent, wheelScrollStep } from './wheelRouting'
+import { rectContainsRect } from './selectionResize'
+import {
+  diffScene,
+  recordSceneMutation,
+  sceneDeltaIsQuiet,
+  sceneGeometry,
+  type SceneNodeGeometry,
+} from './sceneDiagnostics'
+
+// A wheel gesture keeps its scroll target until this long after its last event.
+const WHEEL_LATCH_MS = 220
+
+/** Matches the .layout-transition duration in global.css. */
+const LAYOUT_TRANSITION_MS = 500
+
+// Morning Delta framing bounds. Showing someone a change is not the same as
+// pointing the camera at it: the floor stops a claim about two small files
+// from landing at an illegible scale, the ceiling stops a two-system boundary
+// from filling the viewport with a single box, and the generous padding keeps
+// the surrounding architecture visible so the change has context.
+const DELTA_REVIEW_MIN_ZOOM = 0.45
+const DELTA_REVIEW_MAX_ZOOM = 0.95
+const DELTA_REVIEW_PADDING = 0.5
+
+/** Opt-in pointer/geometry drag tracing. Off by default: it is expensive. */
+function dragTraceEnabled(): boolean {
+  return (globalThis as { __axiomDragTrace?: boolean }).__axiomDragTrace === true
+}
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
@@ -728,17 +763,27 @@ function runAlternateAxisLayout(
       computedSizes.set(systemId, { w: totalW, h: totalH })
     } else {
       // 2. Auto packing: organic cluster with per-item breathing room.
-      const gap = gridGap(d)
       const packed = packFrame(
         items.map(item => ({ id: item.id, width: item.w, height: item.h })),
-        { baseGap: gap },
+        { baseGap: FRAME_ITEM_GAP },
       )
+      // The top inset is the tab band, not the plain gap. This used to place
+      // the first row at `gap` from the frame's top border on every side
+      // equally, which only cleared the tab because the old gap happened to be
+      // about as tall as it; at depth it did not.
+      let insets = frameContentInsets(420, Math.max(0, d))
+      for (let round = 0; round < 4; round++) {
+        insets = frameContentInsets(packed.height + insets.top + insets.bottom, Math.max(0, d))
+      }
       for (const item of items) {
         const position = packed.positions.get(item.id)!
-        computedPositions.set(item.id, { x: gap + position.x, y: gap + position.y, w: item.w, h: item.h })
+        computedPositions.set(item.id, { x: insets.left + position.x, y: insets.top + position.y, w: item.w, h: item.h })
         if (item.type === 'system') computedSizes.set(item.id, { w: item.w, h: item.h })
       }
-      computedSizes.set(systemId, { w: packed.width + gap * 2, h: packed.height + gap * 2 })
+      computedSizes.set(systemId, {
+        w: packed.width + insets.left + insets.right,
+        h: packed.height + insets.top + insets.bottom,
+      })
     }
   }
 
@@ -759,7 +804,6 @@ export interface SystemNodeData {
   depth: number
   /** Every direct child descriptor, regardless of type, counted exactly once. */
   directChildCount: number
-  agentTouched: boolean
   currentZoom: number
   isChild: boolean
   childrenVisible: number  // 0–1 continuous alpha, not boolean
@@ -800,7 +844,6 @@ export interface FileNodeData {
   shape: '' | 'class' | 'cylinder' | 'hexagon'
   /** Class-first title when shape==='class'. */
   displayName: string
-  agentTouched: boolean
   depth: number
   currentZoom: number
   childrenVisible: number
@@ -830,7 +873,6 @@ export interface InfraNodeData {
   service: string
   subtype: string
   status: string
-  agentTouched: boolean
   umlKind?: PlannedNodeKind
   umlMetadata?: PlannedNodeMetadata
   onRename?: (name: string) => void
@@ -849,15 +891,44 @@ export interface InfraNodeData {
  * this never quantizes authored positions, displaces siblings, or derives
  * visual containment from a drop's semantic side effects.
  */
+/**
+ * Placements this session has already decided for nodes that have no persisted
+ * row, keyed by node id.
+ *
+ * Without it the projection is NOT a pure function of persisted state: a
+ * priority-2 node's position comes from `placeIncoming`, scored against the
+ * live bounds and centroid of everything already registered in its frame. So
+ * changing ONE node's geometry — any drop writes a row — shifts that centroid
+ * and re-places every unpersisted sibling, which then shifts it again for the
+ * next one. Dragging a single node made unrelated nodes scatter.
+ *
+ * Root-level unclassified files never persist at all (deliberately: pinning
+ * them would block live classification from moving them into their system), so
+ * for those the churn was permanent rather than transient.
+ *
+ * A remembered placement is dropped as soon as the node gains a persisted row
+ * or moves to a different parent, so this only ever supplies the FIRST answer.
+ */
+export interface GeneratedPlacement {
+  parentId: string | null
+  x: number
+  y: number
+}
+
 function buildFloorFrameLayout(
   systems: DbSystem[],
   files: DbFile[],
   infraNodes: DbInfraNode[],
   dependencies: DbDependency[],
   floorLayouts: FloorLayout[],
-  agentTouchedIds: Set<string>,
   currentZoom: number,
-): { rfNodes: Node[]; rfEdges: Edge[] } {
+  generatedPlacements: Map<string, GeneratedPlacement> = new Map(),
+): {
+  rfNodes: Node[]
+  rfEdges: Edge[]
+  generatedLayoutNodeIds: Set<string>
+  resizedContainerIds: Set<string>
+} {
   const systemsById = new Map(systems.map(system => [system.id, system]))
   const filesById = new Map(files.map(file => [file.id, file]))
   const infraById = new Map(infraNodes.map(infra => [infra.id, infra]))
@@ -908,6 +979,26 @@ function buildFloorFrameLayout(
     return infra?.category === 'platform' ? { width: 760, height: 520 } : { width: 260, height: 160 }
   }
 
+  const depthCache = new Map<string, number>()
+  const depthOf = (id: string): number => {
+    const cached = depthCache.get(id)
+    if (cached !== undefined) return cached
+    const parentId = parentById.get(id) ?? null
+    const value = parentId ? depthOf(parentId) + 1 : 0
+    depthCache.set(id, value)
+    return value
+  }
+
+  /**
+   * Where a child may sit inside a frame. One helper so incremental placement,
+   * fresh packing and drop placement cannot drift apart on the tab allowance.
+   */
+  const insetsOf = (containerId: string) => {
+    const container = geometryById.get(containerId)
+    const base = defaultSize(containerId)
+    return frameContentInsets(container?.height ?? base.height, depthOf(containerId))
+  }
+
   // A genuinely fresh Floor is packed bottom-up: deepest frames first, each
   // frame sized from its packed contents, so a parent can never be smaller
   // than what it holds and post-hoc growth never creates sibling overlap.
@@ -915,15 +1006,6 @@ function buildFloorFrameLayout(
   const freshPackSizes = new Map<string, { width: number; height: number }>()
   if (initialGraphLayout) {
     const sizeOf = (id: string) => freshPackSizes.get(id) ?? defaultSize(id)
-    const depthCache = new Map<string, number>()
-    const depthOf = (id: string): number => {
-      const cached = depthCache.get(id)
-      if (cached !== undefined) return cached
-      const parentId = parentById.get(id) ?? null
-      const value = parentId ? depthOf(parentId) + 1 : 0
-      depthCache.set(id, value)
-      return value
-    }
     const packedFrames = new Set<string>()
     const packContainer = (containerId: string) => {
       if (packedFrames.has(containerId)) return
@@ -933,29 +1015,27 @@ function buildFloorFrameLayout(
       if (children.length === 0) return
       const packed = packFrame(
         children.map(childId => ({ id: childId, ...sizeOf(childId) })),
-        { baseGap: 36 },
+        { baseGap: FRAME_ITEM_GAP },
       )
       // The title chrome scales with the frame's presentation scale, and the
       // frame's size depends on the header in turn — iterate to the fixed
       // point so children never start under the rendered title band.
       const base = defaultSize(containerId)
       const depth = depthOf(containerId)
-      let header = FRAME_HEADER_HEIGHT
+      let insets = frameContentInsets(420, depth)
       for (let round = 0; round < 4; round++) {
-        const width = Math.max(320, packed.width + FRAME_CONTENT_PADDING * 2)
-        const height = Math.max(220, packed.height + header + FRAME_CONTENT_PADDING)
-        header = frameHeaderAllowance(width, height, depth, base.width, base.height)
+        insets = frameContentInsets(Math.max(220, packed.height + insets.top + insets.bottom), depth)
       }
       for (const childId of children) {
         const position = packed.positions.get(childId)!
         freshPackPositions.set(childId, {
-          x: FRAME_CONTENT_PADDING + position.x,
-          y: header + position.y,
+          x: insets.left + position.x,
+          y: insets.top + position.y,
         })
       }
       freshPackSizes.set(containerId, {
-        width: Math.max(320, packed.width + FRAME_CONTENT_PADDING * 2),
-        height: Math.max(220, packed.height + header + FRAME_CONTENT_PADDING),
+        width: Math.max(320, packed.width + insets.left + insets.right),
+        height: Math.max(220, packed.height + insets.top + insets.bottom),
       })
     }
     for (const parentKey of siblingsByParent.keys()) {
@@ -963,19 +1043,46 @@ function buildFloorFrameLayout(
     }
   }
 
-  for (const [id, parentId] of parentById) {
+  const generatedLayoutNodeIds = new Set<string>()
+  const placementCandidates = [...parentById].map(([id, parentId]) => {
     const layout = layoutsById.get(id)
     const fallback = defaultSize(id)
     const semantic = systemsById.get(id) ?? filesById.get(id) ?? infraById.get(id)
     const initialPosition = parentId === null ? initialGraphLayout?.get(id) : undefined
     let x = layout?.positionX ?? initialPosition?.x ?? semantic?.positionX ?? 0
     let y = layout?.positionY ?? initialPosition?.y ?? semantic?.positionY ?? 0
+    const fresh = freshPackPositions.get(id)
+    if (!layout && x === 0 && y === 0 && fresh) {
+      x = fresh.x
+      y = fresh.y
+    }
+    if (!layout) generatedLayoutNodeIds.add(id)
+    return {
+      id,
+      parentId,
+      layout,
+      fallback,
+      x,
+      y,
+      placementPriority: layout ? 0 as const : (fresh || x !== 0 || y !== 0) ? 1 as const : 2 as const,
+    }
+  })
+
+  // Database/API order is not spatial order. Register every persisted sibling
+  // first so an incoming system/file cannot be placed underneath a persisted
+  // node that happens to appear later in the snapshot.
+  for (const candidate of orderFramePlacementCandidates(placementCandidates)) {
+    const { id, parentId, layout, fallback } = candidate
+    let { x, y } = candidate
     const occupied = occupiedByParent.get(parentId) ?? []
-    if (!layout && x === 0 && y === 0) {
-      const fresh = freshPackPositions.get(id)
-      if (fresh) {
-        x = fresh.x
-        y = fresh.y
+    if (candidate.placementPriority === 2) {
+      // Decide this ONCE. Re-deriving it on every projection made a node's
+      // position depend on the current geometry of everything around it, so a
+      // single drop scattered every unpersisted node in the frame.
+      const remembered = generatedPlacements.get(id)
+      if (remembered && remembered.parentId === parentId) {
+        x = remembered.x
+        y = remembered.y
       } else {
         // A node indexed after the initial layout was persisted clusters in
         // beside its siblings instead of landing on a blind grid.
@@ -983,13 +1090,22 @@ function buildFloorFrameLayout(
           { id, width: fallback.width, height: fallback.height },
           occupied,
           {
-            baseGap: parentId ? 36 : 96,
-            origin: parentId ? { x: FRAME_CONTENT_PADDING, y: FRAME_HEADER_HEIGHT } : { x: 80, y: 80 },
+            // Same clearance a drop or a repack would use, so a node that
+            // arrives by indexing sits exactly as tightly as one placed by hand.
+            baseGap: parentId ? FRAME_ITEM_GAP : FRAME_ROOT_GAP,
+            origin: parentId
+              ? { x: insetsOf(parentId).left, y: insetsOf(parentId).top }
+              : { x: 80, y: 80 },
           },
         )
         x = spot.x
         y = spot.y
+        generatedPlacements.set(id, { parentId, x, y })
       }
+    } else if (generatedPlacements.has(id)) {
+      // It has real geometry now — persisted, semantic, or freshly packed — so
+      // the remembered guess must not outlive it.
+      generatedPlacements.delete(id)
     }
     const freshSize = freshPackSizes.get(id)
     const geometry = normalizeGeometry({
@@ -997,33 +1113,34 @@ function buildFloorFrameLayout(
       width: layout?.width ?? freshSize?.width ?? fallback.width,
       height: layout?.height ?? freshSize?.height ?? fallback.height,
       scale: layout?.scale ?? 1,
+      interiorScale: layout?.interiorScale ?? 1,
     }, fallback)
     geometryById.set(id, geometry)
     occupied.push({ x: geometry.x, y: geometry.y, width: geometry.width * geometry.scale, height: geometry.height * geometry.scale })
     occupiedByParent.set(parentId, occupied)
   }
 
-  // Initial-index/legacy containers auto-fit their direct children once. A
-  // persisted layout is authored and therefore never silently resized.
+  const resizedContainerIds = new Set<string>()
+  // Initial-index/legacy containers auto-fit their direct children. Persisted
+  // containers retain authored dimensions as a minimum, but may grow when a
+  // newly indexed child would otherwise sit outside their frame.
   for (const [containerId, children] of siblingsByParent) {
-    if (!containerId || layoutsById.has(containerId)) continue
+    if (!containerId) continue
     const isContainer = systemsById.has(containerId) || infraById.get(containerId)?.category === 'platform'
     if (!isContainer || children.length === 0) continue
+    const hasIncomingChild = children.some(childId => !layoutsById.has(childId))
+    if (layoutsById.has(containerId) && !hasIncomingChild) continue
     const container = geometryById.get(containerId)
     if (!container) continue
-    let right = 0
-    let bottom = 0
-    for (const childId of children) {
+    const childFrames = children.flatMap(childId => {
       const child = geometryById.get(childId)
-      if (!child) continue
-      right = Math.max(right, child.x + child.width * child.scale)
-      bottom = Math.max(bottom, child.y + child.height * child.scale)
-    }
-    geometryById.set(containerId, {
-      ...container,
-      width: Math.max(container.width, right + FRAME_CONTENT_PADDING),
-      height: Math.max(container.height, bottom + FRAME_CONTENT_PADDING),
+      return child ? [child] : []
     })
+    const fitted = growFrameToContainChildren(container, childFrames, insetsOf(containerId).right)
+    geometryById.set(containerId, fitted)
+    if (fitted.width !== container.width || fitted.height !== container.height) {
+      resizedContainerIds.add(containerId)
+    }
   }
 
   // The relationship-aware initializer was historically sized for the legacy
@@ -1063,15 +1180,30 @@ function buildFloorFrameLayout(
 
   const depthById = new Map<string, number>()
   const worldScaleById = new Map<string, number>()
-  const resolveFrame = (id: string): { depth: number; worldScale: number } => {
+  const contentScaleById = new Map<string, number>()
+  // A frame's own world scale and the scale it hands to its children are two
+  // different numbers. They differ exactly when a container compresses its
+  // interior, which is what lets that compression leave the container's own
+  // size — and everything derived from it — completely untouched.
+  const resolveFrame = (id: string): { depth: number; worldScale: number; contentScale: number } => {
     const cachedDepth = depthById.get(id)
     const cachedScale = worldScaleById.get(id)
-    if (cachedDepth !== undefined && cachedScale !== undefined) return { depth: cachedDepth, worldScale: cachedScale }
+    const cachedContent = contentScaleById.get(id)
+    if (cachedDepth !== undefined && cachedScale !== undefined && cachedContent !== undefined) {
+      return { depth: cachedDepth, worldScale: cachedScale, contentScale: cachedContent }
+    }
     const parentId = parentById.get(id) ?? null
-    const parent = parentId ? resolveFrame(parentId) : { depth: -1, worldScale: 1 }
-    const result = { depth: parent.depth + 1, worldScale: parent.worldScale * (geometryById.get(id)?.scale ?? 1) }
+    const parent = parentId ? resolveFrame(parentId) : { depth: -1, worldScale: 1, contentScale: 1 }
+    const geometry = geometryById.get(id)
+    const worldScale = parent.contentScale * (geometry?.scale ?? 1)
+    const result = {
+      depth: parent.depth + 1,
+      worldScale,
+      contentScale: worldScale * (geometry?.interiorScale ?? 1),
+    }
     depthById.set(id, result.depth)
     worldScaleById.set(id, result.worldScale)
+    contentScaleById.set(id, result.contentScale)
     return result
   }
 
@@ -1088,17 +1220,18 @@ function buildFloorFrameLayout(
     siblingsByParent,
     geometryById,
     worldScaleById,
-    agentTouchedIds,
+    contentScaleById,
     currentZoom,
   })
-  return { rfNodes, rfEdges: [] }
+  return { rfNodes, rfEdges: [], generatedLayoutNodeIds, resizedContainerIds }
 }
 
 function ZoomIndicator() {
   const { zoom } = useViewport()
   return (
-    <div className="axiom-zoom-indicator">
-      Zoom: {zoom.toFixed(2)}x
+    <div className="axiom-zoom-indicator" aria-label={`Zoom ${zoom.toFixed(2)}x`}>
+      <span>Zoom:</span>
+      <strong>{zoom.toFixed(2)}x</strong>
     </div>
   )
 }
@@ -1112,8 +1245,14 @@ interface AxiomCanvasProps {
 export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const {
     systems, files, infraNodes, dependencies, floorLayouts,
-    selectedNodeId, infraPickerNodeId, agentTouchedIds, selectionMode, activeTrace, runtimeNodes, dataFlow,
+    selectedNodeId, infraPickerNodeId, selectionMode, activeTrace, runtimeNodes, dataFlow, nodeFx, relationshipFx,
+    delta, activeWorkSessions, deltaReviewing, deltaCursor, agentAttention,
   } = useGraphStore(useShallow(s => ({
+    agentAttention:  s.agentAttention,
+    delta:           s.delta,
+    activeWorkSessions: s.activeWorkSessions,
+    deltaReviewing:  s.deltaReviewing,
+    deltaCursor:     s.deltaCursor,
     systems:         s.systems,
     files:           s.files,
     infraNodes:      s.infraNodes,
@@ -1121,11 +1260,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     floorLayouts:    s.floorLayouts,
     selectedNodeId:  s.selectedNodeId,
     infraPickerNodeId: s.infraPickerNodeId,
-    agentTouchedIds: s.agentTouchedIds,
     selectionMode:   s.selectionMode,
     activeTrace:     s.activeTrace,
     runtimeNodes:    s.runtimeNodes,
     dataFlow:        s.dataFlow,
+    nodeFx:          s.nodeFx,
+    relationshipFx:  s.relationshipFx,
   })))
 
   const { setSelectedNode, setInspectedNode, setInfraPickerNode, setSelectionMode } = useGraphStore(
@@ -1138,15 +1278,112 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   )
   const currentProject = useGraphStore(s => s.currentProject)
   const { fitView, getViewport, setViewport, getInternalNode, screenToFlowPosition } = useReactFlow()
+  const livingVisibilityOptions = useMemo(() => {
+    const semanticParentById = new Map<string, string | null>()
+    const labelById = new Map<string, string>()
+    for (const system of systems) {
+      semanticParentById.set(system.id, system.parentId ?? null)
+      labelById.set(system.id, system.name)
+    }
+    for (const file of files) {
+      semanticParentById.set(file.id, file.systemId ?? null)
+      labelById.set(file.id, file.relPath.split('/').pop() ?? file.relPath)
+    }
+    for (const infra of infraNodes) {
+      semanticParentById.set(infra.id, null)
+      labelById.set(infra.id, infra.name)
+    }
+    return { semanticParentById, labelById }
+  }, [systems, files, infraNodes])
 
-  const [rfNodes, setRfNodes] = useState<Node[]>([])
+  const [candidateRfNodes, setRfNodes] = useState<Node[]>([])
   const [rfEdges, setRfEdges] = useState<Edge[]>([])
+  const canonicalNodeIds = useMemo(() => new Set([
+    ...systems.map(system => system.id),
+    ...files.map(file => file.id),
+    ...infraNodes.map(infra => infra.id),
+  ]), [systems, files, infraNodes])
+  const canonicalNodeCount = canonicalNodeIds.size
+  const sceneProjectId = currentProject?.id ?? 'demo'
+  // Memoized because this object is an effect dependency. Rebuilding it every
+  // render restarts the debounce on the blank-canvas recovery below, which can
+  // starve that recovery indefinitely during exactly the render storms (a save
+  // burst with living flows in flight) that it exists to recover from.
+  const candidateSceneIntegrity = useMemo(
+    () => inspectFloorScene(candidateRfNodes, canonicalNodeCount, canonicalNodeIds),
+    [candidateRfNodes, canonicalNodeCount, canonicalNodeIds],
+  )
+  const lastHealthySceneRef = useRef<{ projectId: string; nodes: Node[] } | null>(null)
+  if (candidateSceneIntegrity.valid && candidateRfNodes.length > 0) {
+    lastHealthySceneRef.current = { projectId: sceneProjectId, nodes: candidateRfNodes }
+  }
+  const retainedScene = lastHealthySceneRef.current?.projectId === sceneProjectId
+    ? lastHealthySceneRef.current.nodes
+    : null
+  const rfNodes = !candidateSceneIntegrity.valid && retainedScene?.length
+    ? retainedScene
+    : candidateRfNodes
+  useLayoutEffect(() => {
+    if (candidateSceneIntegrity.valid || !retainedScene?.length) return
+    console.error('[scene-integrity] rejected invalid Floor projection', {
+      projectId: sceneProjectId,
+      canonicalNodeCount,
+      ...candidateSceneIntegrity,
+      retainedNodeCount: retainedScene.length,
+    })
+    // Restore the controlled candidate too, so later interaction changes are
+    // based on the valid scene rather than the rejected transient projection.
+    sceneSourceRef.current = `integrity-restore:${candidateSceneIntegrity.reason}`
+    setRfNodes(retainedScene)
+  }, [
+    candidateSceneIntegrity.valid,
+    candidateSceneIntegrity.reason,
+    candidateSceneIntegrity.nodeCount,
+    candidateSceneIntegrity.rootCount,
+    candidateSceneIntegrity.visibleRootCount,
+    candidateSceneIntegrity.invalidNodeIds,
+    canonicalNodeCount,
+    retainedScene,
+    sceneProjectId,
+  ])
   // Sheet composition also needs the current zoom, so this ref must be
   // initialized before its memoized layout runs.
   const currentZoomRef = useRef(0.5)
+  const wheelLatchRef = useRef<{ element: Element; lastEventAt: number } | null>(null)
+  // Which code path most recently asked the controlled scene to change. Read by
+  // the scene-mutation tracer so a teleporting frame names its own cause.
+  const sceneSourceRef = useRef<string>('init')
+  const sceneSnapshotRef = useRef<SceneNodeGeometry[]>([])
+  // Semantic visibility only changes with zoom — track the last zoom we restamped
+  // at so panning (zoom unchanged) never re-renders every node.
+  const lastVisibilityZoomRef = useRef(0.5)
+  // Live reframing: gently fit the growing graph into view, but yield to the
+  // user while they are actively navigating.
+  const liveNodeCountRef = useRef(0)
+  const lastUserMoveAtRef = useRef(0)
+  const cameraFitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const canvasRootRef = useRef<HTMLDivElement>(null)
+  const domSceneRecoveryRef = useRef('')
   const cursorTraceSignatureRef = useRef('')
   const selectedIdsRef = useRef<Set<string>>(new Set())
+  // The selection chip used to read `selected` off the projected React Flow
+  // nodes, but that projection is rebuilt or restored by several independent
+  // paths (layout rebuild, integrity restore, living FX, the zoom pass). Any
+  // one of them dropping the flag for a frame made the chip blink out. The
+  // authoritative set is selectedIdsRef, so mirror its file subset into state
+  // and render the chip from that instead.
+  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([])
+  const commitSelection = useCallback((ids: Set<string>) => {
+    selectedIdsRef.current = ids
+    const fileIds = new Set(useGraphStore.getState().files.map(file => file.id))
+    const next = [...ids].filter(id => fileIds.has(id))
+    setSelectedFileIds(previous => {
+      if (previous.length === next.length && next.every(id => previous.includes(id))) {
+        return previous
+      }
+      return next
+    })
+  }, [])
   const timeoutHandlesRef = useRef<Set<number>>(new Set())
   const scheduleTimeout = useCallback((callback: () => void, delay: number) => {
     const handle = window.setTimeout(() => {
@@ -1159,7 +1396,25 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   useEffect(() => () => {
     for (const handle of timeoutHandlesRef.current) window.clearTimeout(handle)
     timeoutHandlesRef.current.clear()
+    if (cameraFitTimerRef.current) window.clearTimeout(cameraFitTimerRef.current)
   }, [])
+  const queueCameraFit = useCallback((
+    delay: number,
+    options: { padding: number; duration: number; maxZoom?: number },
+  ) => {
+    if (cameraFitTimerRef.current) clearTimeout(cameraFitTimerRef.current)
+    const runWhenIdle = () => {
+      const idleFor = Date.now() - lastUserMoveAtRef.current
+      const requiredIdle = 1200
+      if (idleFor < requiredIdle) {
+        cameraFitTimerRef.current = setTimeout(runWhenIdle, requiredIdle - idleFor)
+        return
+      }
+      cameraFitTimerRef.current = null
+      void fitView(options)
+    }
+    cameraFitTimerRef.current = setTimeout(runWhenIdle, delay)
+  }, [fitView])
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [sheetDialogOpen, setSheetDialogOpen] = useState(false)
   // ── Sheet overlay (REVISION 2: sheets are layers over the Floor) ─────────
@@ -1214,6 +1469,14 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     ...activePlannedByNodeId.keys(),
   ]), [activeElementByNodeId, activePlannedByNodeId])
   const [isTransitioningLayout, setIsTransitioningLayout] = useState(false)
+  // Placements decided for nodes with no persisted row. Refs, not state: they
+  // must survive every reprojection without causing one. See GeneratedPlacement.
+  const floorPlacementsRef = useRef(new Map<string, GeneratedPlacement>())
+  const sheetPlacementsRef = useRef(new Map<string, GeneratedPlacement>())
+  // True for the whole of any drag gesture, including a box-selection drag.
+  // Reconciliation easing must be off for the entire scene while dragging or
+  // node bodies glide behind the cursor while their chrome tracks it exactly.
+  const [isDraggingScene, setIsDraggingScene] = useState(false)
 
   useLayoutEffect(() => {
     setIsTransitioningLayout(true)
@@ -1467,7 +1730,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           positionY: element?.positionY ?? planned?.positionY ?? system.positionY,
           width: element?.width ?? planned?.width ?? system.width ?? 620,
           height: element?.height ?? planned?.height ?? system.height ?? 420,
-          scale: element?.scale ?? planned?.scale ?? 1, updatedAt: 0,
+          scale: element?.scale ?? planned?.scale ?? 1,
+          // Sheets have no interior compression; the Floor owns that concept.
+          interiorScale: 1, updatedAt: 0,
         }
       }),
       ...virtualFiles.map(file => {
@@ -1482,7 +1747,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           positionY: element?.positionY ?? planned?.positionY ?? file.positionY,
           width: element?.width ?? planned?.width ?? file.width ?? BASE_FILE_W,
           height: element?.height ?? planned?.height ?? file.height ?? BASE_FILE_H,
-          scale: element?.scale ?? planned?.scale ?? 1, updatedAt: 0,
+          scale: element?.scale ?? planned?.scale ?? 1,
+          // Sheets have no interior compression; the Floor owns that concept.
+          interiorScale: 1, updatedAt: 0,
         }
       }),
       ...virtualInfra.map(infra => {
@@ -1497,13 +1764,15 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           positionY: element?.positionY ?? planned?.positionY ?? infra.positionY,
           width: element?.width ?? planned?.width ?? (infra.category === 'platform' ? 760 : 260),
           height: element?.height ?? planned?.height ?? (infra.category === 'platform' ? 520 : 160),
-          scale: element?.scale ?? planned?.scale ?? 1, updatedAt: 0,
+          scale: element?.scale ?? planned?.scale ?? 1,
+          // Sheets have no interior compression; the Floor owns that concept.
+          interiorScale: 1, updatedAt: 0,
         }
       }),
     ]
     const sheetLayout = applyZoomVisibility(buildFloorFrameLayout(
       virtualSystems, virtualFiles, virtualInfra, dependencies, sheetFrameLayouts,
-      agentTouchedIds, currentZoomRef.current,
+      currentZoomRef.current, sheetPlacementsRef.current,
     ).rfNodes, currentZoomRef.current)
     const floorById = new Map(rfNodes.map(n => [n.id, n]))
     const floorAbsolutePositions = new Map<string, { x: number; y: number }>()
@@ -1679,14 +1948,86 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       }]
     })
     return [...dimmedFloor, ...morphed]
-  }, [rfNodes, visibleLayers, effectiveElements, activeElementByNodeId, systems, files, infraNodes, dependencies, agentTouchedIds, overlayPlanned, isTransitioningLayout, visiblePlannedByNodeId, activePlannedByNodeId, activeNodeIds, selectedNodeId, workspaceIdForOverlay, setInfraPickerNode])
+  }, [rfNodes, visibleLayers, effectiveElements, activeElementByNodeId, systems, files, infraNodes, dependencies, overlayPlanned, isTransitioningLayout, visiblePlannedByNodeId, activePlannedByNodeId, activeNodeIds, selectedNodeId, workspaceIdForOverlay, setInfraPickerNode])
 
   const [sheetInteractionNodes, setSheetInteractionNodes] = useState<Node[] | null>(null)
   useEffect(() => setSheetInteractionNodes(null), [overlaySheetId, visibleSheetIds.join('|')])
   const displayNodes = sheetInteractionNodes ?? composedNodes
   const displayNodesRef = useRef<Node[]>(displayNodes)
   displayNodesRef.current = displayNodes
+  const livingRevealIds = useMemo(() => {
+    // A node appears only for its own stage: first the edited origin, then the
+    // impact target. The top-layer flow can route to hidden authored geometry
+    // without prematurely revealing both endpoints.
+    return new Set(Object.keys(nodeFx))
+  }, [nodeFx])
+  // Live FX are a projection, not mutable canvas state. Deriving them here
+  // means layout, selection, zoom, and sheet updates cannot accidentally
+  // overwrite an in-flight edit signal in rfNodes.
+  const livingDisplayNodes = useMemo(
+    () => surfaceLivingNodeFx(
+      stampAgentPresence(displayNodes, activeWorkSessions),
+      nodeFx,
+      livingVisibilityOptions,
+      livingRevealIds,
+    ),
+    [displayNodes, activeWorkSessions, nodeFx, livingVisibilityOptions, livingRevealIds],
+  )
 
+  // ── Morning Delta review ────────────────────────────────────────────────
+  // Marks are a projection over the living nodes, layered the same way live FX
+  // are: reviewing never mutates canvas state, so ending a review restores the
+  // map exactly and an incoming live edit still animates on top of a mark.
+  const deltaKnownNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const file of files) ids.add(file.id)
+    for (const system of systems) ids.add(system.id)
+    return ids
+  }, [files, systems])
+  const deltaReview = useMemo(
+    () => buildDeltaReview(deltaReviewing ? delta : null, deltaKnownNodeIds),
+    [delta, deltaReviewing, deltaKnownNodeIds],
+  )
+  const deltaFocusTargets = useMemo(() => {
+    const claims = [...deltaReview.claims, ...deltaReview.internalClaims]
+    const index = clampClaimCursor(claims, deltaCursor)
+    return claimFocusTargets(index >= 0 ? claims[index] : null, deltaKnownNodeIds)
+  }, [deltaReview, deltaCursor, deltaKnownNodeIds])
+  const reviewDisplayNodes = useMemo(
+    () => applyDeltaMarks(livingDisplayNodes, deltaReview, deltaFocusTargets),
+    [livingDisplayNodes, deltaReview, deltaFocusTargets],
+  )
+  // Agent attention: "my agent is reading here, right now". A projection like
+  // every other live signal, and the only visual the action stream owns —
+  // writes and traces are animated by the semantic stream that already
+  // broadcasts them, never twice. See agentActionVisual.ts.
+  const surfacedAttention = useMemo(
+    () => surfaceAgentAttention(reviewDisplayNodes, agentAttention, livingVisibilityOptions),
+    [reviewDisplayNodes, agentAttention, livingVisibilityOptions],
+  )
+  const attentionNodes = useMemo(
+    () => applyAgentAttention(reviewDisplayNodes, surfacedAttention),
+    [reviewDisplayNodes, surfacedAttention],
+  )
+  // Selecting a claim is explicit navigation, so it frames immediately rather
+  // than deferring to the idle-aware growth fit.
+  //
+  // The bounds matter more than the fit. DELTA_REVIEW_MIN_ZOOM stops a claim
+  // about two small nodes from dropping the camera at an unreadable scale, and
+  // the max keeps a two-system boundary from filling the screen with one box.
+  // A claim with nothing on canvas (a tombstone) leaves the camera alone
+  // instead of jumping somewhere arbitrary.
+  const deltaFocusKey = deltaFocusTargets.join('|')
+  useEffect(() => {
+    if (!deltaReviewing || !deltaFocusKey) return
+    void fitView({
+      nodes: deltaFocusKey.split('|').map(id => ({ id })),
+      padding: DELTA_REVIEW_PADDING,
+      duration: 620,
+      minZoom: DELTA_REVIEW_MIN_ZOOM,
+      maxZoom: DELTA_REVIEW_MAX_ZOOM,
+    })
+  }, [deltaReviewing, deltaFocusKey, fitView])
   const updateInteractiveNodes = useCallback((updater: (nodes: Node[]) => Node[]) => {
     if (useSheetStore.getState().activeSheetId) {
       setSheetInteractionNodes(current => updater(current ?? displayNodesRef.current))
@@ -1696,7 +2037,14 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [])
 
   const displayEdges = useMemo(() => {
-    if (visibleLayers.length === 0) return rfEdges
+    const visibility = livingVisibilityIndex(displayNodes, livingVisibilityOptions)
+    const surfacedRfEdges = rfEdges.flatMap(edge => {
+      if (edge.className !== 'trace-edge') return [edge]
+      const source = visibility.visibleNodeId(edge.source)
+      const target = visibility.visibleNodeId(edge.target)
+      return source && target && source !== target ? [{ ...edge, source, target }] : []
+    })
+    if (visibleLayers.length === 0) return surfacedRfEdges
     const plannedRf: Edge[] = overlayPlannedEdges.map(e => ({
       id: `pedge:${e.id}`,
       source: e.srcPlanned ? `planned:${e.srcPlanned}` : (e.srcLive ?? ''),
@@ -1709,12 +2057,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }))
     const visibleIds = new Set(displayNodes.filter(n => n.style?.opacity !== 0).map(n => n.id))
     return [
-      ...rfEdges.map(e => visibleIds.has(e.source) && visibleIds.has(e.target)
+      ...surfacedRfEdges.map(e => visibleIds.has(e.source) && visibleIds.has(e.target)
         ? e
         : { ...e, style: { ...e.style, opacity: 0 }, selectable: false }),
       ...plannedRf,
     ]
-  }, [rfEdges, visibleLayers, overlayPlannedEdges, displayNodes])
+  }, [rfEdges, visibleLayers, overlayPlannedEdges, displayNodes, livingVisibilityOptions])
 
   // Stencil drop: palette → canvas → planned element born in name-edit mode.
   const onOverlayDragOver = useCallback((e: React.DragEvent) => {
@@ -1841,13 +2189,13 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       await Promise.all(apiPromises)
 
       // Fit the view to show the new layout
-      scheduleTimeout(() => fitView({ padding: 0.12, duration: 400 }), 100)
+      queueCameraFit(100, { padding: 0.2, duration: 900, maxZoom: 1.0 })
     } catch (err) {
       console.error('[AxiomCanvas] Tidy layout failed', err)
     } finally {
       setIsTidying(false)
     }
-  }, [systems, files, infraNodes, dependencies, currentProject, fitView])
+  }, [systems, files, infraNodes, dependencies, currentProject, queueCameraFit])
 
   const tidyFrame = useCallback(async () => {
     const all = displayNodesRef.current
@@ -1860,28 +2208,37 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     if (children.length === 0) return
     setIsTidying(true)
     try {
-      const parentScale = selectedContainer ? Number((selectedContainer.data as any).worldScale ?? 1) : 1
+      const containerData = selectedContainer?.data as Record<string, unknown> | undefined
+      const parentScale = selectedContainer ? Number(containerData?.worldScale ?? 1) : 1
+      // Children are authored in the container's CONTENT space, so every child
+      // quantity converts through contentScale while the container's own box
+      // converts through its own world scale.
+      const parentContentScale = selectedContainer ? Number(containerData?.contentScale ?? parentScale) : 1
+      const parentInterior = selectedContainer ? Number(containerData?.interiorScale ?? 1) : 1
       const parentCanonical = selectedContainer ? {
         width: Number(selectedContainer.style?.width ?? selectedContainer.measured?.width ?? 1) / parentScale,
         height: Number(selectedContainer.style?.height ?? selectedContainer.measured?.height ?? 1) / parentScale,
       } : { width: 2600, height: 1800 }
-      const containerData = selectedContainer?.data as Record<string, unknown> | undefined
-      const headerAllowance = frameHeaderAllowance(
-        parentCanonical.width,
-        parentCanonical.height,
-        Number(containerData?.depth ?? 0),
-        containerData?.presentationBaseWidth != null ? Number(containerData.presentationBaseWidth) / parentScale : 620,
-        containerData?.presentationBaseHeight != null ? Number(containerData.presentationBaseHeight) / parentScale : 420,
-      )
-      const content = scopeId ? contentRect(parentCanonical, FRAME_CONTENT_PADDING, headerAllowance) : { x: 80, y: 80, width: parentCanonical.width - 160, height: parentCanonical.height - 160 }
+      // The projected base is canonical already — dividing by world scale here
+      // would reintroduce exactly the coupling the isolation removes.
+      const ownContent = scopeId
+        ? contentRectFor(parentCanonical, Number(containerData?.depth ?? 0), parentScale)
+        : { x: 80, y: 80, width: parentCanonical.width - 160, height: parentCanonical.height - 160 }
+      // Express the content box in the space the children are actually stored in.
+      const content = {
+        x: ownContent.x / parentInterior,
+        y: ownContent.y / parentInterior,
+        width: ownContent.width / parentInterior,
+        height: ownContent.height / parentInterior,
+      }
       const packed = packFrame(
         children.map(child => ({
           id: child.id,
-          width: Number(child.style?.width ?? child.measured?.width ?? BASE_FILE_W) / parentScale,
-          height: Number(child.style?.height ?? child.measured?.height ?? BASE_FILE_H) / parentScale,
+          width: Number(child.style?.width ?? child.measured?.width ?? BASE_FILE_W) / parentContentScale,
+          height: Number(child.style?.height ?? child.measured?.height ?? BASE_FILE_H) / parentContentScale,
         })),
         {
-          baseGap: 42,
+          baseGap: FRAME_ITEM_GAP,
           aspect: content.width / Math.max(1, content.height),
         },
       )
@@ -1927,6 +2284,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             width: previous?.width ?? Number(child.style?.width ?? BASE_FILE_W) / Math.max(0.0001, worldScale),
             height: previous?.height ?? Number(child.style?.height ?? BASE_FILE_H) / Math.max(0.0001, worldScale),
             scale: ownScale,
+            // Tidy rearranges a frame's contents; it says nothing about how the
+            // children themselves compress theirs. Carry it through unchanged.
+            interiorScale: previous?.interiorScale ?? Number((child.data as any).interiorScale ?? 1),
           }
         })
         await apiSaveFloorLayouts(workspaceId, updates)
@@ -1936,17 +2296,26 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           floorLayouts: [...state.floorLayouts.filter(item => !changed.has(item.nodeType + ':' + item.nodeId)), ...saved],
         }))
       }
-      scheduleTimeout(() => fitView({ padding: 0.12, duration: 400 }), 80)
+      queueCameraFit(80, { padding: 0.2, duration: 900, maxZoom: 1.0 })
     } catch (error) {
       console.error('[AxiomCanvas] tidy frame failed', error)
     } finally {
       setIsTidying(false)
     }
-  }, [fitView, selectedNodeId, workspaceIdForOverlay])
+  }, [queueCameraFit, selectedNodeId, workspaceIdForOverlay])
 
   const zoomRafRef        = useRef<number | null>(null)
   const layoutBuiltRef = useRef<string | null>(null)
   const initialFloorPersistRef = useRef<string | null>(null)
+  const incrementalFloorPersistRef = useRef<string | null>(null)
+  // Remembered placements are per-workspace; carrying them across a project
+  // switch would apply one project's coordinates to another's node ids.
+  const placementScopeRef = useRef<string | null>(null)
+  if (placementScopeRef.current !== sceneProjectId) {
+    placementScopeRef.current = sceneProjectId
+    floorPlacementsRef.current.clear()
+    sheetPlacementsRef.current.clear()
+  }
   const heldKeysRef       = useRef<Set<string>>(new Set())
   const wasdRafRef        = useRef<number | null>(null)
   const resizeStartRef    = useRef<Map<string, ResizeSessionStart>>(new Map())
@@ -2049,46 +2418,65 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [workspaceIdForOverlay])
 
   useEffect(() => {
-    if (systems.length === 0 && infraNodes.length === 0) return
+    // The map must always show every file. A fresh project (agent building into
+    // an empty folder) has files before any system exists — render them at the
+    // top level rather than an empty Floor; live classification groups them into
+    // systems as the topology emerges.
+    if (systems.length === 0 && infraNodes.length === 0 && files.length === 0) return
 
     const projectId = currentProject?.id ?? 'demo'
     // On first layout for a project, don't use existing positions — force fresh grid layout.
     // On subsequent data updates (same project), preserve user-dragged positions.
     const isFirstLayout = layoutBuiltRef.current !== projectId
-    const existingNodes = isFirstLayout ? [] : rfNodes
-
-    const { rfNodes: layout, rfEdges: newEdges } = buildFloorFrameLayout(
+    const {
+      rfNodes: layout,
+      rfEdges: newEdges,
+      generatedLayoutNodeIds,
+      resizedContainerIds,
+    } = buildFloorFrameLayout(
       systems, files, infraNodes, dependencies, floorLayouts,
-      agentTouchedIds, currentZoomRef.current,
+      currentZoomRef.current, floorPlacementsRef.current,
     )
+    const filesByIdForPersistence = new Map(files.map(file => [file.id, file]))
+    const systemIdsForPersistence = new Set(systems.map(system => system.id))
+    const infraIdsForPersistence = new Set(infraNodes.map(infra => infra.id))
+
+    const serializeFloorNode = (node: Node): Omit<FloorLayout, 'workspaceId' | 'updatedAt'> => {
+      const nodeType: FloorNodeType = systemIdsForPersistence.has(node.id)
+        ? 'system' : filesByIdForPersistence.has(node.id) ? 'file' : 'infra'
+      const ownScale = Number((node.data as any).frameScale ?? 1)
+      const worldScale = Number((node.data as any).worldScale ?? ownScale)
+      // The parent factor that produced this node's world position is the
+      // parent's CONTENT scale; dividing it back out recovers canonical coords.
+      const parentWorldScale = node.parentId ? worldScale / Math.max(0.0001, ownScale) : 1
+      const parentNodeType = node.parentId
+        ? (infraIdsForPersistence.has(node.parentId) ? 'infra' : 'system')
+        : null
+      return {
+        nodeId: node.id,
+        nodeType,
+        parentNodeId: node.parentId ?? null,
+        parentNodeType,
+        containmentKind: parentNodeType === 'infra' ? 'hosted_by' : parentNodeType === 'system' ? 'part_of' : 'root',
+        positionX: node.position.x / Math.max(0.0001, parentWorldScale),
+        positionY: node.position.y / Math.max(0.0001, parentWorldScale),
+        width: Number(node.style?.width ?? node.measured?.width ?? 1) / Math.max(0.0001, worldScale),
+        height: Number(node.style?.height ?? node.measured?.height ?? 1) / Math.max(0.0001, worldScale),
+        scale: ownScale,
+        interiorScale: Number((node.data as any).interiorScale ?? 1),
+      }
+    }
 
     // A genuinely empty Floor gets one relationship-aware initialization.
     // Persist the complete result immediately; after this, authored freeform
     // geometry is the sole source of truth and the force layout never reruns.
-    if (!readOnly && currentProject && floorLayouts.length === 0 && initialFloorPersistRef.current !== projectId) {
+    // Only freeze an initial layout once real containers exist. Persisting root
+    // positions for still-unclassified files would pin them, blocking live
+    // classification from later moving them into their system.
+    const everyFileClassified = files.every(file => !!file.systemId)
+    if (!readOnly && currentProject && systems.length > 0 && everyFileClassified && floorLayouts.length === 0 && initialFloorPersistRef.current !== projectId) {
       initialFloorPersistRef.current = projectId
-      const initialLayouts: Omit<FloorLayout, 'workspaceId' | 'updatedAt'>[] = layout.map(node => {
-        const nodeType: FloorNodeType = systems.some(system => system.id === node.id)
-          ? 'system' : files.some(file => file.id === node.id) ? 'file' : 'infra'
-        const ownScale = Number((node.data as any).frameScale ?? 1)
-        const worldScale = Number((node.data as any).worldScale ?? ownScale)
-        const parentWorldScale = node.parentId ? worldScale / Math.max(0.0001, ownScale) : 1
-        const parentNodeType = node.parentId
-          ? (infraNodes.some(infra => infra.id === node.parentId) ? 'infra' : 'system')
-          : null
-        return {
-          nodeId: node.id,
-          nodeType,
-          parentNodeId: node.parentId ?? null,
-          parentNodeType,
-          containmentKind: parentNodeType === 'infra' ? 'hosted_by' : parentNodeType === 'system' ? 'part_of' : 'root',
-          positionX: node.position.x / Math.max(0.0001, parentWorldScale),
-          positionY: node.position.y / Math.max(0.0001, parentWorldScale),
-          width: Number(node.style?.width ?? node.measured?.width ?? 1) / Math.max(0.0001, worldScale),
-          height: Number(node.style?.height ?? node.measured?.height ?? 1) / Math.max(0.0001, worldScale),
-          scale: ownScale,
-        }
-      })
+      const initialLayouts = layout.map(serializeFloorNode)
       const optimistic = initialLayouts.map(item => ({ ...item, workspaceId: currentProject.id, updatedAt: Date.now() }))
       useGraphStore.setState({ floorLayouts: optimistic })
       void apiSaveFloorLayouts(currentProject.id, initialLayouts).catch(error => {
@@ -2096,6 +2484,48 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         initialFloorPersistRef.current = null
         useGraphStore.setState({ floorLayouts: [] })
       })
+    } else if (!readOnly && currentProject && floorLayouts.length > 0) {
+      // Do not pin a just-created, still-unclassified file to the Floor root.
+      // Its semantic parent arrives in the classifier's atomic snapshot.
+      const persistableGeneratedIds = [...generatedLayoutNodeIds].filter(nodeId => {
+        const file = filesByIdForPersistence.get(nodeId)
+        const nodeType: FloorNodeType = file ? 'file' : systemIdsForPersistence.has(nodeId) ? 'system' : 'infra'
+        return canPersistGeneratedFrame(nodeType, file?.systemId ?? null)
+      })
+      const reconciledIds = new Set([...persistableGeneratedIds, ...resizedContainerIds])
+      const updates = layout.filter(node => reconciledIds.has(node.id)).map(serializeFloorNode)
+      if (updates.length > 0) {
+        const signature = currentProject.id + ':' + updates
+          // Every field the write actually changes. Omitting one makes a real
+          // change look like a repeat and get skipped — `interiorScale` and
+          // `containmentKind` were both missing.
+          .map(update => [
+            update.nodeType, update.nodeId, update.parentNodeId ?? '', update.parentNodeType ?? '',
+            update.containmentKind, update.positionX, update.positionY,
+            update.width, update.height, update.scale, update.interiorScale,
+          ].join(':'))
+          .sort()
+          .join('|')
+        if (incrementalFloorPersistRef.current !== signature) {
+          incrementalFloorPersistRef.current = signature
+          const changedKeys = new Set(updates.map(update => update.nodeType + ':' + update.nodeId))
+          const previousLayouts = floorLayouts.filter(item => changedKeys.has(item.nodeType + ':' + item.nodeId))
+          const optimistic = updates.map(update => ({
+            ...update,
+            workspaceId: currentProject.id,
+            updatedAt: Date.now(),
+          }))
+          useGraphStore.setState(state => ({
+            floorLayouts: replaceFloorLayouts(state.floorLayouts, optimistic, changedKeys),
+          }))
+          void apiSaveFloorLayouts(currentProject.id, updates).catch(error => {
+            console.error('[AxiomCanvas] incremental Floor reconciliation failed', error)
+            useGraphStore.setState(state => ({
+              floorLayouts: replaceFloorLayouts(state.floorLayouts, previousLayouts, changedKeys),
+            }))
+          })
+        }
+      }
     }
 
     const layoutWithCallbacks = layout.map(n => ({
@@ -2121,6 +2551,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }))
     const withZoom = applyZoomVisibility(layoutWithCallbacks, currentZoomRef.current)
     const fixed = stampSelection(withZoom, selectedIdsRef.current, selectedNodeId)
+    sceneSourceRef.current = isFirstLayout ? 'layout-build' : 'layout-rebuild'
     setRfNodes(fixed)
     setRfEdges(newEdges)
     // Signal overlay effects (runtime / focus / trace) to restamp their
@@ -2129,19 +2560,27 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
 
     if (isFirstLayout) {
       layoutBuiltRef.current = projectId
-      scheduleTimeout(() => fitView({ padding: 0.12, duration: 400 }), 80)
+      // maxZoom keeps a sparse Floor (one or two fresh files) from being blown
+      // up to fill the screen; live growth reframes gently from here.
+      queueCameraFit(80, { padding: 0.25, duration: 950, maxZoom: 1.0 })
     }
-  }, [systems, files, infraNodes, floorLayouts, dependencies, selectionMode, onNodeResizeEnd, armResizeEndFallback])
+  }, [systems, files, infraNodes, floorLayouts, dependencies, onNodeResizeEnd, armResizeEndFallback, queueCameraFit])
+
+  // Live reframing — as files stream in from the watcher, gently fit the growing
+  // graph so new nodes come into view at a sensible zoom, instead of leaving the
+  // camera parked on the first node. Skips the initial 0→N population (handled by
+  // the first-layout fit) and yields while the user is actively navigating.
+  useEffect(() => {
+    const count = systems.length + files.length + infraNodes.length
+    const prev = liveNodeCountRef.current
+    liveNodeCountRef.current = count
+    if (prev === 0 || count <= prev) return
+    queueCameraFit(1800, { padding: 0.28, duration: 1100, maxZoom: 1.0 })
+  }, [systems.length, files.length, infraNodes.length, queueCameraFit])
 
   useEffect(() => {
     setRfNodes(curr => curr.map(n => ({ ...n, selected: n.id === selectedNodeId })))
   }, [selectedNodeId])
-
-  useEffect(() => {
-    setRfNodes(curr => curr.map(n => ({
-      ...n, data: { ...n.data, agentTouched: agentTouchedIds.has(n.id) },
-    })))
-  }, [agentTouchedIds])
 
   // ── Runtime activity ─────────────────────────────────────────────────────
   // Stamp live runtime state (watch markers, call counts, pulse triggers)
@@ -2241,10 +2680,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       source: step.callerFile,
       target: step.calleeFile,
       className: 'trace-edge',
-      markerEnd: { type: MarkerType.ArrowClosed, color: '#22d3ee', width: 16, height: 16 },
       style: { stroke: '#22d3ee', strokeWidth: 2 },
       label: step.callerSymbol && step.calleeSymbol
-        ? `${step.callerSymbol} → ${step.calleeSymbol}`
+        ? `${step.callerSymbol} · ${step.calleeSymbol}`
         : undefined,
       labelStyle: { fill: '#22d3ee', fontSize: 10, fontWeight: 600 },
       labelBgStyle: { fill: 'rgba(10,13,20,0.85)', rx: 4 },
@@ -2335,12 +2773,56 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [])
 
   const handleWheel = useCallback((e: WheelEvent) => {
-    // Check if target or any ancestor is marked "nowheel"
-    let target = e.target as HTMLElement | null
-    while (target) {
-      if (target.classList?.contains('nowheel')) return
-      target = target.parentElement
+    // Scrollable node content (symbol lists, class members) gets the wheel
+    // while it can still scroll; the canvas takes over at the boundary.
+    const route = routeWheelEvent(
+      e.target as Element | null,
+      e.deltaY,
+      canvasRootRef.current,
+      element => {
+        const style = window.getComputedStyle(element)
+        return {
+          overflowY: style.overflowY,
+          scrollTop: element.scrollTop,
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+        }
+      },
+    )
+    if (route.kind === 'ignore') return
+
+    // Scroll latching. Once a gesture is scrolling a list it keeps that list
+    // until the user actually stops, even after hitting an end. Without this,
+    // running out of list mid-flick hands the rest of the same gesture to the
+    // canvas and it scrolls and zooms at once.
+    const now = e.timeStamp
+    const latched = wheelLatchRef.current
+    const latchedElement = latched && now - latched.lastEventAt < WHEEL_LATCH_MS &&
+      latched.element.isConnected
+      ? latched.element
+      : null
+    const scrollElement = latchedElement ??
+      (route.kind === 'scroll' ? route.element : null)
+
+    if (scrollElement) {
+      // Consume it outright. Native scrolling is unreliable inside a
+      // transform-scaled node, and any other wheel listener acting on the same
+      // event would fight Axiom's zoom.
+      e.preventDefault()
+      e.stopPropagation()
+      wheelLatchRef.current = { element: scrollElement, lastEventAt: now }
+      // A gesture that began before the latch may have started a smooth zoom
+      // that keeps easing for many frames. It must die here.
+      if (smoothZoomRafRef.current !== null) {
+        cancelAnimationFrame(smoothZoomRafRef.current)
+        smoothZoomRafRef.current = null
+      }
+      targetZoomRef.current = null
+      targetViewportRef.current = null
+      scrollElement.scrollTop += wheelScrollStep(e.deltaY, scrollElement.clientHeight)
+      return
     }
+    wheelLatchRef.current = null
 
     e.preventDefault()
 
@@ -2408,6 +2890,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
 
     // Cancel smooth zoom animation if movement is driven by user interaction (drag, pinch, etc.)
     if (event) {
+      lastUserMoveAtRef.current = Date.now()
       if (smoothZoomRafRef.current !== null) {
         cancelAnimationFrame(smoothZoomRafRef.current)
         smoothZoomRafRef.current = null
@@ -2419,21 +2902,48 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     if (zoomRafRef.current) cancelAnimationFrame(zoomRafRef.current)
     zoomRafRef.current = requestAnimationFrame(() => {
       const draggingId = draggingNodeIdRef.current
+      // Panning (zoom unchanged) never alters semantic visibility. Restamping
+      // every node on each pan frame is what made panning feel janky — skip it
+      // unless the zoom actually changed (or a node is being dragged).
+      if (!draggingId && Math.abs(zoom - lastVisibilityZoomRef.current) < 1e-4) return
+      lastVisibilityZoomRef.current = zoom
+      sceneSourceRef.current = 'zoom-visibility'
       setRfNodes(curr => {
-        const updated = applyZoomVisibility(curr, zoom)
-        if (!draggingId) return updated
-        return updated.map(n => n.id === draggingId ? makeFullyVisible(n) : n)
+        let updated = applyZoomVisibility(curr, zoom)
+        if (draggingId) {
+          updated = updated.map(n => n.id === draggingId ? makeFullyVisible(n) : n)
+        }
+        return updated
       })
     })
   }, [])
 
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => {
+      const { interaction, rejectedStructural } = partitionCanvasNodeChanges(changes)
+      if (rejectedStructural.length > 0) {
+        console.error('[scene-integrity] rejected structural React Flow changes', {
+          projectId: useGraphStore.getState().currentProject?.id ?? 'demo',
+          canonicalNodeCount:
+            useGraphStore.getState().systems.length +
+            useGraphStore.getState().files.length +
+            useGraphStore.getState().infraNodes.length,
+          sceneNodeCount: displayNodesRef.current.length,
+          // 'add' changes carry the whole node instead of a bare id, so the id
+          // has to be read defensively or this diagnostic throws while
+          // reporting the very corruption it exists to catch.
+          changes: rejectedStructural.map(change => ({
+            type: change.type,
+            id: 'id' in change ? change.id : change.item?.id ?? null,
+          })),
+        })
+      }
+      if (interaction.length === 0) return
       const moveTrace = dragTraceRef.current
       if (moveTrace) {
         const viewport = getViewport()
         const now = performance.now()
-        for (const change of changes) {
+        for (const change of interaction) {
           if (change.type !== 'position') continue
           const previous = moveTrace.previousChangeByNodeId.get(change.id)
           const x = change.position?.x ?? null
@@ -2457,11 +2967,11 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           if (x !== null && y !== null) moveTrace.previousChangeByNodeId.set(change.id, { x, y })
         }
       }
-      selectedIdsRef.current = selectionAfterNodeChanges(selectedIdsRef.current, changes)
+      commitSelection(selectionAfterNodeChanges(selectedIdsRef.current, interaction))
       // North/west resize handles change the frame origin as well as its
       // dimensions. Apply the complete React Flow change set so the edge under
       // the pointer remains under the pointer and child compensation stays live.
-      const interactionChanges = changes
+      const interactionChanges = interaction
       // Planned overlay nodes live in the sheet store, not rfNodes — route
       // their drags there and keep the rest on the normal path.
       if (overlaySheetId) {
@@ -2471,6 +2981,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           setSheetInteractionNodes(nodes => applyNodeChanges(geometryChanges, nodes ?? displayNodesRef.current))
         }
       } else {
+        sceneSourceRef.current = 'react-flow-interaction'
         setRfNodes(nodes => applyNodeChanges(interactionChanges, nodes))
       }
     }, [getViewport, overlaySheetId]
@@ -2480,7 +2991,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   )
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
-    selectedIdsRef.current = singleNodeSelection(node.id)
+    commitSelection(singleNodeSelection(node.id))
     setSelectedNode(node.id)
     const target = event.target as HTMLElement | null
     if (!target?.closest('input, textarea, select, button, [contenteditable="true"], [data-node-editable="true"]')) {
@@ -2496,7 +3007,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [setSelectedNode, setInspectedNode])
 
   const onPaneClick = useCallback(() => {
-    selectedIdsRef.current = emptySelection()
+    commitSelection(emptySelection())
     setSelectedNode(null)
     setInspectedNode(null)
   }, [setSelectedNode, setInspectedNode])
@@ -2505,8 +3016,24 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const onNodeDragStart: OnNodeDrag = useCallback((event, node) => {
     if (resizingNodeIdRef.current === node.id) return
     setIsTransitioningLayout(false)
+    setIsDraggingScene(true)
     draggingNodeIdRef.current = node.id
     dragPositionRef.current.set(node.id, { x: node.position.x, y: node.position.y })
+    // Forcing the dragged node fully visible is drag BEHAVIOR, not
+    // instrumentation, so it has to run before the tracing gate below. A
+    // semantically faded node keeps `pointerEvents: none`, and a node that
+    // cannot receive its own pointerup never ends its drag — it just follows
+    // the cursor until the app is reloaded.
+    updateInteractiveNodes(curr => curr.map(n => n.id === node.id ? makeFullyVisible(n) : n))
+    // The pointer/geometry move trace samples getBoundingClientRect and builds
+    // a wide row on every pointer move, forcing synchronous layout mid-drag.
+    // That is a debugging instrument, not drag behavior: leaving it hot costs
+    // frames on every drag, and a multi-node drag pays it per moved node.
+    // Enable with `window.__axiomDragTrace = true` when investigating drags.
+    if (!dragTraceEnabled()) {
+      dragTraceRef.current = null
+      return
+    }
     const pointer = pointerTraceCoordinates(event)
     const viewport = getViewport()
     const flowPointer = screenToFlowPosition({ x: pointer.clientX, y: pointer.clientY })
@@ -2561,8 +3088,6 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         : undefined,
       element: traceState.elements.find(e => (e.systemId ?? e.fileId ?? e.infraId) === node.id),
     })
-    updateInteractiveNodes(curr => curr.map(n => n.id === node.id ? makeFullyVisible(n) : n))
-
   }, [getInternalNode, getViewport, screenToFlowPosition, updateInteractiveNodes])
 
   const onNodeDrag: OnNodeDrag = useCallback((event, node) => {
@@ -2649,8 +3174,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       }
     }
 
-    // Freeform hit-testing: choose the smallest eligible frame under the
-    // cursor. No barriers, cell snapping, sibling displacement, or DOM nudges.
+    // Freeform hit-testing: the CURSOR chooses which frame you are dropping
+    // into — that is the gesture the hand is making, and requiring the whole
+    // node to be inside made frames nearly impossible to hit. Containment is
+    // enforced separately, at commit, by nudging the node fully inside the
+    // frame it landed in. No barriers, cell snapping, sibling displacement,
+    // or DOM nudges.
     dragPositionRef.current.set(node.id, { x: node.position.x, y: node.position.y })
     const cursor = screenToFlowPosition({ x: clientX, y: clientY })
     const allNodes = displayNodesRef.current
@@ -2675,7 +3204,8 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       const absolute = internal.internals.positionAbsolute
       const width = Number(candidate.measured?.width ?? candidate.style?.width ?? 0)
       const height = Number(candidate.measured?.height ?? candidate.style?.height ?? 0)
-      return cursor.x >= absolute.x && cursor.x <= absolute.x + width && cursor.y >= absolute.y && cursor.y <= absolute.y + height
+      return cursor.x >= absolute.x && cursor.x <= absolute.x + width &&
+        cursor.y >= absolute.y && cursor.y <= absolute.y + height
     }).sort((a, b) => {
       const area = (candidate: Node) => Number(candidate.measured?.width ?? candidate.style?.width ?? 0) * Number(candidate.measured?.height ?? candidate.style?.height ?? 0)
       return area(a) - area(b)
@@ -2756,6 +3286,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       dragTraceRef.current = null
     }
     // Clear drag state — restore zoom visibility, clear drop highlight
+    setIsDraggingScene(false)
     draggingNodeIdRef.current = null
     const prevTarget = dropTargetRef.current
     dropTargetRef.current = null
@@ -2790,17 +3321,45 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       })
 
       if (workspaceId && plan.updates.length > 0) {
+        // PHASE ONE — land, untransitioned, exactly where the pointer let go,
+        // but already under the new parent. Visually a no-op.
+        //
+        // Committing the reparent and the correction together is what made a
+        // reparenting drop teleport: the node's first rendered frame under its
+        // new parent was already the corrected one, so the CSS transition had
+        // no previous value to interpolate from. A same-parent nudge animated
+        // fine precisely because its "before" was already on screen.
+        setIsDraggingScene(false)
+        setIsTransitioningLayout(false)
         useGraphStore.setState(state => ({
-          floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.optimisticLayouts, plan.changedKeys),
+          floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.arrivalLayouts, plan.changedKeys),
         }))
-        void apiSaveFloorLayouts(workspaceId, plan.updates).catch(error => {
-          console.error('[AxiomCanvas] floor group drop failed', error)
-          useGraphStore.setState(state => ({
-            floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.previousLayouts, plan.changedKeys),
-          }))
+
+        // PHASE TWO — arm the transition a frame later, then move. Two frames
+        // because the class must be on the wrapper in a commit BEFORE the one
+        // that changes geometry; arming and moving together races the paint.
+        requestAnimationFrame(() => {
+          setIsTransitioningLayout(true)
+          requestAnimationFrame(() => {
+            useGraphStore.setState(state => ({
+              floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.optimisticLayouts, plan.changedKeys),
+            }))
+            window.setTimeout(() => setIsTransitioningLayout(false), LAYOUT_TRANSITION_MS)
+            void apiSaveFloorLayouts(workspaceId, plan.updates).catch(error => {
+              console.error('[AxiomCanvas] floor group drop failed', error)
+              useGraphStore.setState(state => ({
+                floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.previousLayouts, plan.changedKeys),
+              }))
+            })
+          })
         })
       }
-      selectedIdsRef.current = new Set(plan.selectedIds)
+      commitSelection(new Set(plan.selectedIds))
+      // Repacks legitimately move several nodes at once. Label them so the
+      // scene tracer records the event without reporting it as a fault.
+      sceneSourceRef.current = plan.updates.length > 1
+        ? 'floor-drop-repack'
+        : 'floor-drop'
       updateInteractiveNodes(current => current.map(candidate => ({
         ...candidate,
         selected: plan.selectedIds.includes(candidate.id),
@@ -2829,7 +3388,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       if (plan.mutations.length > 0) {
         void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetId, plan.mutations).catch(() => {})
       }
-      selectedIdsRef.current = new Set(plan.selectedIds)
+      commitSelection(new Set(plan.selectedIds))
       setSheetInteractionNodes(null)
       updateInteractiveNodes(current => current.map(candidate => ({
         ...candidate,
@@ -2842,7 +3401,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [currentProject, getInternalNode, getViewport, screenToFlowPosition, overlaySheetId, activeElementByNodeId, activePlannedByNodeId, activeNodeIds, workspaceIdForOverlay, updateInteractiveNodes])
 
   const renderedNodes = overlaySheetId
-    ? displayNodes.map(n => activeNodeIds.has(n.id)
+    ? attentionNodes.map(n => activeNodeIds.has(n.id)
       ? {
           ...n,
           data: {
@@ -2863,11 +3422,74 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           },
         }
       : n)
-    : displayNodes
+    : attentionNodes
 
-  const selectedFileIds = renderedNodes
-    .filter(n => n.selected && n.type === 'file')
-    .map(n => n.id)
+  // Identity of renderedNodes churns every render while a sheet overlay is
+  // open, so the recovery below keys off this value-stable signature instead.
+  const renderedSceneSignature = useMemo(
+    () => `${sceneProjectId}:${renderedNodes.map(node => node.id).sort().join('|')}`,
+    [renderedNodes, sceneProjectId],
+  )
+  const renderedNodesRef = useRef(renderedNodes)
+  renderedNodesRef.current = renderedNodes
+
+  // Scene-mutation tracer. Diffs what is actually about to be painted, so a
+  // frame where geometry jumps is attributed to the path that caused it.
+  useEffect(() => {
+    const next = sceneGeometry(renderedNodes)
+    const delta = diffScene(sceneSnapshotRef.current, next)
+    sceneSnapshotRef.current = next
+    if (sceneDeltaIsQuiet(delta)) return
+    recordSceneMutation({
+      ...delta,
+      at: Math.round(performance.now()),
+      source: sceneSourceRef.current,
+      zoom: currentZoomRef.current,
+      nodeCount: next.length,
+      dragging: draggingNodeIdRef.current,
+    })
+  }, [renderedNodes])
+
+  useEffect(() => {
+    if (canonicalNodeCount === 0 || renderedNodesRef.current.length === 0) return
+    const signature = renderedSceneSignature
+    const timer = window.setTimeout(() => {
+      const root = canvasRootRef.current
+      if (!root) return
+      const domNodes = [...root.querySelectorAll<HTMLElement>('.react-flow__node')]
+      const visibleDomNodeCount = domNodes.filter(node => {
+        const style = window.getComputedStyle(node)
+        return style.visibility !== 'hidden' &&
+          style.display !== 'none' &&
+          Number(style.opacity) > 0.1
+      }).length
+      if (visibleDomNodeCount > 0) {
+        domSceneRecoveryRef.current = ''
+        return
+      }
+      if (domSceneRecoveryRef.current === signature) return
+      domSceneRecoveryRef.current = signature
+      console.error('[scene-integrity] React Flow DOM diverged from controlled scene', {
+        projectId: sceneProjectId,
+        canonicalNodeCount,
+        candidateNodeCount: candidateRfNodes.length,
+        renderedNodeCount: renderedNodesRef.current.length,
+        domNodeCount: domNodes.length,
+        visibleDomNodeCount,
+        candidateIntegrity: candidateSceneIntegrity,
+      })
+      // Re-issue fresh node objects once. This re-synchronizes React Flow's
+      // internal lookup with the still-valid controlled projection.
+      sceneSourceRef.current = 'dom-recovery'
+      setRfNodes(current => current.map(node => ({ ...node })))
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [
+    candidateSceneIntegrity,
+    canonicalNodeCount,
+    renderedSceneSignature,
+    sceneProjectId,
+  ])
 
   const traceSuspiciousCursor = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const element = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null
@@ -2985,7 +3607,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   return (
     <div
       ref={canvasRootRef}
-      className={isTransitioningLayout ? 'layout-transition' : undefined}
+      className={[
+        isTransitioningLayout ? 'layout-transition' : '',
+        isDraggingScene ? 'axiom-dragging' : '',
+      ].filter(Boolean).join(' ') || undefined}
       onDragOverCapture={onOverlayDragOver}
       onDropCapture={onOverlayDrop}
       onPointerDownCapture={traceCanvasHit}
@@ -3005,6 +3630,8 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         onNodeClick={onNodeClick}
         onNodeDoubleClick={onNodeDoubleClick}
         onPaneClick={onPaneClick}
+        onSelectionDragStart={readOnly ? undefined : () => setIsDraggingScene(true)}
+        onSelectionDragStop={readOnly ? undefined : () => setIsDraggingScene(false)}
         onNodeDragStart={readOnly ? undefined : onNodeDragStart}
         onNodeDrag={readOnly ? undefined : onNodeDrag}
         onNodeDragStop={readOnly ? undefined : onNodeDragStop}
@@ -3012,14 +3639,14 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         minZoom={MIN_CANVAS_ZOOM}
         maxZoom={MAX_CANVAS_ZOOM}
         defaultViewport={{ x: 0, y: 0, zoom: 0.5 }}
-        fitView
-        fitViewOptions={{ padding: 0.14 }}
+        fitViewOptions={{ padding: 0.14, maxZoom: 1.0 }}
         proOptions={{ hideAttribution: true }}
         panOnDrag={selectionMode ? [1, 2] : true}
         selectionOnDrag={readOnly ? false : selectionMode}
         selectionMode={selectionMode ? SelectionMode.Partial : SelectionMode.Full}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly && !!overlaySheetId}
+        deleteKeyCode={null}
         elementsSelectable={!readOnly}
         snapToGrid={false}
         // Large graphs: skip rendering off-screen nodes. Kept off for small
@@ -3029,8 +3656,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         {/* Pattern color transparent — the drafting line grid is painted by
             .react-flow__background CSS; this component just provides the element. */}
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="transparent" />
-        <Controls showInteractive={false} />
+        <Controls className="axiom-canvas-controls" showInteractive={false} />
         <MiniMap
+          className="axiom-canvas-minimap"
           style={{ width: 160, height: 100 }}
           nodeColor={(n) => {
             const d = n.data as unknown as SystemNodeData | FileNodeData | InfraNodeData
@@ -3039,12 +3667,19 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             if (n.type === 'infra') return '#D4A843'
             return '#2a2e33'
           }}
-          maskColor="rgba(10,13,20,0.8)"
+          maskColor="rgba(49,62,58,0.38)"
         />
-        <Panel position="top-left" style={{ display: 'flex', gap: 8, margin: '12px' }}>
+        <LivingFlowOverlay
+          events={relationshipFx}
+          nodes={livingDisplayNodes}
+          visibilityOptions={livingVisibilityOptions}
+        />
+        <Panel position="top-left" className="axiom-canvas-toolbar">
           <button
+            type="button"
             onClick={tidyFrame}
             disabled={isTidying || readOnly}
+            aria-busy={isTidying}
             className="axiom-canvas-command"
           >
             {isTidying ? (
@@ -3056,7 +3691,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
                   stroke="currentColor"
                   strokeWidth="2.5"
                 >
-                  <circle cx="12" cy="12" r="10" stroke="rgba(255, 255, 255, 0.2)" />
+                  <circle cx="12" cy="12" r="10" stroke="rgba(49, 94, 88, 0.24)" />
                   <path d="M12 2a10 10 0 0 1 10 10" />
                 </svg>
                 Tidying...
@@ -3082,6 +3717,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           </button>
           {focusFileIds.size > 0 && (
             <button
+              type="button"
               onClick={() => setFocusEnabled(v => !v)}
               title="Dim nodes that are off the active trace / runtime path"
               className={focusEnabled
@@ -3097,23 +3733,26 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             </button>
           )}
         </Panel>
-        <Panel position="bottom-left" style={{ margin: '0 0 12px 48px' }}>
+        <Panel position="bottom-left" className="axiom-canvas-zoom-panel">
           <ZoomIndicator />
         </Panel>
       </ReactFlow>
 
       {selectedFileIds.length > 1 && (
         <div className="axiom-selection-actions">
-          <span style={{ fontSize: 13, color: 'var(--text-primary)' }}>
-            {selectedFileIds.length} files selected
+          <span className="axiom-selection-actions__summary">
+            <strong>{selectedFileIds.length}</strong>
+            <span>files selected</span>
           </span>
           <button
+            type="button"
             onClick={() => setGroupDialogOpen(true)}
             className="axiom-selection-action axiom-selection-action--primary"
           >
             Group into System
           </button>
           <button
+            type="button"
             onClick={() => setSheetDialogOpen(true)}
             title="Curate the selection onto a named sheet — a live diagram telling one story"
             className="axiom-selection-action"
@@ -3121,6 +3760,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
             New Sheet
           </button>
           <button
+            type="button"
             onClick={() => setSelectionMode(false)}
             className="axiom-selection-action axiom-selection-action--ghost"
           >
@@ -3135,6 +3775,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         selectedFileIds={selectedFileIds}
         onSuccess={() => {
           setRfNodes(nodes => nodes.map(n => ({ ...n, selected: false })))
+          commitSelection(emptySelection())
           useGraphStore.getState().setSelectionMode(false)
         }}
       />
@@ -3143,14 +3784,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       {overlaySheetId && (
         <>
           <SheetPalette />
-          <div style={{
-            position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
-            zIndex: 1000, background: 'var(--bg-surface)', border: '1px solid var(--border)',
-            padding: '5px 12px', boxShadow: 'var(--shadow-card)',
-            fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 700,
-            letterSpacing: '0.08em', color: 'var(--accent)',
-          }}>
-            SHEET LAYER ACTIVE
+          <div className="axiom-sheet-layer-indicator">
+            <span aria-hidden="true" />
+            Sheet Layer Active
           </div>
         </>
       )}
@@ -3161,12 +3797,14 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         selectedFileIds={selectedFileIds}
         onSuccess={() => {
           setRfNodes(nodes => nodes.map(n => ({ ...n, selected: false })))
+          commitSelection(emptySelection())
           useGraphStore.getState().setSelectionMode(false)
         }}
       />
 
       {infraPickerNodeId && activePlannedByNodeId.get(`planned:${infraPickerNodeId}`) && (
         <InfraPickerDialog
+          mode="assign"
           node={activePlannedByNodeId.get(`planned:${infraPickerNodeId}`)!}
           onClose={() => setInfraPickerNode(null)}
         />

@@ -10,6 +10,12 @@ contextBridge.exposeInMainWorld('axiom', {
   openProject: (config: ProjectConfig): Promise<ProjectConfig> =>
     ipcRenderer.invoke('project:open', config),
 
+  chooseDirectory: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:choose-directory'),
+
+  createProject: (parentDir: string, name: string): Promise<ProjectConfig> =>
+    ipcRenderer.invoke('project:create', { parentDir, name }),
+
   listRecentProjects: (): Promise<ProjectConfig[]> =>
     ipcRenderer.invoke('project:list-recent'),
 
@@ -55,6 +61,8 @@ declare global {
     axiom: {
       openProjectDialog: () => Promise<ProjectConfig | null>
       openProject: (config: ProjectConfig) => Promise<ProjectConfig>
+      chooseDirectory: () => Promise<string | null>
+      createProject: (parentDir: string, name: string) => Promise<ProjectConfig>
       listRecentProjects: () => Promise<ProjectConfig[]>
       removeProject: (projectId: string) => Promise<void>
       sendMutationIntent: (intent: unknown) => void

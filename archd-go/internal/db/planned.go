@@ -29,6 +29,7 @@ type PlannedNode struct {
 	Members        json.RawMessage `json:"members"`  // []PlannedMember
 	Metadata       json.RawMessage `json:"metadata"` // versioned kind-specific UML metadata
 	Status         string          `json:"status"`
+	ApprovalStatus string          `json:"approvalStatus"` // pending|approved|rejected
 	RealizedFileID *string         `json:"realizedFileId"`
 	Notes          string          `json:"notes"`
 	Shape          string          `json:"shape"` // ''=kind default | 'box'|'folder'|'cylinder'|'hexagon'
@@ -56,7 +57,7 @@ type PlannedEdge struct {
 }
 
 const plannedCols = `id, sheet_id, workspace_id, kind, name, declared_path, members, metadata,
-       status, realized_file_id, notes, shape, color, position_x, position_y, width, height, scale, parent_system_id, created_by, created_at`
+       status, approval_status, realized_file_id, notes, shape, color, position_x, position_y, width, height, scale, parent_system_id, created_by, created_at`
 
 func UpsertPlannedNode(db *sql.DB, n *PlannedNode) error {
 	if n.ID == "" {
@@ -68,6 +69,19 @@ func UpsertPlannedNode(db *sql.DB, n *PlannedNode) error {
 	if n.Status == "" {
 		n.Status = "planned"
 	}
+	if n.CreatedBy == "" {
+		n.CreatedBy = "user"
+	}
+	if n.ApprovalStatus == "" {
+		if n.CreatedBy == "agent" {
+			n.ApprovalStatus = "pending"
+		} else {
+			n.ApprovalStatus = "approved"
+		}
+	}
+	if n.ApprovalStatus != "pending" && n.ApprovalStatus != "approved" && n.ApprovalStatus != "rejected" {
+		return fmt.Errorf("planned node approval must be pending, approved, or rejected")
+	}
 	if len(n.Members) == 0 {
 		n.Members = json.RawMessage("[]")
 	}
@@ -77,26 +91,24 @@ func UpsertPlannedNode(db *sql.DB, n *PlannedNode) error {
 	if !json.Valid(n.Metadata) || strings.TrimSpace(string(n.Metadata))[0] != '{' {
 		return fmt.Errorf("planned node metadata must be a JSON object")
 	}
-	if n.CreatedBy == "" {
-		n.CreatedBy = "user"
-	}
 	if n.CreatedAt == 0 {
 		n.CreatedAt = time.Now().UnixMilli()
 	}
 	n.Scale = normalizedScale(n.Scale)
 	_, err := db.Exec(`
 		INSERT INTO planned_nodes (`+plannedCols+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 			kind=excluded.kind, name=excluded.name, declared_path=excluded.declared_path,
 			members=excluded.members, metadata=excluded.metadata, status=excluded.status,
+			approval_status=excluded.approval_status,
 			realized_file_id=excluded.realized_file_id, notes=excluded.notes,
 			shape=excluded.shape, color=excluded.color,
 			position_x=excluded.position_x, position_y=excluded.position_y,
 			width=excluded.width, height=excluded.height, scale=excluded.scale,
 			parent_system_id=excluded.parent_system_id`,
 		n.ID, n.SheetID, n.WorkspaceID, n.Kind, n.Name, n.DeclaredPath, string(n.Members), string(n.Metadata),
-		n.Status, n.RealizedFileID, n.Notes, n.Shape, n.Color, n.PositionX, n.PositionY, n.Width, n.Height, n.Scale, n.ParentSystemID, n.CreatedBy, n.CreatedAt)
+		n.Status, n.ApprovalStatus, n.RealizedFileID, n.Notes, n.Shape, n.Color, n.PositionX, n.PositionY, n.Width, n.Height, n.Scale, n.ParentSystemID, n.CreatedBy, n.CreatedAt)
 	if err == nil {
 		_ = TouchSheet(db, n.SheetID)
 	}
@@ -109,7 +121,7 @@ func scanPlanned(rows *sql.Rows) ([]PlannedNode, error) {
 		var n PlannedNode
 		var members, metadata string
 		if err := rows.Scan(&n.ID, &n.SheetID, &n.WorkspaceID, &n.Kind, &n.Name,
-			&n.DeclaredPath, &members, &metadata, &n.Status, &n.RealizedFileID, &n.Notes,
+			&n.DeclaredPath, &members, &metadata, &n.Status, &n.ApprovalStatus, &n.RealizedFileID, &n.Notes,
 			&n.Shape, &n.Color, &n.PositionX, &n.PositionY, &n.Width, &n.Height, &n.Scale, &n.ParentSystemID, &n.CreatedBy, &n.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -146,7 +158,7 @@ func GetPlannedNode(db *sql.DB, id string) (*PlannedNode, error) {
 // the reconciliation working set.
 func GetOpenPlannedNodes(db *sql.DB, workspaceID string) ([]PlannedNode, error) {
 	rows, err := db.Query(`SELECT `+plannedCols+` FROM planned_nodes
-		WHERE workspace_id=? AND status IN ('planned','partial')`, workspaceID)
+		WHERE workspace_id=? AND status IN ('planned','partial') AND approval_status='approved'`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +169,30 @@ func GetOpenPlannedNodes(db *sql.DB, workspaceID string) ([]PlannedNode, error) 
 func DeletePlannedNode(db *sql.DB, id string) error {
 	_, err := db.Exec(`DELETE FROM planned_nodes WHERE id=?`, id)
 	return err
+}
+
+func SetPlannedApproval(db *sql.DB, id, approval string) (*PlannedNode, error) {
+	if approval != "approved" && approval != "rejected" {
+		return nil, fmt.Errorf("approval must be approved or rejected")
+	}
+	result, err := db.Exec(
+		`UPDATE planned_nodes SET approval_status=? WHERE id=? AND approval_status='pending'`,
+		approval, id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if changed, _ := result.RowsAffected(); changed == 0 {
+		node, getErr := GetPlannedNode(db, id)
+		if getErr != nil || node == nil {
+			return nil, getErr
+		}
+		if node.ApprovalStatus != approval {
+			return nil, fmt.Errorf("planned node is %s, not awaiting approval", node.ApprovalStatus)
+		}
+		return node, nil
+	}
+	return GetPlannedNode(db, id)
 }
 
 func UpdatePlannedPosition(db *sql.DB, id string, x, y float64) error {

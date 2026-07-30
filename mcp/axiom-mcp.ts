@@ -16,6 +16,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { join } from 'path'
 import { homedir } from 'os'
+import { actionKind, actionSummary, actionTargets } from './agentAction.ts'
 import fs from 'fs'
 
 // Helper: UUID generator for system nodes
@@ -26,6 +27,11 @@ function generateUUID(): string {
     return v.toString(16)
   })
 }
+
+// Stable for this MCP process: starting another task supersedes only this
+// client's forgotten session, never another agent working in parallel.
+const workOwnerKey = generateUUID()
+const activeWorkSessionIds = new Map<string, string>()
 
 // Helper: Retrieve the active project metadata
 interface ActiveProject {
@@ -65,6 +71,39 @@ async function postAgentActivity(workspaceId: string, message: string, level: 'i
     })
   } catch (err) {
     console.error('[axiom-mcp] failed to post agent activity:', err)
+  }
+}
+
+/**
+ * Records one agent action so the canvas can show it and the visual log can
+ * keep it. Best-effort by design: failing to log must never fail the agent's
+ * actual work, so this never throws and is never awaited on the hot path.
+ */
+async function postAgentAction(
+  workspaceId: string,
+  tool: string,
+  args: Record<string, any>,
+  result: unknown,
+  startedAt: number,
+  error?: string,
+) {
+  try {
+    await fetch('http://localhost:7743/api/agent/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId,
+        tool,
+        kind: actionKind(tool),
+        summary: actionSummary(tool, args),
+        targets: actionTargets(tool, args, result),
+        durationMs: Date.now() - startedAt,
+        status: error ? 'error' : 'ok',
+        error: error ?? '',
+      }),
+    })
+  } catch {
+    // The log is an observability aid, never a dependency.
   }
 }
 
@@ -494,6 +533,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'start_work',
+      description: "Declare what you are about to build or change, BEFORE you start editing files. Include the files or system boundaries you expect to touch: Axiom shows that scope live on the canvas and uses it to keep parallel agents' changes honestly attributed. Starting new work closes only this MCP client's previous session.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          goal: { type: 'string', description: 'What you are setting out to do, in one plain sentence the human would recognise. e.g. "Add write-through caching to the storage layer"' },
+          agent: { type: 'string', description: 'Your name/model, so the human knows who did the work (e.g. "claude", "antigravity")' },
+          focus: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Existing file paths/IDs or system names/IDs whose boundaries this work will touch. Prefer the smallest honest scope.',
+          },
+        },
+        required: ['goal'],
+      },
+    },
+    {
+      name: 'note_work',
+      description: "Record a decision or a caveat while you work — especially anything the human would otherwise have to reverse-engineer from the diff: why you crossed a system boundary, what you deliberately did not do, a tradeoff you took. These notes appear inline in the human's Morning Delta review. Requires an active session (start_work).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'The decision, reason, or caveat to record' },
+        },
+        required: ['text'],
+      },
+    },
+    {
+      name: 'finish_work',
+      description: 'Close the current work session with a short account of what actually changed architecturally. Write it for someone reviewing the map, not reading the diff: name the boundaries you crossed and the pieces you added or removed. Call this when your task is complete.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          summary: { type: 'string', description: 'What changed, architecturally, in one or two sentences' },
+        },
+        required: ['summary'],
+      },
+    },
+    {
       name: 'start_investigation',
       description: 'Begin capturing an Investigation: from now on every call path traced, function watched, runtime call/return/exception observed, value injected, data-flow slice, and note is recorded into an ordered, replayable timeline linked to the current git commit. Use this at the start of a debugging session so the whole investigation can be saved and shared. Call stop_investigation to save it.',
       inputSchema: {
@@ -695,7 +773,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'plan_element',
-      description: 'Add a PLANNED element to a sheet — a UML box for code that does not exist yet (visual spec-driven development). Declare the path where it should live and its member function signatures; Axiom reconciles automatically as the code gets built and the user watches members turn green on the canvas.',
+      description: 'Propose a PLANNED element on a sheet before writing code. Agent-created elements enter pending approval on the canvas; do not implement them until get_plan_status reports approved. Once approved, Axiom reconciles automatically as code is built and the user watches members turn green.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -709,6 +787,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           color: { type: 'string', description: 'Accent hex from the drafting palette, e.g. "#5B8A9A"' },
         },
         required: ['sheet', 'name'],
+      },
+    },
+    {
+      name: 'get_plan_status',
+      description: 'Check whether a planned element proposed by an agent is pending, approved, or rejected. Poll this after plan_element and do not write the proposed code until approvalStatus is approved.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Planned element ID returned by plan_element' },
+        },
+        required: ['id'],
       },
     },
     {
@@ -769,8 +858,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: rawArgs } = request.params
   const args = rawArgs as Record<string, any> ?? {}
 
+  const startedAt = Date.now()
+  let loggedWorkspaceId = ''
+
   try {
     const project = getActiveProject()
+    loggedWorkspaceId = project.workspaceId
     let result: unknown
 
     switch (name) {
@@ -1652,6 +1745,65 @@ Steps to execute:
         break
       }
 
+      case 'start_work': {
+        const goal = args.goal as string
+        const agent = (args.agent as string) ?? ''
+        const focus = (args.focus as string[] | undefined) ?? []
+        const focusSystemIds: string[] = []
+        const focusFileIds: string[] = []
+        for (const ref of focus) {
+          const resolved = await resolveModelRef(project.workspaceId, ref)
+          if (resolved.systemId) focusSystemIds.push(resolved.systemId)
+          else if (resolved.fileId) focusFileIds.push(resolved.fileId)
+          else throw new Error(`Work focus "${ref}" is infrastructure; use a file or system boundary`)
+        }
+        const res = await fetch('http://localhost:7743/api/work/start', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            ownerKey: workOwnerKey,
+            goal,
+            agent,
+            focusSystemIds: [...new Set(focusSystemIds)],
+            focusFileIds: [...new Set(focusFileIds)],
+          }),
+        })
+        if (!res.ok) throw new Error(`start_work failed: ${await res.text()}`)
+        result = await res.json()
+        activeWorkSessionIds.set(project.workspaceId, (result as { id: string }).id)
+        await postAgentActivity(project.workspaceId, `Working: ${goal}`, 'info')
+        break
+      }
+
+      case 'note_work': {
+        const text = args.text as string
+        const sessionId = activeWorkSessionIds.get(project.workspaceId)
+        if (!sessionId) throw new Error('No active work session in this MCP client — call start_work first')
+        const res = await fetch('http://localhost:7743/api/work/note', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, sessionId, text }),
+        })
+        if (!res.ok) throw new Error(`note_work failed: ${await res.text()}`)
+        result = await res.json()
+        await postAgentActivity(project.workspaceId, `Note: ${text}`, 'info')
+        break
+      }
+
+      case 'finish_work': {
+        const summary = args.summary as string
+        const sessionId = activeWorkSessionIds.get(project.workspaceId)
+        if (!sessionId) throw new Error('No active work session in this MCP client — call start_work first')
+        const res = await fetch('http://localhost:7743/api/work/finish', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId: project.workspaceId, sessionId, summary }),
+        })
+        if (!res.ok) throw new Error(`finish_work failed: ${await res.text()}`)
+        result = await res.json()
+        activeWorkSessionIds.delete(project.workspaceId)
+        await postAgentActivity(project.workspaceId, `Finished: ${summary}`, 'success')
+        break
+      }
+
       case 'start_investigation': {
         const name = (args.name as string) ?? ''
         const res = await fetch('http://localhost:7743/api/investigation/start', {
@@ -2032,8 +2184,34 @@ Steps to execute:
           }),
         })
         if (!res.ok) throw new Error(`plan element failed: ${await res.text()}`)
-        result = await res.json()
+        const planned = await res.json() as any
+        result = {
+          ...planned,
+          instruction: planned.approvalStatus === 'pending'
+            ? 'Await user confirmation on the Axiom canvas. Poll get_plan_status(id) and do not write code until approved.'
+            : 'This element is approved.',
+        }
         await postAgentActivity(project.workspaceId, `Agent planned element "${args.name}"`, 'success')
+        break
+      }
+
+      case 'get_plan_status': {
+        const res = await fetch(
+          `http://localhost:7743/api/planned/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`
+        )
+        if (!res.ok) throw new Error(`plan status failed: ${await res.text()}`)
+        const planned = await res.json() as any
+        result = {
+          id: planned.id,
+          name: planned.name,
+          approvalStatus: planned.approvalStatus,
+          realizationStatus: planned.status,
+          instruction: planned.approvalStatus === 'pending'
+            ? 'Still awaiting user confirmation; do not implement yet.'
+            : planned.approvalStatus === 'rejected'
+              ? 'Proposal rejected; do not implement it.'
+              : 'Approved; implementation may proceed.',
+        }
         break
       }
 
@@ -2103,6 +2281,10 @@ Steps to execute:
         throw new Error(`Unknown tool: ${name}`)
     }
 
+    // Every tool lands here, so a tool added later is visible on the canvas
+    // and in the log without anyone remembering to instrument it.
+    void postAgentAction(project.workspaceId, name, args, result, startedAt)
+
     const trailer = await canvasTrailer(project.workspaceId, name)
     return {
       content: [{
@@ -2112,6 +2294,11 @@ Steps to execute:
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
+    // A failed attempt is still something the agent did, and seeing it fail is
+    // often the most useful entry in the log.
+    if (loggedWorkspaceId) {
+      void postAgentAction(loggedWorkspaceId, name, args, undefined, startedAt, msg)
+    }
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: msg }) }],
       isError: true,

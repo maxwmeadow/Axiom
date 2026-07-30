@@ -213,17 +213,43 @@ export function minimumContainerSize(
   children: ReadonlyArray<NodeResizeParams>,
   insets: ContainerInsets,
   floor: Pick<NodeResizeParams, 'width' | 'height'>,
-): { width: number; height: number } {
+): { width: number; height: number; westWidth: number; northHeight: number } {
   if (children.length === 0) {
-    return { width: floor.width, height: floor.height }
+    return {
+      width: floor.width,
+      height: floor.height,
+      westWidth: floor.width,
+      northHeight: floor.height,
+    }
   }
 
   const left = Math.min(...children.map(child => child.x))
   const top = Math.min(...children.map(child => child.y))
   const right = Math.max(...children.map(child => child.x + child.width))
   const bottom = Math.max(...children.map(child => child.y + child.height))
+
+  // The minimum is the box that contains the children, plus insets — nothing
+  // more. It must never be derived from the container's *current* size: doing
+  // that made the minimum track whatever width the frame already had, so a
+  // container whose children sat near its left edge reported a minimum equal
+  // to its own width and could not be narrowed at all.
+  //
+  // Children are placed relative to the frame origin, so `right` and `bottom`
+  // already carry their offset. The overhang terms only matter when a child
+  // has drifted above or left of its inset, where extra room is needed to
+  // contain it once the frame is normalized.
+  const overhangLeft = Math.max(0, insets.left - left)
+  const overhangTop = Math.max(0, insets.top - top)
   return {
-    width: Math.max(floor.width, right + insets.right, container.width - left + insets.left),
-    height: Math.max(floor.height, bottom + insets.bottom, container.height - top + insets.top),
+    width: Math.max(floor.width, right + overhangLeft + insets.right),
+    height: Math.max(floor.height, bottom + overhangTop + insets.bottom),
+    // A west or north handle moves the frame ORIGIN, and children are
+    // compensated to stay visually put — so their local coordinates slide
+    // negative and the frame walks off their left/top edge. The east/south
+    // minimum above cannot express that, because it is measured from an origin
+    // those handles are moving. The constraint there is instead how far the
+    // origin may travel before it passes the nearest child.
+    westWidth: Math.max(floor.width, container.width - Math.max(0, left - insets.left)),
+    northHeight: Math.max(floor.height, container.height - Math.max(0, top - insets.top)),
   }
 }

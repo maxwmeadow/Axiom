@@ -6,7 +6,7 @@ import React, { useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useGraphStore } from '../store/graphStore'
 import { useSheetStore } from '../store/sheetStore'
-import { DialogActions, DialogButton, DialogError, DialogForm, DialogFrame, DialogTitle } from './ui/DialogPrimitives'
+import { DialogActions, DialogButton, DialogError, DialogField, DialogForm, DialogFrame, DialogNote } from './ui/DialogPrimitives'
 
 interface SendToAgentDialogProps {
   isOpen: boolean
@@ -23,9 +23,12 @@ export function SendToAgentDialog({ isOpen, onClose }: SendToAgentDialogProps) {
     selectedNodeId: s.selectedNodeId,
     files: s.files, systems: s.systems, infraNodes: s.infraNodes,
   })))
-  const { activeSheetId, sendToAgent, messages } = useSheetStore(useShallow(s => ({
-    activeSheetId: s.activeSheetId, sendToAgent: s.sendToAgent, messages: s.messages,
+  const { activeSheetId, planned, sendToAgent, messages } = useSheetStore(useShallow(s => ({
+    activeSheetId: s.activeSheetId, planned: s.planned,
+    sendToAgent: s.sendToAgent, messages: s.messages,
   })))
+  const approvedPlans = planned.filter(item => item.approvalStatus === 'approved' && item.status !== 'flattened')
+  const pendingProposals = planned.filter(item => item.approvalStatus === 'pending')
 
   if (!isOpen) return null
 
@@ -62,55 +65,55 @@ export function SendToAgentDialog({ isOpen, onClose }: SendToAgentDialogProps) {
   }
 
   return (
-    <DialogFrame width={460}>
-        <DialogTitle compact>
-          Message the Agent
-        </DialogTitle>
-        <p style={{ margin: '0 0 16px 0', fontSize: 12, color: 'var(--text-secondary)' }}>
+    <DialogFrame title="Message the Agent" width={460}>
+        <DialogNote>
           Delivered to any connected agent (Claude Code, Codex, Copilot, …) through the Axiom MCP channel.
-          {selection.length > 0 && <> Attached: <code style={{ color: 'var(--accent)' }}>{selection.join(', ')}</code></>}
-        </p>
+          {selection.length > 0 && <> Attached: <code>{selection.join(', ')}</code></>}
+          {activeSheetId && (
+            <>
+              {' '}The active sheet's immutable context and build spec are attached:
+              {' '}{approvedPlans.length} approved planned element{approvedPlans.length === 1 ? '' : 's'}.
+              {pendingProposals.length > 0 && (
+                <> {pendingProposals.length} agent proposal{pendingProposals.length === 1 ? ' is' : 's are'} awaiting your approval and will not be dispatched.</>
+              )}
+            </>
+          )}
+        </DialogNote>
 
         <DialogForm onSubmit={handleSend} gap={14}>
           {error && (
             <DialogError>{error}</DialogError>
           )}
 
-          <textarea
-            value={note}
-            onChange={e => setNote(e.target.value)}
-            placeholder={'e.g. "I moved validators into Payments — should these two files merge? Also, why does checkout talk to Redis directly?"'}
-            rows={5}
-            className="glass-input"
-            style={{ resize: 'none', fontSize: 13, lineHeight: 1.5 }}
-            autoFocus
-          />
+          <DialogField label="Message">
+            <textarea
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              placeholder={'e.g. "I moved validators into Payments — should these two files merge? Also, why does checkout talk to Redis directly?"'}
+              rows={5}
+              className="axiom-dialog-input axiom-dialog-input--textarea"
+              autoFocus
+            />
+          </DialogField>
 
           <DialogActions>
             <DialogButton type="button" variant="secondary" onClick={onClose} disabled={sending}>Cancel</DialogButton>
             <DialogButton type="submit" variant="agent" disabled={sending || !note.trim()}>
-              {sending ? 'Sending…' : 'Send to Agent'}
+              {sending ? 'Sending…' : activeSheetId ? 'Dispatch Increment' : 'Send to Agent'}
             </DialogButton>
           </DialogActions>
         </DialogForm>
 
         {recent.length > 0 && (
-          <div style={{ marginTop: 18, borderTop: '1px solid var(--border-dim)', paddingTop: 10 }}>
-            <div style={{ fontSize: 9, fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: '0.1em', color: 'var(--text-dim)', marginBottom: 6 }}>
-              RECENT MESSAGES
-            </div>
+          <section className="axiom-dialog-history" aria-label="Recent messages">
+            <h3 className="axiom-dialog-history__title">Recent messages</h3>
             {recent.map(m => (
-              <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--text-secondary)', padding: '3px 0' }}>
-                <span style={{
-                  fontSize: 8, fontFamily: 'var(--font-mono)', fontWeight: 700, letterSpacing: '0.06em',
-                  padding: '2px 5px', flexShrink: 0,
-                  color: m.status === 'answered' ? 'var(--ok)' : m.status === 'delivered' ? 'var(--accent)' : 'var(--warn)',
-                  border: `1px solid ${m.status === 'answered' ? 'var(--ok)' : m.status === 'delivered' ? 'var(--accent)' : 'var(--warn)'}`,
-                }}>{m.status.toUpperCase()}</span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.note}</span>
+              <div className="axiom-dialog-history__row" key={m.id}>
+                <span className="axiom-dialog-history__status" data-status={m.status}>{m.status}</span>
+                <span className="axiom-dialog-history__message">{m.note}</span>
               </div>
             ))}
-          </div>
+          </section>
         )}
     </DialogFrame>
   )

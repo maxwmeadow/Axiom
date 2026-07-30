@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { packFrame, placeIncoming } from './packing.ts'
+import { packFrame, placeIncoming, placeNearest } from './packing.ts'
 
 const GAP = 36
 
@@ -125,4 +125,43 @@ test('placeIncoming lands at the origin when the frame is empty', () => {
     baseGap: GAP, origin: { x: 42, y: 76 },
   })
   assert.deepEqual(spot, { x: 42, y: 76 })
+})
+
+test('placeNearest returns a slot near the release point, not near the cluster', () => {
+  const bounds = { x: 0, y: 0, width: 900, height: 700 }
+  const occupied = [{ x: 0, y: 0, width: 220, height: 110 }]
+  const spot = placeNearest({ id: 'n', width: 220, height: 110 }, occupied,
+    { baseGap: 12, bounds, preferred: { x: 600, y: 500 } })
+  // Released in empty space: it should not be dragged back to the cluster.
+  assert.deepEqual(spot, { x: 600, y: 500 })
+})
+
+test('placeNearest slides the minimum distance off a collision', () => {
+  const bounds = { x: 0, y: 0, width: 900, height: 700 }
+  const occupied = [{ x: 0, y: 0, width: 220, height: 110 }]
+  const spot = placeNearest({ id: 'n', width: 220, height: 110 }, occupied,
+    { baseGap: 12, bounds, preferred: { x: 10, y: 10 } })
+  assert.ok(Math.hypot(spot.x - 10, spot.y - 10) < 200, `slid too far: ${JSON.stringify(spot)}`)
+  // And it genuinely clears the resident.
+  assert.ok(spot.x >= 232 || spot.y >= 122, `still overlapping: ${JSON.stringify(spot)}`)
+})
+
+test('placeNearest never returns a slot outside its bounds', () => {
+  const bounds = { x: 50, y: 60, width: 400, height: 300 }
+  const spot = placeNearest({ id: 'n', width: 220, height: 110 }, [],
+    { baseGap: 12, bounds, preferred: { x: 9999, y: 9999 } })
+  assert.ok(spot.x >= bounds.x && spot.x + 220 <= bounds.x + bounds.width)
+  assert.ok(spot.y >= bounds.y && spot.y + 110 <= bounds.y + bounds.height)
+})
+
+test('placeNearest reports null only when the frame is genuinely full', () => {
+  const bounds = { x: 0, y: 0, width: 250, height: 140 }
+  // Empty frame with room: must find the slot rather than claim it is full,
+  // which is what used to send a drop into a needless interior compression.
+  assert.ok(placeNearest({ id: 'n', width: 220, height: 110 }, [],
+    { baseGap: 12, bounds, preferred: { x: 200, y: 200 } }))
+  // Genuinely occupied: null is correct.
+  assert.equal(placeNearest({ id: 'n', width: 220, height: 110 },
+    [{ x: 0, y: 0, width: 250, height: 140 }],
+    { baseGap: 12, bounds, preferred: { x: 0, y: 0 } }), null)
 })

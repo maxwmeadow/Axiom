@@ -20,7 +20,10 @@ type FloorLayout struct {
 	Width           float64 `json:"width"`
 	Height          float64 `json:"height"`
 	Scale           float64 `json:"scale"`
-	UpdatedAt       int64   `json:"updatedAt"`
+	// InteriorScale compresses this frame's CONTENTS without touching its own
+	// rendered size. Zero from a legacy/partial client is normalized to 1.
+	InteriorScale float64 `json:"interiorScale"`
+	UpdatedAt     int64   `json:"updatedAt"`
 }
 
 type FloorLayoutBatchResult struct {
@@ -31,7 +34,8 @@ type FloorLayoutBatchResult struct {
 func GetFloorLayouts(db *sql.DB, workspaceID string) ([]FloorLayout, error) {
 	rows, err := db.Query(`
 		SELECT workspace_id, node_id, node_type, parent_node_id, parent_node_type,
-		       containment_kind, position_x, position_y, width, height, scale, updated_at
+		       containment_kind, position_x, position_y, width, height, scale,
+		       interior_scale, updated_at
 		FROM floor_layouts WHERE workspace_id=?`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -43,7 +47,7 @@ func GetFloorLayouts(db *sql.DB, workspaceID string) ([]FloorLayout, error) {
 		if err := rows.Scan(&layout.WorkspaceID, &layout.NodeID, &layout.NodeType,
 			&layout.ParentNodeID, &layout.ParentNodeType, &layout.ContainmentKind,
 			&layout.PositionX, &layout.PositionY, &layout.Width, &layout.Height,
-			&layout.Scale, &layout.UpdatedAt); err != nil {
+			&layout.Scale, &layout.InteriorScale, &layout.UpdatedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, layout)
@@ -116,7 +120,13 @@ func ApplyFloorLayoutBatch(db *sql.DB, workspaceID string, updates []FloorLayout
 			return nil, fmt.Errorf("duplicate layout %s", key)
 		}
 		seen[key] = true
-		if u.Width <= 0 || u.Height <= 0 || u.Scale <= 0 {
+		// A client that predates interior compression omits the field entirely,
+		// which decodes as 0. Treat that as "no compression" rather than
+		// rejecting the write, so old and new clients can share a workspace.
+		if u.InteriorScale == 0 {
+			u.InteriorScale = 1
+		}
+		if u.Width <= 0 || u.Height <= 0 || u.Scale <= 0 || u.InteriorScale <= 0 {
 			return nil, fmt.Errorf("invalid geometry for %s", key)
 		}
 		if ok, err := nodeBelongsToWorkspace(tx, workspaceID, u.NodeType, u.NodeID); err != nil || !ok {
@@ -204,15 +214,17 @@ func ApplyFloorLayoutBatch(db *sql.DB, workspaceID string, updates []FloorLayout
 		}
 		_, err = tx.Exec(`
 			INSERT INTO floor_layouts
-			(workspace_id,node_id,node_type,parent_node_id,parent_node_type,containment_kind,position_x,position_y,width,height,scale,updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+			(workspace_id,node_id,node_type,parent_node_id,parent_node_type,containment_kind,position_x,position_y,width,height,scale,interior_scale,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(workspace_id,node_type,node_id) DO UPDATE SET
 			parent_node_id=excluded.parent_node_id, parent_node_type=excluded.parent_node_type,
 			containment_kind=excluded.containment_kind, position_x=excluded.position_x,
 			position_y=excluded.position_y, width=excluded.width, height=excluded.height,
-			scale=excluded.scale, updated_at=excluded.updated_at`,
+			scale=excluded.scale, interior_scale=excluded.interior_scale,
+			updated_at=excluded.updated_at`,
 			workspaceID, u.NodeID, u.NodeType, u.ParentNodeID, u.ParentNodeType,
-			u.ContainmentKind, u.PositionX, u.PositionY, u.Width, u.Height, u.Scale, now)
+			u.ContainmentKind, u.PositionX, u.PositionY, u.Width, u.Height, u.Scale,
+			u.InteriorScale, now)
 		if err != nil {
 			return nil, err
 		}

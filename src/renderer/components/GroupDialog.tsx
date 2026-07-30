@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { useGraphStore } from '../store/graphStore'
 import { useShallow } from 'zustand/react/shallow'
-import { DialogActions, DialogButton, DialogError, DialogForm, DialogFrame, DialogTitle } from './ui/DialogPrimitives'
+import { DialogActions, DialogButton, DialogError, DialogField, DialogForm, DialogFrame, DialogNote } from './ui/DialogPrimitives'
 
 interface GroupDialogProps {
   isOpen: boolean
@@ -107,11 +107,7 @@ export function GroupDialog({ isOpen, onClose, selectedFileIds, onSuccess }: Gro
   }
 
   return (
-    <DialogFrame width={420}>
-        <DialogTitle>
-          New System
-        </DialogTitle>
-
+    <DialogFrame title="New System" width={420}>
         <DialogForm onSubmit={handleSubmit}>
           {error && (
             <DialogError>
@@ -119,38 +115,31 @@ export function GroupDialog({ isOpen, onClose, selectedFileIds, onSuccess }: Gro
             </DialogError>
           )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 700, letterSpacing: '0.05em' }}>
-              SYSTEM NAME
-            </label>
+          <DialogField label="System name">
             <input
               type="text"
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Auth & Session Management"
-              className="glass-input"
+              className="axiom-dialog-input"
               autoFocus
             />
-          </div>
+          </DialogField>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 700, letterSpacing: '0.05em' }}>
-              DESCRIPTION <span style={{ opacity: 0.5, fontWeight: 400 }}>(optional)</span>
-            </label>
+          <DialogField label="Description" optional="optional">
             <textarea
               value={description}
               onChange={e => setDescription(e.target.value)}
               placeholder="What this system is responsible for..."
               rows={3}
-              className="glass-input"
-              style={{ resize: 'none' }}
+              className="axiom-dialog-input axiom-dialog-input--textarea"
             />
-          </div>
+          </DialogField>
 
-          <p style={{ margin: 0, fontSize: 12, color: 'var(--text-secondary)', opacity: 0.75 }}>
-            Grouping <strong style={{ color: 'var(--accent)' }}>{selectedFileIds.length}</strong> selected{' '}
+          <DialogNote>
+            Grouping <strong>{selectedFileIds.length}</strong> selected{' '}
             {selectedFileIds.length === 1 ? 'file' : 'files'} into this system.
-          </p>
+          </DialogNote>
 
           <DialogActions inset>
             <DialogButton

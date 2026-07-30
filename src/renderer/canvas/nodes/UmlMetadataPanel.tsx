@@ -174,8 +174,10 @@ export function UmlMetadataPanel({ kind, metadata, editable = false, onChange, c
     attributes: attributes.map((attribute, i) => i === index ? { ...attribute, ...patch } : attribute),
   })
 
+  // No `nowheel` on the scroll region: the wheel router lets this list scroll
+  // while it has room and hands the wheel back to canvas zoom at its boundary.
   return (
-    <div className="nowheel" style={{
+    <div style={{
       display: 'flex', flexDirection: 'column', gap: 3, minHeight: 0,
       overflowY: 'auto', fontSize: compact ? 7.5 : 8, fontFamily: 'var(--font-mono)',
       color: 'var(--text-secondary)', lineHeight: 1.35, userSelect: 'none',

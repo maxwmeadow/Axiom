@@ -63,6 +63,7 @@ export interface CanvasMessage {
   selection: string
   changeSummary: string
   sheetContext: string
+  buildSpec: string
   status: 'queued' | 'delivered' | 'answered'
   deliveredTo: string | null
   answerAnnotationId: string | null
@@ -138,6 +139,7 @@ export interface PlannedNode {
   members: PlannedMember[] | string   // server sends json; normalize on read
   metadata: PlannedNodeMetadata | string
   status: 'planned' | 'partial' | 'realized' | 'flattened'
+  approvalStatus: 'pending' | 'approved' | 'rejected'
   realizedFileId: string | null
   notes: string
   shape: '' | 'box' | 'folder' | 'cylinder' | 'hexagon'
@@ -273,6 +275,7 @@ interface SheetState {
   lastCreatedPlannedId: string | null   // node enters inline name-edit on mount
   createPlanned: (workspaceId: string, sheetId: string, n: Partial<PlannedNode>) => Promise<PlannedNode | null>
   updatePlanned: (workspaceId: string, n: PlannedNode) => Promise<void>
+  setPlannedApproval: (workspaceId: string, id: string, decision: 'approved' | 'rejected') => Promise<void>
   previewPlannedPosition: (id: string, x: number, y: number) => void
   updatePlannedLayout: (workspaceId: string, id: string, x: number, y: number, parentSystemId: string | null, width?: number, height?: number, scale?: number) => void
   updateLayoutsBatch: (workspaceId: string, sheetId: string, layouts: SheetLayoutMutation[]) => Promise<void>
@@ -452,6 +455,26 @@ export const useSheetStore = create<SheetState>((set, get) => ({
       })
       console.error('[sheets] planned node update failed:', error)
     }
+  },
+
+  setPlannedApproval: async (workspaceId, id, decision) => {
+    const planned = Object.values(get().layersById)
+      .flatMap(layer => layer.planned)
+      .find(node => node.id === id)
+    if (!planned) throw new Error('Planned node is not loaded')
+    const res = await fetch(`${API}/api/planned/${encodeURIComponent(id)}/approval`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId, decision }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    const updated = withValidScale(await res.json() as PlannedNode)
+    set(s => {
+      const layer = s.layersById[updated.sheetId]
+      if (!layer) return s
+      const nodes = layer.planned.map(node => node.id === updated.id ? updated : node)
+      return commitSheetLayer(s, updated.sheetId, { ...layer, planned: nodes })
+    })
   },
 
   createFloatingNote: async (workspaceId, sheetId, body, x, y) => {
@@ -703,6 +726,12 @@ export const useSheetStore = create<SheetState>((set, get) => ({
       }),
     })
     if (!res.ok) throw new Error(await res.text())
+    const message = await res.json() as CanvasMessage
+    set(state => ({
+      messages: state.messages.some(item => item.id === message.id)
+        ? state.messages.map(item => item.id === message.id ? message : item)
+        : [...state.messages, message],
+    }))
   },
 }))
 

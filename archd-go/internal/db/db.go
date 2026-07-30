@@ -73,18 +73,21 @@ func migrate(db *sql.DB) error {
 		id            TEXT PRIMARY KEY,
 		workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
 		path          TEXT NOT NULL,
-		indexed_at    INTEGER
+		indexed_at    INTEGER,
+		classifier_version INTEGER NOT NULL DEFAULT 0,
+		ignored_paths_json TEXT NOT NULL DEFAULT '[]',
+		source_boundaries_reviewed_at INTEGER
 	);
 
 	-- ─── Systems ──────────────────────────────────────────────────────────────
 	-- Systems form a tree. parent_id = NULL means top-level.
-	-- source tracks who created this system: directory auto-grouping, user, or agent.
+	-- source tracks who created this system: semantic classifier, user, or agent.
 	CREATE TABLE IF NOT EXISTS systems (
 		id            TEXT PRIMARY KEY,
 		workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
 		name          TEXT NOT NULL,
 		parent_id     TEXT REFERENCES systems(id) ON DELETE SET NULL,
-		source        TEXT NOT NULL DEFAULT 'directory',   -- 'directory'|'user'|'agent'
+		source        TEXT NOT NULL DEFAULT 'cluster',   -- 'cluster'|'user'|'agent'
 		color         TEXT,
 		description   TEXT,
 		agent_notes   TEXT,
@@ -122,7 +125,8 @@ func migrate(db *sql.DB) error {
 		name          TEXT NOT NULL,
 		kind          TEXT NOT NULL,   -- 'function'|'class'|'interface'|'type'|'variable'|'method'
 		line_start    INTEGER NOT NULL DEFAULT 0,
-		line_end      INTEGER NOT NULL DEFAULT 0
+		line_end      INTEGER NOT NULL DEFAULT 0,
+		body_hash     TEXT NOT NULL DEFAULT ''
 	);
 	CREATE INDEX IF NOT EXISTS symbols_file ON symbols(file_id);
 
@@ -284,6 +288,7 @@ func migrate(db *sql.DB) error {
 		members       TEXT NOT NULL DEFAULT '[]',      -- json [{signature, intent, realized}]
 		metadata      TEXT NOT NULL DEFAULT '{}',      -- versioned, kind-specific UML authoring metadata
 		status        TEXT NOT NULL DEFAULT 'planned', -- 'planned'|'partial'|'realized'|'flattened'
+		approval_status TEXT NOT NULL DEFAULT 'approved', -- 'pending'|'approved'|'rejected'
 		realized_file_id TEXT REFERENCES files(id) ON DELETE SET NULL,
 		notes         TEXT NOT NULL DEFAULT '',
 		position_x    REAL NOT NULL DEFAULT 0,
@@ -321,6 +326,7 @@ func migrate(db *sql.DB) error {
 		selection      TEXT NOT NULL DEFAULT '[]',  -- json durable refs
 		change_summary TEXT NOT NULL DEFAULT '',    -- 12-verb semantic summary
 		sheet_context  TEXT NOT NULL DEFAULT '',    -- immutable JSON snapshot resolved against the live Floor
+		build_spec     TEXT NOT NULL DEFAULT '',    -- approved planned increment at send time
 		status         TEXT NOT NULL DEFAULT 'queued', -- 'queued'|'delivered'|'answered'
 		delivered_to   TEXT,
 		answer_annotation_id TEXT,
@@ -349,6 +355,75 @@ func migrate(db *sql.DB) error {
 		position_y    REAL NOT NULL DEFAULT 0
 	);
 
+	-- ─── Structural journal (Morning Delta) ──────────────────────────────────
+	-- Durable record of how the architecture changed, so a delta survives the
+	-- app being closed. Deliberately denormalized: a row must outlive the file
+	-- it describes, so it carries labels and holds no foreign keys.
+	CREATE TABLE IF NOT EXISTS structural_events (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		workspace_id  TEXT NOT NULL,
+		ts            INTEGER NOT NULL,               -- ms epoch
+		actor         TEXT NOT NULL DEFAULT 'human',  -- 'human'|'agent'
+		trace_id      TEXT NOT NULL DEFAULT '',       -- correlates one save's events
+		kind          TEXT NOT NULL,
+		subject_id    TEXT NOT NULL DEFAULT '',
+		subject_label TEXT NOT NULL DEFAULT '',
+		object_id     TEXT NOT NULL DEFAULT '',
+		object_label  TEXT NOT NULL DEFAULT '',
+		detail        TEXT NOT NULL DEFAULT '',       -- kind-specific JSON
+		count         INTEGER NOT NULL DEFAULT 1      -- collapsed repeat saves
+	);
+	CREATE INDEX IF NOT EXISTS structural_events_ws ON structural_events(workspace_id, ts);
+	-- Exact system-graph snapshots at delta read boundaries. Keeping the
+	-- snapshot keyed by the returned until timestamp lets a later ack persist
+	-- the precise graph the user reviewed, even if more work landed meanwhile.
+	CREATE TABLE IF NOT EXISTS delta_snapshots (
+		workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+		at           INTEGER NOT NULL,
+		snapshot     TEXT NOT NULL,
+		PRIMARY KEY(workspace_id, at)
+	);
+	CREATE INDEX IF NOT EXISTS delta_snapshots_ws ON delta_snapshots(workspace_id, at);
+
+	-- An agent's own account of what it set out to do. Structural facts are
+	-- true but thin; narration is how the agent writes intent INTO the map so
+	-- a delta reads as work rather than as topology.
+	CREATE TABLE IF NOT EXISTS work_sessions (
+		id            TEXT PRIMARY KEY,
+		workspace_id  TEXT NOT NULL,
+		owner_key     TEXT NOT NULL DEFAULT '',
+		agent         TEXT NOT NULL DEFAULT '',
+		goal          TEXT NOT NULL,
+		summary       TEXT NOT NULL DEFAULT '',
+		notes         TEXT NOT NULL DEFAULT '[]',   -- JSON [{ts,text}]
+		focus_system_ids TEXT NOT NULL DEFAULT '[]',
+		focus_file_ids   TEXT NOT NULL DEFAULT '[]',
+		started_at    INTEGER NOT NULL,
+		ended_at      INTEGER NOT NULL DEFAULT 0    -- 0 = still open
+	);
+	CREATE INDEX IF NOT EXISTS work_sessions_ws ON work_sessions(workspace_id, started_at);
+
+	-- Everything an agent DOES, including reads. The structural journal only
+	-- records changes to the architecture; this records activity, because
+	-- watching an agent trace a call path is the point of a living canvas even
+	-- though tracing changes nothing.
+	CREATE TABLE IF NOT EXISTS agent_actions (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		workspace_id  TEXT NOT NULL,
+		ts            INTEGER NOT NULL,
+		session_id    TEXT NOT NULL DEFAULT '',
+		agent         TEXT NOT NULL DEFAULT '',
+		tool          TEXT NOT NULL,
+		kind          TEXT NOT NULL,            -- read|trace|write|plan|debug|narrate
+		summary       TEXT NOT NULL DEFAULT '',
+		targets       TEXT NOT NULL DEFAULT '[]', -- JSON canvas node IDs
+		detail        TEXT NOT NULL DEFAULT '',   -- JSON, tool-specific
+		duration_ms   INTEGER NOT NULL DEFAULT 0,
+		status        TEXT NOT NULL DEFAULT 'ok',
+		error         TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS agent_actions_ws ON agent_actions(workspace_id, ts);
+
 	-- Floor geometry is deliberately separate from semantic ownership. A file's
 	-- system_id and a system's parent_id describe the live codebase; layout_parent
 	-- describes the coordinate frame it is visually placed in (including hosting).
@@ -364,6 +439,11 @@ func migrate(db *sql.DB) error {
 		width             REAL NOT NULL,
 		height            REAL NOT NULL,
 		scale             REAL NOT NULL DEFAULT 1 CHECK(scale > 0),
+		-- How much this frame shrinks its CONTENTS, independent of its own size.
+		-- scale answers "how big am I in my parent"; interior_scale answers
+		-- "how big is everything inside me". Keeping them separate is what lets a
+		-- crowded frame compress its interior without its own chrome reacting.
+		interior_scale    REAL NOT NULL DEFAULT 1 CHECK(interior_scale > 0),
 		updated_at        INTEGER NOT NULL,
 		PRIMARY KEY(workspace_id, node_type, node_id)
 	);
@@ -423,20 +503,43 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE files ADD COLUMN shape          TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE files ADD COLUMN shape_override TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE files ADD COLUMN display_name   TEXT NOT NULL DEFAULT ''`,
+		// Morning Delta watermark: the moment the user last acknowledged the
+		// structural journal. Zero means never reviewed.
+		`ALTER TABLE workspaces ADD COLUMN delta_reviewed_at INTEGER NOT NULL DEFAULT 0`,
+		// Links a structural change to the work an agent declared it was doing.
+		`ALTER TABLE structural_events ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`,
+		// Work-session ownership allows independent MCP clients to narrate work
+		// concurrently. Focus is the durable scope used for honest attribution
+		// and for live presence on the canvas.
+		`ALTER TABLE work_sessions ADD COLUMN owner_key TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE work_sessions ADD COLUMN focus_system_ids TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE work_sessions ADD COLUMN focus_file_ids TEXT NOT NULL DEFAULT '[]'`,
 		// Live activity tracking (edit bursts, decayed scores)
 		`ALTER TABLE files ADD COLUMN activity_score REAL    NOT NULL DEFAULT 0`,
 		`ALTER TABLE files ADD COLUMN activity_at    INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE files ADD COLUMN content_hash   TEXT    NOT NULL DEFAULT ''`,
+		// Per-symbol content identity lets live relationship choreography
+		// distinguish a connected function edit from an unrelated file write.
+		`ALTER TABLE symbols ADD COLUMN body_hash TEXT NOT NULL DEFAULT ''`,
+		// Classifier contract version. A bump triggers a one-time semantic
+		// reclassification without reparsing source files.
+		`ALTER TABLE roots ADD COLUMN classifier_version INTEGER NOT NULL DEFAULT 0`,
+		// Source-boundary decisions are first-class persisted project state.
+		// An empty JSON array is a valid completed "include everything" choice.
+		`ALTER TABLE roots ADD COLUMN ignored_paths_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE roots ADD COLUMN source_boundaries_reviewed_at INTEGER`,
 		// Planned UML authoring: semantic shape + user color (REVISION 2 UX)
 		`ALTER TABLE planned_nodes ADD COLUMN shape TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE planned_nodes ADD COLUMN color TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE planned_nodes ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`,
+		`ALTER TABLE planned_nodes ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'approved'`,
 		// Sheet-local containment for planned elements.
 		`ALTER TABLE planned_nodes ADD COLUMN parent_system_id TEXT`,
 		`ALTER TABLE planned_nodes ADD COLUMN width REAL`,
 		`ALTER TABLE planned_nodes ADD COLUMN height REAL`,
 		`ALTER TABLE planned_nodes ADD COLUMN scale REAL NOT NULL DEFAULT 1`,
 		`ALTER TABLE canvas_outbox ADD COLUMN sheet_context TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE canvas_outbox ADD COLUMN build_spec TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sheet_elements ADD COLUMN design_metadata TEXT NOT NULL DEFAULT '{}'`,
 		`ALTER TABLE sheet_elements ADD COLUMN scale REAL NOT NULL DEFAULT 1`,
 		// Migrate the original shape-overloaded stencil kinds to explicit semantics.
@@ -450,6 +553,9 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE infra_nodes  ADD COLUMN status      TEXT NOT NULL DEFAULT 'confirmed'`,
 		`ALTER TABLE infra_nodes  ADD COLUMN detected_by TEXT`,
 		`ALTER TABLE dependencies ADD COLUMN evidence    TEXT`,
+		// Interior compression is a distinct property from a frame's own scale.
+		// Existing rows default to 1, which is exactly "does not compress".
+		`ALTER TABLE floor_layouts ADD COLUMN interior_scale REAL NOT NULL DEFAULT 1`,
 	} {
 		if _, err := db.Exec(col); err != nil {
 			// "duplicate column name" means the column already exists — safe to ignore

@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Axiom UML Workbench Concept</title>
+  <style>
+    :root {
+      --chrome-0: #f4f1e9;
+      --chrome-1: #e2e0da;
+      --chrome-2: #c8cac7;
+      --chrome-3: #959c9b;
+      --chrome-4: #5f6868;
+      --ink: #192220;
+      --muted: #65706d;
+      --navy: #222b2d;
+      --navy-2: #303b3c;
+      --select: #3c7d76;
+      --select-soft: #d4e6e0;
+      --paper: #faf8f0;
+      --paper-grid: #dddcd3;
+      --uml-head: #dce6df;
+      --uml-body: #fffef6;
+      --green: #2e8b57;
+      --amber: #b57b1d;
+      --red: #b34a43;
+      --ui: "IBM Plex Sans", Tahoma, "Segoe UI", Arial, sans-serif;
+      --mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+    body { background: #11161c; color: var(--ink); font-family: var(--ui); font-size: 11px; }
+    button, input { font: inherit; }
+
+    .app {
+      width: 1600px;
+      height: 1000px;
+      display: grid;
+      grid-template-rows: 34px 25px 48px minmax(0, 1fr) 28px;
+      background: var(--chrome-1);
+      border: 1px solid #111b28;
+      box-shadow: 0 18px 80px #000a;
+      user-select: none;
+    }
+
+    .titlebar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 8px;
+      color: #fff;
+      background: linear-gradient(90deg, #1f292b, #303b3c 55%, #222d2f);
+      border-bottom: 1px solid #11191a;
+      letter-spacing: .01em;
+    }
+    .app-mark { width: 18px; height: 18px; flex: none; }
+    .titlebar strong { font-size: 11px; }
+    .titlebar .document { color: #d8e4ef; font-weight: 400; }
+    .titlebar .live { margin-left: auto; color: #a9d9c8; font: 9px var(--mono); letter-spacing: .06em; }
+    .window-controls { display: flex; height: 100%; margin-left: 10px; }
+    .window-controls span { width: 30px; display: grid; place-items: center; border-left: 1px solid #ffffff16; }
+
+    .menubar {
+      display: flex;
+      align-items: center;
+      gap: 19px;
+      padding: 0 10px;
+      background: var(--chrome-0);
+      border-bottom: 1px solid #8c9299;
+      box-shadow: inset 0 1px #fff;
+      font-size: 10px;
+    }
+    .menubar span:first-letter { text-decoration: underline; }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      padding: 4px 8px;
+      background: #deded9;
+      border-bottom: 1px solid #8e959d;
+      box-shadow: inset 0 1px #fff;
+    }
+    .toolbar.secondary { display: none; }
+    .grip { width: 5px; align-self: stretch; margin-right: 3px; border-left: 1px solid #fff; border-right: 1px solid #91979e; }
+    .separator { width: 1px; height: 24px; background: #9198a0; border-right: 1px solid #fff; margin: 0 4px; }
+    .tool {
+      width: 26px;
+      height: 30px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      color: #315e58;
+      background: #ebeae5;
+      border: 1px solid #777f88;
+      box-shadow: inset 1px 1px #fff, inset -1px -1px #a5abb1;
+    }
+    .tool.active { background: #c8ddd6; box-shadow: inset 1px 1px #87948f, inset -1px -1px #fff; }
+    .tool svg { width: 16px; height: 16px; }
+    .tool .mono-icon { font: 700 13px var(--mono); }
+    .toolbar-label { margin-left: 4px; color: #555f6b; font: 8px var(--mono); letter-spacing: .06em; }
+    .perspective, .quick-find {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      background: #fbfaf6;
+      border: 1px solid #868e97;
+      box-shadow: inset 1px 1px #b4bac0;
+      font-size: 9px;
+    }
+    .perspective { width: 166px; }
+    .quick-find { width: 282px; color: #6c7480; margin-left: auto; }
+    .diagram-name { margin-left: auto; padding-right: 7px; color: #4b5662; font: 8px var(--mono); letter-spacing: .05em; }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 226px minmax(0, 1fr) 268px;
+      grid-template-rows: minmax(0, 1fr);
+      gap: 8px;
+      padding: 8px;
+      background: #202729;
+    }
+
+    .dock {
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+      background: var(--chrome-1);
+      border: 1px solid #626b6b;
+      border-radius: 4px;
+      box-shadow: inset 0 1px #fff, 0 2px 8px #0002;
+    }
+    .dock-title {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      padding: 0 7px;
+      color: #fff;
+      background: linear-gradient(#394445, #2b3536);
+      border-bottom: 1px solid #171f20;
+      font-weight: 700;
+      font-size: 9px;
+      letter-spacing: .04em;
+    }
+    .dock-title .dock-actions { margin-left: auto; color: #d5e2ed; letter-spacing: .25em; }
+    .explorer { grid-row: 1; }
+    .explorer-toolbar { height: 30px; display: flex; align-items: center; gap: 5px; padding: 4px; border-bottom: 1px solid #9ba1a8; }
+    .mini-tool { width: 21px; height: 20px; display: grid; place-items: center; background: #eeece6; border: 1px solid #8c9392; box-shadow: inset 1px 1px #fff; color: #3e625d; font-size: 10px; }
+    .tree-search { margin: 5px; width: calc(100% - 10px); height: 25px; padding: 0 7px; border: 1px solid #8c949c; background: white; color: #5f6873; font-size: 9px; }
+    .tree { padding: 2px 0 10px; }
+    .tree-row { height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 7px; white-space: nowrap; }
+    .tree-row.selected { color: #fff; background: #3c7d76; outline: 1px solid #2c625d; }
+    .tree-row .twisty { width: 10px; color: #4a5764; font-size: 8px; text-align: center; }
+    .tree-row.selected .twisty { color: #e9f4fc; }
+    .tree-row.indent-1 { padding-left: 19px; }
+    .tree-row.indent-2 { padding-left: 34px; }
+    .tree-row.indent-3 { padding-left: 49px; }
+    .tree-icon { width: 12px; height: 10px; position: relative; flex: none; border: 1px solid #65717c; background: #f3d27e; }
+    .tree-icon.package::before { content: ""; position: absolute; width: 6px; height: 3px; left: -1px; top: -4px; background: #f3d27e; border: 1px solid #65717c; border-bottom: 0; }
+    .tree-icon.diagram { background: #d8e7e1; }
+    .tree-icon.class { background: #e8eeeb; border-color: #4d716b; }
+    .tree-icon.class::after { content: ""; position: absolute; left: 1px; right: 1px; top: 3px; border-top: 1px solid #4d716b; box-shadow: 0 2px #4d716b; }
+    .tree-label { overflow: hidden; text-overflow: ellipsis; }
+    .tree-meta { margin-left: auto; color: #7c858f; font: 8px var(--mono); }
+    .selected .tree-meta { color: #e0f0eb; }
+
+    .editor { display: grid; grid-template-rows: 34px 30px minmax(0,1fr); background: var(--paper); }
+    .doc-tabs { display: flex; align-items: end; padding-left: 6px; gap: 3px; background: #bfc3c2; border-bottom: 1px solid #687170; }
+    .doc-tab { height: 29px; min-width: 152px; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: #d8dad7; border: 1px solid #858d8b; border-bottom: 0; border-radius: 4px 4px 0 0; color: #56615e; }
+    .doc-tab.active { height: 31px; color: #182522; background: var(--paper); font-weight: 700; border-top: 2px solid var(--select); }
+    .doc-tab .close { margin-left: auto; color: #6d747c; }
+    .breadcrumb { display: flex; align-items: center; padding: 0 9px; background: #eeeae0; border-bottom: 1px solid #a1a1a0; color: #4b5560; font: 8px var(--mono); }
+    .breadcrumb .model-health { margin-left: auto; color: var(--select); font-weight: 700; }
+
+    .canvas {
+      position: relative;
+      overflow: hidden;
+      background-color: var(--paper);
+      background-image: radial-gradient(var(--paper-grid) .75px, transparent .75px);
+      background-size: 12px 12px;
+    }
+    .package-boundary {
+      position: absolute;
+      left: 52px;
+      top: 72px;
+      width: calc(100% - 102px);
+      height: calc(100% - 94px);
+      border: 1px dashed #969d99;
+      background: #fffdf718;
+    }
+    .package-tab { position: absolute; top: -22px; left: -1px; height: 22px; padding: 4px 12px; border: 1px solid #8d969e; border-bottom: 0; background: #ece9df; font: 9px var(--mono); font-weight: 700; color: #334050; }
+    .diagram-connections { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .diagram-connections path { fill: none; stroke: #4e6274; stroke-width: 1.25; shape-rendering: crispEdges; }
+    .diagram-connections .dependency { stroke-dasharray: 5 4; }
+    .diagram-connections text { font: 9px var(--mono); fill: #4f5a65; }
+
+    .uml-class {
+      position: absolute;
+      width: 244px;
+      color: #16202b;
+      background: var(--uml-body);
+      border: 1px solid #536461;
+      border-radius: 3px;
+      box-shadow: 0 6px 14px #17201e16, 1px 2px 0 #0002;
+      font-family: var(--mono);
+    }
+    .uml-class.selected { border: 2px solid var(--select); box-shadow: 0 0 0 2px #d8ebe5, 0 8px 18px #17201e24; }
+    .uml-class .class-head { position: relative; min-height: 54px; padding: 7px 9px 8px; text-align: center; background: linear-gradient(#e8eee9, #d3dfd8); border-bottom: 1px solid #63726e; border-radius: 2px 2px 0 0; }
+    .uml-class .stereotype { color: #5d6c68; font-size: 8px; }
+    .uml-class .class-name { margin-top: 2px; font-size: 12px; font-weight: 700; }
+    .uml-class .source-state { position: absolute; top: 6px; right: 7px; color: #63716e; font-size: 7px; letter-spacing: .04em; }
+    .compartment { padding: 6px 8px; min-height: 42px; border-bottom: 1px solid #788795; font-size: 9px; line-height: 17px; }
+    .compartment:last-child { border-bottom: 0; }
+    .member { display: flex; }
+    .visibility { width: 13px; color: var(--select); font-weight: 700; }
+    .member-name { flex: 1; }
+    .member-type { color: #687681; }
+    .resize-handle { position: absolute; width: 7px; height: 7px; background: #fff; border: 1px solid #2d6c65; border-radius: 1px; }
+    .h-nw { left: -5px; top: -5px; } .h-n { left: calc(50% - 3px); top: -5px; } .h-ne { right: -5px; top: -5px; }
+    .h-w { left: -5px; top: calc(50% - 3px); } .h-e { right: -5px; top: calc(50% - 3px); }
+    .h-sw { left: -5px; bottom: -5px; } .h-s { left: calc(50% - 3px); bottom: -5px; } .h-se { right: -5px; bottom: -5px; }
+    .quick-link { position: absolute; right: -25px; top: calc(50% - 11px); width: 22px; height: 22px; border: 1px solid #2d6c65; border-radius: 11px; background: #f5fbf8; display: grid; place-items: center; color: #2d6c65; box-shadow: 0 3px 8px #17201e24; font: 700 10px var(--mono); }
+    .class-session { left: 126px; top: 116px; }
+    .class-report { left: 514px; top: 342px; width: 216px; }
+    .class-graph { left: 576px; top: 82px; width: 230px; }
+    .class-adapter { left: 122px; top: 392px; width: 230px; }
+    .class-event { left: 846px; top: 248px; width: 190px; }
+    .source-chip { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; background: #e4ece7; border: 1px solid #9aa8a3; border-radius: 11px; color: #46534f; font: 8px var(--mono); }
+    .canvas-tools { position: absolute; left: 12px; top: 12px; display: flex; gap: 5px; }
+    .canvas-tool { height: 32px; padding: 0 12px; display: flex; align-items: center; gap: 5px; background: #f3f0e8; border: 1px solid #929994; border-radius: 4px; box-shadow: 0 3px 10px #17201e16, inset 0 1px #fff; color: #25312e; font-size: 8px; font-weight: 700; }
+    .zoom-readout { position: absolute; left: 10px; bottom: 9px; display: flex; height: 28px; align-items: center; background: #e6e3dc; border: 1px solid #8a9299; }
+    .zoom-readout button { width: 27px; align-self: stretch; border: 0; border-right: 1px solid #9ca2a8; background: transparent; color: #344351; }
+    .zoom-readout span { padding: 0 9px; font: 8px var(--mono); }
+    .minimap { position: absolute; right: 10px; bottom: 9px; width: 138px; height: 82px; background: #eef0eb; border: 1px solid #747d86; box-shadow: inset 0 0 0 4px #d0d4d5; }
+    .minimap span { position: absolute; border: 1px solid #5c716c; background: #d1e0da; }
+    .minimap .m1 { left: 22px; top: 20px; width: 35px; height: 19px; }
+    .minimap .m2 { left: 75px; top: 14px; width: 31px; height: 18px; }
+    .minimap .m3 { left: 66px; top: 50px; width: 28px; height: 17px; background: #fffef6; }
+    .minimap .viewport { left: 13px; top: 9px; width: 108px; height: 58px; border: 1px solid var(--select); background: transparent; }
+
+    .toolbox { grid-column: 3; grid-row: 1; }
+    .toolbox-tabs { height: 27px; display: flex; background: #c4c8cd; border-bottom: 1px solid #888f97; }
+    .toolbox-tab { padding: 7px 10px 0; border-right: 1px solid #92989f; color: #626b75; font-size: 9px; }
+    .toolbox-tab.active { background: #ebe9e3; color: #1f2d3b; font-weight: 700; }
+    .tool-group-title { height: 24px; padding: 6px 7px; background: #d1d4d7; border-top: 1px solid #fff; border-bottom: 1px solid #949aa1; font-size: 9px; font-weight: 700; }
+    .toolbox-item { height: 31px; display: flex; align-items: center; gap: 9px; padding: 0 10px; border-bottom: 1px solid #d1d3d0; background: #efede7; }
+    .toolbox-item:hover { background: #dce9e4; }
+    .toolbox-icon { width: 18px; height: 16px; display: grid; place-items: center; border: 1px solid #647772; background: #fdfcf5; color: #365b55; font: 8px var(--mono); }
+    .connector-icon { width: 18px; height: 1px; background: #40556a; position: relative; }
+    .connector-icon::after { content: ""; position: absolute; right: -1px; top: -3px; width: 5px; height: 5px; border-top: 1px solid #40556a; border-right: 1px solid #40556a; transform: rotate(45deg); }
+    .toolbox-footer { margin: 10px; padding: 10px; background: #f8f6ef; border: 1px solid #a3aaa5; border-radius: 3px; color: #606a66; font-size: 9px; line-height: 15px; }
+
+    .selection-inspector { margin: 0 10px 10px; padding: 12px; background: #f8f6ef; border: 1px solid #9da6a1; border-radius: 4px; box-shadow: 0 3px 10px #17201e12; }
+    .selection-inspector .eyebrow { color: var(--select); font: 700 8px var(--mono); letter-spacing: .08em; }
+    .selection-inspector h3 { margin: 5px 0 2px; color: #202b28; font: 700 15px var(--ui); }
+    .selection-inspector .source { margin-bottom: 10px; color: #6c7773; font: 8px var(--mono); }
+    .selection-inspector dl { display: grid; grid-template-columns: 72px 1fr; gap: 7px 6px; margin: 0; font-size: 9px; }
+    .selection-inspector dt { color: #6b7471; }
+    .selection-inspector dd { margin: 0; color: #26332f; font-family: var(--mono); }
+
+    .properties { display: none; }
+    .property-tabs { display: flex; align-items: end; background: #b7bcc2; border-bottom: 1px solid #737b84; }
+    .property-tab { height: 25px; min-width: 114px; padding: 7px 10px 0; border-right: 1px solid #8b9299; color: #59636d; font-size: 9px; }
+    .property-tab.active { background: #f0eee8; color: #1b2a38; font-weight: 700; }
+    .property-body { display: grid; grid-template-columns: 460px 1fr 320px; min-height: 0; background: #efede7; }
+    .property-grid { border-right: 1px solid #8f969e; padding: 5px; }
+    .property-row { display: grid; grid-template-columns: 128px 1fr; min-height: 24px; border-bottom: 1px solid #c5c7c8; }
+    .property-key { padding: 6px 7px; color: #59636d; background: #dcdee0; border-right: 1px solid #b0b4b8; font-size: 9px; }
+    .property-value { padding: 6px 7px; background: #fbfaf6; font: 9px var(--mono); }
+    .notes { padding: 9px 11px; border-right: 1px solid #8f969e; }
+    .notes h4 { margin: 0 0 7px; font-size: 10px; }
+    .notes p { margin: 0; color: #505a65; font-size: 10px; line-height: 16px; }
+    .sync-panel { padding: 9px; background: #e3e5e5; }
+    .sync-head { display: flex; align-items: center; margin-bottom: 8px; font-size: 9px; font-weight: 700; }
+    .sync-head .ok { margin-left: auto; color: var(--green); font: 8px var(--mono); }
+    .sync-event { padding: 7px; margin-bottom: 5px; border: 1px solid #a4a9ae; background: #f7f5ef; font: 8px var(--mono); color: #46515c; }
+    .sync-event b { color: #2c638f; }
+
+    .statusbar { display: flex; align-items: center; background: #222a2a; border-top: 1px solid #505b59; font: 8px var(--mono); color: #c3cbc8; }
+    .status-segment { height: 100%; display: flex; align-items: center; padding: 0 11px; border-right: 1px solid #3e4847; }
+    .status-segment.right { margin-left: auto; border-left: 1px solid #3e4847; }
+    .dot { width: 7px; height: 7px; margin-right: 6px; background: var(--green); border: 1px solid #1d6540; }
+    .warn-dot { background: #d39b31; border-color: #8a6015; }
+
+    /* Product-faithful concept: classic workstation chrome around Axiom's
+       actual semantic-zoom code graph, rather than a generic UML editor. */
+    .command-button {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 10px;
+      color: #33413e;
+      background: #efede7;
+      border: 1px solid #8a928e;
+      border-radius: 3px;
+      box-shadow: inset 0 1px #fff;
+      font-size: 8px;
+    }
+    .command-button span { color: #376c65; font: 700 13px var(--mono); }
+    .command-button b { font-size: 8px; letter-spacing: .04em; }
+    .command-button.active { color: #173c37; background: #cfe3dc; border-color: #4c766f; }
+    .command-button.agent span { color: #a36d18; }
+    .command-button em { min-width: 15px; height: 15px; display: grid; place-items: center; margin-left: 2px; color: #fff; background: #9a691d; border-radius: 8px; font: 700 8px var(--mono); }
+    .canvas-mode { height: 32px; min-width: 152px; display: flex; flex-direction: column; justify-content: center; margin-left: 5px; padding: 0 10px; border-left: 1px solid #a2a8a4; }
+    .canvas-mode span { color: #68726e; font: 7px var(--mono); letter-spacing: .08em; }
+    .canvas-mode b { color: #25322f; font-size: 9px; }
+
+    .workspace { display: none; }
+    .product-workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 202px minmax(0, 1fr) 286px;
+      gap: 8px;
+      padding: 8px;
+      background: #202729;
+    }
+    .product-panel { min-width: 0; min-height: 0; overflow: hidden; border: 1px solid #5f6b68; border-radius: 4px; background: #deddd7; box-shadow: 0 3px 10px #0004; }
+    .product-panel-title { height: 27px; display: flex; align-items: center; padding: 0 9px; color: #f4f5f2; background: linear-gradient(#394746, #293433); border-bottom: 1px solid #151d1c; font-size: 9px; font-weight: 700; letter-spacing: .06em; }
+    .panel-tools { margin-left: auto; color: #b9cbc6; font-family: var(--mono); letter-spacing: .2em; }
+
+    .sheet-rail { display: flex; flex-direction: column; }
+    .sheet-caption { padding: 12px 11px 7px; color: #6a7470; font: 700 8px var(--mono); letter-spacing: .12em; }
+    .sheet-row { position: relative; min-height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-top: 1px solid #f5f4ef; border-bottom: 1px solid #c0c3bf; color: #35413e; background: #e7e5df; }
+    .sheet-row.active { color: #fff; background: #3c7d76; border-color: #2d625c; box-shadow: inset 3px 0 #a9dbcb; }
+    .sheet-row .sheet-icon { width: 15px; height: 15px; display: grid; place-items: center; border: 1px solid currentColor; font: 8px var(--mono); }
+    .sheet-row b { font-size: 10px; }
+    .sheet-row small { margin-left: auto; color: #6c7672; font: 7px var(--mono); }
+    .sheet-row.active small { color: #d6eee7; }
+    .layer-eye { width: 13px; height: 13px; display: grid; place-items: center; border: 1px solid #7d8782; background: #f8f6ef; color: #367169; font: 8px var(--mono); }
+    .new-sheet { margin: auto 10px 10px; height: 34px; color: #40514c; background: #f4f1e9; border: 1px dashed #7d8984; font-weight: 700; font-size: 9px; }
+    .sheet-hint { margin: 10px; padding: 10px; color: #65706c; background: #eeece5; border: 1px solid #b1b6b2; font-size: 9px; line-height: 14px; }
+
+    .product-stage { display: grid; grid-template-rows: 42px minmax(0, 1fr); background: #111719; }
+    .stagebar { display: flex; align-items: center; padding: 0 11px; color: #2c3835; background: #e8e6df; border-bottom: 1px solid #7e8884; }
+    .stage-path { display: flex; align-items: center; gap: 7px; font: 8px var(--mono); }
+    .stage-path b { color: #285f58; }
+    .semantic-level { margin-left: auto; display: flex; align-items: center; gap: 7px; color: #626d69; font: 8px var(--mono); }
+    .semantic-meter { width: 58px; height: 5px; background: #c6cbc7; border: 1px solid #919995; }
+    .semantic-meter i { display: block; width: 72%; height: 100%; background: #3c7d76; }
+
+    .code-canvas { position: relative; overflow: hidden; background-color: #101618; background-image: linear-gradient(#ffffff08 1px, transparent 1px), linear-gradient(90deg, #ffffff08 1px, transparent 1px), linear-gradient(#ffffff03 1px, transparent 1px), linear-gradient(90deg, #ffffff03 1px, transparent 1px); background-size: 60px 60px, 60px 60px, 12px 12px, 12px 12px; }
+    .floor-label { position: absolute; left: 18px; top: 16px; color: #7e8b88; font: 700 8px var(--mono); letter-spacing: .12em; }
+    .floor-label b { color: #c9d3d0; }
+    .graph-wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .graph-wires path { fill: none; stroke: #64736f; stroke-width: 1.4; }
+    .graph-wires .soft { stroke: #4f7770; stroke-dasharray: 5 4; }
+    .graph-wires text { fill: #84918e; font: 8px var(--mono); }
+
+    .system-frame { position: absolute; color: #dfe7e4; background: transparent; border: 0; box-shadow: none; }
+    .system-frame::after { display: none; }
+    .system-shape { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; filter: drop-shadow(4px 4px 0 #4c514b66); }
+    .system-shape path { fill: #c8c9c0; stroke: #5a6763; stroke-width: 1; }
+    .system-shape line { stroke: var(--system-color, #3c7d76); stroke-width: 3; }
+    .system-tab { position: absolute; z-index: 2; left: 8px; top: 0; width: 178px; height: 21px; display: flex; align-items: center; gap: 8px; padding: 0; color: #596661; background: transparent; border: 0; clip-path: none; font: 7px var(--mono); letter-spacing: .1em; }
+    .system-tab .child-chip { margin-left: auto; padding: 2px 5px; color: #355f58; background: #e5e3da; border: 1px solid #848e89; font: 700 7px var(--mono); letter-spacing: .04em; }
+    .system-tab strong { color: var(--system-color, #75a59d); font-size: 8px; }
+    .system-heading { position: absolute; z-index: 2; left: 0; right: 0; top: 21px; height: 48px; display: flex; align-items: center; gap: 9px; padding: 0 14px; border-bottom: 1px solid #9ea59f; }
+    .system-heading h2 { margin: 0; color: #edf2f0; font: 600 15px var(--mono); }
+    .system-heading .path { color: #6f7e7a; font: 8px var(--mono); }
+    .system-heading .count { display: none; }
+    .runtime-system { left: 40px; top: 78px; width: 648px; height: 462px; --system-color: #6fa79d; }
+    .viz-system { left: 726px; top: 98px; width: 268px; height: 172px; --system-color: #b58c69; }
+    .viz-system .system-heading { display: none; }
+    .viz-system .collapsed-identity { position: absolute; z-index: 2; inset: 21px 0 0; display: grid; place-content: center; gap: 8px; text-align: center; }
+    .collapsed-identity h3 { margin: 0; color: #e6e9e5; font: 700 19px var(--mono); }
+    .collapsed-identity span { justify-self: center; padding: 2px 6px; color: #725338; background: #e2d8c6; border: 1px solid #9a7c5f; font: 700 8px var(--mono); }
+
+    .selected-node-frame { position: absolute; left: 24px; top: 72px; width: 276px; height: 190px; }
+    .leaf-card { position: absolute; inset: 0; overflow: hidden; color: #dce3e0; background: #202628; border: 1px solid #596662; box-shadow: 3px 4px 0 #0005; font-family: var(--mono); }
+    .class-card { clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%, 0 10px); }
+    .selected-node-frame .leaf-card { border: 2px solid #7ec0b5; box-shadow: 0 0 0 2px #294d48, 4px 5px 0 #0006; }
+    .leaf-head { position: relative; height: 47px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid #3b4543; background: #252d2e; }
+    .language-icon { width: 25px; height: 25px; display: grid; place-items: center; color: #ffe6a3; background: #5b7444; border: 1px solid #8da66f; border-radius: 4px; font: 700 12px var(--mono); }
+    .leaf-title { min-width: 0; }
+    .leaf-title strong { display: block; overflow: hidden; color: #f0f3f1; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .leaf-title small { color: #75827e; font: 7px var(--mono); }
+    .line-count { position: absolute; right: 9px; top: 8px; color: #768480; font-size: 7px; }
+    .symbol-body { display: grid; grid-template-columns: 1fr 25px; height: calc(100% - 47px); padding: 7px 7px 7px 10px; }
+    .symbol-list { overflow: hidden; padding-right: 5px; }
+    .symbol-row { height: 22px; display: flex; align-items: center; gap: 5px; color: #d7dedb; border-bottom: 1px solid #2a3232; font-size: 8px; }
+    .symbol-row i { width: 11px; color: #6fd2c4; font-style: normal; font-weight: 700; }
+    .symbol-row em { margin-left: auto; color: #5f6e6a; font-style: normal; }
+    .symbol-row.watch { color: #9ee7db; }
+    .symbol-tabs { display: flex; flex-direction: column; gap: 4px; border-left: 1px solid #3d4745; padding-left: 5px; }
+    .symbol-tabs span { width: 18px; height: 18px; display: grid; place-items: center; color: #7f8d89; border: 1px solid #46514f; font-size: 9px; }
+    .symbol-tabs .active { color: #94ded2; border-color: #5e9d93; background: #293a37; }
+    .resize-dot { position: absolute; z-index: 5; width: 8px; height: 8px; background: #f5faf7; border: 1px solid #37736b; }
+    .r-nw { left: -4px; top: -4px; } .r-n { left: calc(50% - 4px); top: -4px; } .r-ne { right: -4px; top: -4px; }
+    .r-w { left: -4px; top: calc(50% - 4px); } .r-e { right: -4px; top: calc(50% - 4px); }
+    .r-sw { left: -4px; bottom: -4px; } .r-s { left: calc(50% - 4px); bottom: -4px; } .r-se { right: -4px; bottom: -4px; }
+    .connect-orb { display: none; }
+    .runtime-badge { position: absolute; z-index: 7; top: -8px; right: -8px; min-width: 16px; height: 16px; display: grid; place-items: center; padding: 0 4px; color: #20312d; background: #6ba89f; border: 1px solid #326e66; font: 800 8px var(--mono); }
+
+    .compact-leaf { position: absolute; width: 220px; height: 110px; }
+    .compact-leaf .leaf-card { display: grid; place-content: center; gap: 9px; text-align: center; }
+    .compact-leaf .language-icon { width: 30px; height: 30px; margin: auto; }
+    .compact-leaf strong { color: #edf1ef; font-size: 19px; letter-spacing: -.025em; }
+    .compact-leaf small { color: #74817d; font-size: 7px; }
+    .graph-card { left: 362px; top: 72px; }
+    .report-card { left: 362px; top: 218px; }
+    .planned-card { left: 24px; top: 294px; width: 276px; height: 116px; }
+    .planned-card .leaf-card { border-style: dashed; border-color: #a87e3d; background: #25231e; }
+    .planned-card::before { display: none; }
+    .planned-node-head { padding: 8px 10px 7px; border-bottom: 1px solid #c5b99f; }
+    .planned-title-row { display: flex; align-items: center; gap: 7px; }
+    .planned-status { padding: 1px 4px; color: #76541d; border: 1px dashed #99713b; font: 700 7px var(--mono); letter-spacing: .07em; }
+    .planned-title-row strong { color: #2f2c24; font-size: 12px; }
+    .planned-path { margin-top: 4px; color: #7b7467; font: italic 8px var(--mono); }
+    .planned-members { padding: 5px 10px; color: #514b3f; font: 9px var(--mono); line-height: 18px; }
+
+    .infra-card { position: absolute; left: 738px; top: 344px; width: 244px; height: 146px; color: #3e392d; background: transparent; border: 0; box-shadow: none; }
+    .infra-shape { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(3px 3px 0 #5a554a66); }
+    .infra-shape path { fill: #e5dcc5; stroke: #876c3f; stroke-width: 1; }
+    .infra-node-body { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 7px; padding: 13px 18px 11px; }
+    .infra-title-row { display: flex; align-items: center; justify-content: center; gap: 7px; }
+    .provider-mark { padding: 2px 4px; color: #76541d; border: 1px solid #99713b; font: 700 8px var(--mono); line-height: 1; }
+    .infra-title-row strong { color: #352f23; font: 600 11px var(--mono); }
+    .infra-legend { display: flex; align-items: center; justify-content: center; gap: 5px; color: #746d5e; font: 700 7.5px var(--mono); letter-spacing: .08em; }
+
+    .canvas-floater { position: absolute; display: flex; align-items: center; overflow: hidden; color: #c9d3d0; background: #20292a; border: 1px solid #53615e; border-radius: 5px; box-shadow: 0 6px 18px #0007; }
+    .canvas-floater button { height: 32px; min-width: 32px; color: #b8c6c2; border-right: 1px solid #404b49; }
+    .zoom-floater { left: 14px; bottom: 14px; }
+    .zoom-floater span { padding: 0 10px; color: #8e9b97; font: 8px var(--mono); }
+    .layer-floater { left: 50%; bottom: 14px; transform: translateX(-50%); padding: 6px 9px; gap: 8px; font: 8px var(--mono); }
+    .layer-floater b { color: #8bd0c4; }
+    .product-minimap { position: absolute; right: 14px; bottom: 14px; width: 132px; height: 80px; background: #1b2223; border: 1px solid #53615e; box-shadow: 0 5px 14px #0007; }
+    .product-minimap i { position: absolute; border: 1px solid #667570; background: #293332; }
+    .product-minimap .mm1 { left: 12px; top: 16px; width: 60px; height: 38px; }
+    .product-minimap .mm2 { right: 13px; top: 14px; width: 31px; height: 20px; }
+    .product-minimap .mm3 { right: 15px; bottom: 10px; width: 28px; height: 21px; border-color: #997d4d; }
+    .product-minimap .view { left: 7px; top: 8px; width: 110px; height: 58px; border-color: #69a99f; background: transparent; }
+
+    .product-inspector { display: flex; flex-direction: column; color: #313c39; background: #e5e3dc; }
+    .inspector-identity { padding: 14px; background: #f5f2e9; border-bottom: 1px solid #afb5b1; }
+    .inspector-kicker { color: #3c7d76; font: 700 8px var(--mono); letter-spacing: .12em; }
+    .inspector-identity h2 { margin: 6px 0 3px; color: #1d2926; font: 700 17px var(--mono); }
+    .inspector-path { overflow: hidden; color: #68736f; font: 8px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+    .inspector-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-top: 12px; }
+    .inspector-actions button { min-height: 30px; color: #315e58; background: #eceae3; border: 1px solid #8f9894; font-size: 8px; font-weight: 700; }
+    .inspector-actions .primary { color: #fff; background: #3c7d76; border-color: #2d625c; }
+    .inspector-section-title { height: 26px; display: flex; align-items: center; padding: 0 10px; color: #35403d; background: #cdd0cc; border-top: 1px solid #f5f5f1; border-bottom: 1px solid #9ca39f; font: 700 8px var(--mono); letter-spacing: .08em; }
+    .inspector-grid { display: grid; grid-template-columns: 86px 1fr; gap: 8px; padding: 11px 13px; font-size: 9px; }
+    .inspector-grid dt { color: #747e7a; }
+    .inspector-grid dd { margin: 0; color: #293633; font-family: var(--mono); }
+    .dependency-row { display: flex; align-items: center; gap: 7px; min-height: 31px; padding: 0 11px; border-bottom: 1px solid #c5c8c4; background: #ebe9e3; font: 8px var(--mono); }
+    .dependency-row i { color: #3c7d76; font-style: normal; }
+    .dependency-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .dependency-row em { margin-left: auto; color: #7b8581; font-style: normal; }
+    .runtime-strip { margin: 10px; padding: 10px; color: #53605c; background: #f4f1e9; border: 1px solid #a6aca8; font-size: 9px; line-height: 15px; }
+    .runtime-strip b { color: #2f6f67; }
+
+    /* Old-workbench material pass. Geometry and behavior stay contemporary;
+       color, shadow, and surface treatment evoke a maintained 2000s tool. */
+    .product-workspace { background: #3d4543; }
+    .product-panel { border-color: #59625f; border-radius: 2px; box-shadow: 3px 3px 0 #171b1a99; }
+    .product-panel-title { color: #f2efe5; background: linear-gradient(#4d5a57, #35413f); border-bottom-color: #222b29; box-shadow: inset 0 1px #71807c; }
+    .stagebar { color: #35413e; background: linear-gradient(#efede4, #d7d5cb); border-bottom-color: #7f8782; box-shadow: inset 0 1px #fff; }
+    .code-canvas {
+      background-color: #d7d3c5;
+      background-image:
+        linear-gradient(#8b918a2e 1px, transparent 1px),
+        linear-gradient(90deg, #8b918a2e 1px, transparent 1px),
+        linear-gradient(#8b918a14 1px, transparent 1px),
+        linear-gradient(90deg, #8b918a14 1px, transparent 1px);
+    }
+    .floor-label { color: #69716d; }
+    .floor-label b { color: #31413d; }
+    .graph-wires path { stroke: #536761; }
+    .graph-wires .soft { stroke: #5f786f; }
+    .graph-wires text { fill: #58645f; }
+
+    .system-frame { color: #26312e; background: transparent; border: 0; box-shadow: none; }
+    .system-tab { color: #596661; background: transparent; border: 0; text-shadow: none; }
+    .system-tab strong { color: #355f58; }
+    .system-heading { border-bottom-color: #9ea59f; background: transparent; box-shadow: none; }
+    .system-heading h2 { color: #25312e; text-shadow: 0 1px #fff; }
+    .system-heading .path { color: #69736f; }
+    .system-heading .count { color: #355f58; background: #e5e3da; border-color: #848e89; box-shadow: inset 1px 1px #fff; }
+    .viz-system .collapsed-identity { background: transparent; }
+    .collapsed-identity h3 { color: #293531; text-shadow: 0 1px #f5f3ea; }
+    .collapsed-identity span { color: #725338; background: #e2d8c6; border-color: #9a7c5f; }
+
+    .leaf-card { color: #28332f; background: #f4f0e3; border-color: #596661; box-shadow: 3px 3px 0 #565b5566; }
+    .selected-node-frame .leaf-card { border-color: #39776f; box-shadow: 0 0 0 1px #e8fff7, 3px 3px 0 #4b524c66; }
+    .leaf-head { border-bottom-color: #8d9792; background: linear-gradient(#dfe5dc, #cbd5cd); box-shadow: inset 0 1px #f9f8f2; }
+    .language-icon { color: #fff2c5; background: #6d8050; border-color: #4f6338; border-radius: 2px; box-shadow: inset 1px 1px #93a475; text-shadow: 0 1px #364127; }
+    .leaf-title strong { color: #1f2b27; }
+    .leaf-title small, .line-count { color: #68746f; }
+    .symbol-body { background: #f5f1e5; }
+    .symbol-row { color: #2b3834; border-bottom-color: #d3d1c7; }
+    .symbol-row i { color: #29746a; }
+    .symbol-row em { color: #78817d; }
+    .symbol-row.watch { color: #214d47; background: transparent; outline: 0; }
+    .symbol-tabs { border-left-color: #a6aca8; }
+    .symbol-tabs span { color: #626e69; background: #e6e3d9; border-color: #959d98; box-shadow: inset 1px 1px #fff; }
+    .symbol-tabs .active { color: #245f57; border-color: #4d8179; background: #c8dcd5; }
+    .resize-dot { background: #fffdf5; border-color: #326e66; box-shadow: 1px 1px #59615d55; }
+    .connect-orb { color: #255e56; background: #e7eee8; border-color: #447970; box-shadow: 2px 2px 0 #575e5855; }
+    .compact-leaf .leaf-card { background: #e9e7dd; }
+    .compact-leaf strong { color: #25312d; }
+    .compact-leaf small { color: #717b77; }
+    .planned-card .leaf-card { border-color: #99713b; background: #eee5d2; }
+    .planned-card::before { color: #80591e; }
+
+    .infra-card { color: #3e392d; background: transparent; border: 0; box-shadow: none; }
+
+    .canvas-floater { color: #34413d; background: linear-gradient(#efede5, #d3d3ca); border-color: #737d78; border-radius: 2px; box-shadow: 3px 3px 0 #555a5566, inset 0 1px #fff; }
+    .canvas-floater button { color: #344b46; border-right-color: #989f9b; box-shadow: inset -1px 0 #f7f6ef; }
+    .zoom-floater span, .layer-floater { color: #5f6b66; }
+    .layer-floater b { color: #285f57; }
+    .product-minimap { background: #cbc9bf; border-color: #6f7974; box-shadow: 3px 3px 0 #555a5566, inset 0 0 0 3px #e6e3d9; }
+    .product-minimap i { border-color: #5f6f69; background: #aeb8b2; }
+    .product-minimap .mm3 { border-color: #876c3f; background: #cbbd9d; }
+    .product-minimap .view { border-color: #306e65; background: transparent; }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="titlebar">
+      <svg class="app-mark" viewBox="0 0 18 18" aria-hidden="true"><polygon points="9,1 17,5 17,13 9,17 1,13 1,5" fill="#3c7d76" stroke="#deeee9"/><circle cx="9" cy="9" r="2.3" fill="#deeee9"/></svg>
+      <strong>Axiom Architecture Workbench</strong>
+      <span class="document">— Asymm [The Floor: Live Code Graph]</span>
+      <span class="live">INDEX CLEAN · 14:32</span>
+      <div class="window-controls"><span>—</span><span>□</span><span>×</span></div>
+    </header>
+
+    <nav class="menubar"><span>File</span><span>Edit</span><span>View</span><span>Model</span><span>Diagram</span><span>Code</span><span>Analyze</span><span>Collaborate</span><span>Tools</span><span>Window</span><span>Help</span></nav>
+
+    <section class="toolbar">
+      <i class="grip"></i>
+      <button class="command-button active"><span>⌖</span><b>SELECT</b></button>
+      <button class="command-button"><span>□</span><b>LASSO</b></button>
+      <i class="separator"></i>
+      <button class="command-button"><span>▤</span><b>NEW SHEET</b></button>
+      <button class="command-button"><span>⬡</span><b>ADD INFRA</b></button>
+      <button class="command-button"><span>▶</span><b>INVESTIGATE</b></button>
+      <i class="separator"></i>
+      <button class="command-button agent"><span>◌</span><b>MESSAGE AGENT</b><em>2</em></button>
+      <div class="canvas-mode"><span>THE FLOOR</span><b>LIVE CODE GRAPH</b></div>
+      <div class="quick-find">Search files, symbols, systems… <span style="margin-left:auto;font-family:var(--mono)">Ctrl+K</span></div>
+      <button class="command-button"><span>⊡</span><b>FIT</b></button>
+    </section>
+
+    <section class="toolbar secondary">
+      <i class="grip"></i>
+      <button class="tool active" title="Select"><span class="mono-icon">↖</span></button>
+      <i class="separator"></i>
+      <button class="tool" title="Class"><span class="mono-icon">▭</span></button>
+      <button class="tool" title="Interface"><span class="mono-icon">○</span></button>
+      <button class="tool" title="Component"><span class="mono-icon">◇</span></button>
+      <button class="tool" title="Package"><span class="mono-icon">▰</span></button>
+      <button class="tool" title="Note"><span class="mono-icon">⋯</span></button>
+      <i class="separator"></i>
+      <button class="tool" title="Association"><span class="mono-icon">—</span></button>
+      <button class="tool" title="Generalization"><span class="mono-icon">▷</span></button>
+      <button class="tool" title="Aggregation"><span class="mono-icon">◇</span></button>
+      <button class="tool" title="Composition"><span class="mono-icon">◆</span></button>
+      <button class="tool" title="Dependency"><span class="mono-icon">⇢</span></button>
+      <button class="tool" title="Realization"><span class="mono-icon">⌁</span></button>
+      <i class="separator"></i>
+      <button class="tool" title="Auto Layout"><span class="mono-icon">⌗</span></button>
+      <button class="tool" title="Fit Diagram"><span class="mono-icon">⊡</span></button>
+      <span class="diagram-name">CLASS DIAGRAM · RUNTIME ARCHITECTURE</span>
+    </section>
+
+    <section class="workspace">
+      <aside class="dock explorer">
+        <div class="dock-title">MODEL EXPLORER <span class="dock-actions">⌄ □ ×</span></div>
+        <div class="explorer-toolbar"><button class="mini-tool">＋</button><button class="mini-tool">⌕</button><button class="mini-tool">↻</button><button class="mini-tool">▤</button><span style="margin-left:auto;color:#626c76;font:8px var(--mono)">MODEL</span></div>
+        <input class="tree-search" value="Filter model elements…" readonly />
+        <div class="tree">
+          <div class="tree-row"><span class="twisty">▼</span><i class="tree-icon package"></i><b>Asymm</b><span class="tree-meta">MODEL</span></div>
+          <div class="tree-row indent-1"><span class="twisty">▼</span><i class="tree-icon package"></i><span class="tree-label">01. Architecture</span></div>
+          <div class="tree-row indent-2 selected"><span class="twisty">◆</span><i class="tree-icon diagram"></i><span class="tree-label">Runtime Architecture</span><span class="tree-meta">CLASS</span></div>
+          <div class="tree-row indent-2"><span class="twisty">◆</span><i class="tree-icon diagram"></i><span class="tree-label">Data Flow</span></div>
+          <div class="tree-row indent-2"><span class="twisty">◆</span><i class="tree-icon diagram"></i><span class="tree-label">Deployment</span></div>
+          <div class="tree-row indent-1"><span class="twisty">▼</span><i class="tree-icon package"></i><span class="tree-label">02. Runtime</span></div>
+          <div class="tree-row indent-2"><span class="twisty">▼</span><i class="tree-icon package"></i><span class="tree-label">Stores</span></div>
+          <div class="tree-row indent-3"><span class="twisty"></span><i class="tree-icon class"></i><span class="tree-label">SessionStore</span><span class="tree-meta">96</span></div>
+          <div class="tree-row indent-3"><span class="twisty"></span><i class="tree-icon class"></i><span class="tree-label">GraphStore</span><span class="tree-meta">148</span></div>
+          <div class="tree-row indent-3"><span class="twisty"></span><i class="tree-icon class"></i><span class="tree-label">ReportStore</span><span class="tree-meta">85</span></div>
+          <div class="tree-row indent-2"><span class="twisty">▼</span><i class="tree-icon package"></i><span class="tree-label">Adapters</span></div>
+          <div class="tree-row indent-3"><span class="twisty"></span><i class="tree-icon class"></i><span class="tree-label">ArchdAdapter</span><span class="tree-meta">74</span></div>
+          <div class="tree-row indent-3"><span class="twisty"></span><i class="tree-icon class"></i><span class="tree-label">EventBridge</span><span class="tree-meta">52</span></div>
+          <div class="tree-row indent-1"><span class="twisty">▶</span><i class="tree-icon package"></i><span class="tree-label">03. Infrastructure</span></div>
+          <div class="tree-row indent-1"><span class="twisty">▶</span><i class="tree-icon package"></i><span class="tree-label">04. Investigations</span><span class="tree-meta">3</span></div>
+        </div>
+      </aside>
+
+      <section class="dock editor">
+        <div class="doc-tabs"><div class="doc-tab active">◇ Runtime Architecture <span class="close">×</span></div><div class="doc-tab">◇ Data Flow <span class="close">×</span></div><div class="doc-tab">▤ session_store.py <span class="close">×</span></div></div>
+        <div class="breadcrumb">Asymm::Runtime::Stores <span style="padding:0 7px">›</span> Class Model <span class="model-health">CODE ↔ MODEL UP TO DATE</span></div>
+        <div class="canvas">
+          <div class="package-boundary"><div class="package-tab">pkg Runtime</div></div>
+          <svg class="diagram-connections" viewBox="0 0 1074 785" preserveAspectRatio="none">
+            <defs>
+              <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4e6274"/></marker>
+              <marker id="hollow" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto"><path d="M1,1 L11,5 L1,9 z" fill="#fbfaf3" stroke="#4e6274"/></marker>
+              <marker id="diamond" markerWidth="12" markerHeight="10" refX="11" refY="5" orient="auto"><path d="M1,5 L6,1 L11,5 L6,9 z" fill="#fbfaf3" stroke="#4e6274"/></marker>
+            </defs>
+            <path d="M370 195 H452 V383 H514" marker-end="url(#arrow)"/>
+            <path d="M370 225 H470 V157 H576" marker-end="url(#hollow)"/>
+            <path d="M352 448 H514 V410" class="dependency" marker-end="url(#arrow)"/>
+            <path d="M806 157 H940 V248" marker-end="url(#diamond)"/>
+            <path d="M730 390 H846" class="dependency" marker-end="url(#arrow)"/>
+            <text x="399" y="188">reports</text><text x="475" y="150">persists via</text><text x="397" y="440">publishes</text><text x="860" y="149">1..*</text><text x="752" y="382">dispatches</text>
+          </svg>
+
+          <div class="canvas-tools"><button class="canvas-tool">⌗ TIDY</button><button class="canvas-tool">▦ ALIGN</button><button class="canvas-tool">✓ VALIDATE</button><span class="source-chip">CODE LINKED</span></div>
+
+          <article class="uml-class selected class-session">
+            <header class="class-head"><span class="source-state">96 LOC</span><div class="stereotype">«service»</div><div class="class-name">SessionStore</div></header>
+            <section class="compartment"><div class="member"><span class="visibility">−</span><span class="member-name">_sessions</span><span class="member-type">Map</span></div><div class="member"><span class="visibility">−</span><span class="member-name">_history</span><span class="member-type">Report[]</span></div></section>
+            <section class="compartment"><div class="member"><span class="visibility">＋</span><span class="member-name">from_report(report)</span><span class="member-type">Session</span></div><div class="member"><span class="visibility">＋</span><span class="member-name">save(session)</span><span class="member-type">void</span></div><div class="member"><span class="visibility">＋</span><span class="member-name">history()</span><span class="member-type">Report[]</span></div></section>
+            <i class="resize-handle h-nw"></i><i class="resize-handle h-n"></i><i class="resize-handle h-ne"></i><i class="resize-handle h-w"></i><i class="resize-handle h-e"></i><i class="resize-handle h-sw"></i><i class="resize-handle h-s"></i><i class="resize-handle h-se"></i><span class="quick-link">→</span>
+          </article>
+
+          <article class="uml-class class-graph"><header class="class-head"><span class="source-state">148 LOC</span><div class="stereotype">«store»</div><div class="class-name">GraphStore</div></header><section class="compartment"><div class="member"><span class="visibility">−</span><span class="member-name">nodes</span><span class="member-type">Node[]</span></div><div class="member"><span class="visibility">−</span><span class="member-name">edges</span><span class="member-type">Edge[]</span></div></section><section class="compartment"><div class="member"><span class="visibility">＋</span><span class="member-name">applySnapshot()</span></div><div class="member"><span class="visibility">＋</span><span class="member-name">persistLayout()</span></div></section></article>
+          <article class="uml-class class-report"><header class="class-head"><span class="source-state">85 LOC</span><div class="stereotype">«repository»</div><div class="class-name">ReportStore</div></header><section class="compartment"><div class="member"><span class="visibility">＋</span><span class="member-name">save(report)</span><span class="member-type">void</span></div><div class="member"><span class="visibility">＋</span><span class="member-name">load(id)</span><span class="member-type">Report</span></div></section></article>
+          <article class="uml-class class-adapter"><header class="class-head"><span class="source-state">74 LOC</span><div class="stereotype">«adapter»</div><div class="class-name">ArchdAdapter</div></header><section class="compartment"><div class="member"><span class="visibility">＋</span><span class="member-name">connect()</span></div><div class="member"><span class="visibility">＋</span><span class="member-name">snapshot()</span></div><div class="member"><span class="visibility">＋</span><span class="member-name">watch()</span></div></section></article>
+          <article class="uml-class class-event"><header class="class-head"><span class="source-state">52 LOC</span><div class="stereotype">«event bus»</div><div class="class-name">EventBridge</div></header><section class="compartment"><div class="member"><span class="visibility">＋</span><span class="member-name">publish()</span></div><div class="member"><span class="visibility">＋</span><span class="member-name">subscribe()</span></div></section></article>
+
+          <div class="zoom-readout"><button>＋</button><button>−</button><button>⊡</button><span>100.00% · X 215 Y 408</span></div>
+          <div class="minimap"><span class="m1"></span><span class="m2"></span><span class="m3"></span><span class="viewport"></span></div>
+        </div>
+      </section>
+
+      <aside class="dock toolbox">
+        <div class="dock-title">DIAGRAM TOOLBOX <span class="dock-actions">⌄ □ ×</span></div>
+        <div class="toolbox-tabs"><div class="toolbox-tab active">UML</div><div class="toolbox-tab">Profile</div><div class="toolbox-tab">Recent</div></div>
+        <div class="tool-group-title">▼ Class Elements</div>
+        <div class="toolbox-item"><i class="toolbox-icon">C</i>Class</div><div class="toolbox-item"><i class="toolbox-icon">I</i>Interface</div><div class="toolbox-item"><i class="toolbox-icon">E</i>Enumeration</div><div class="toolbox-item"><i class="toolbox-icon">P</i>Package</div><div class="toolbox-item"><i class="toolbox-icon">N</i>Note</div>
+        <div class="tool-group-title">▼ Relationships</div>
+        <div class="toolbox-item"><i class="connector-icon"></i>Association</div><div class="toolbox-item"><i class="connector-icon"></i>Generalization</div><div class="toolbox-item"><i class="connector-icon"></i>Realization</div><div class="toolbox-item"><i class="connector-icon"></i>Dependency</div><div class="toolbox-item"><i class="connector-icon"></i>Aggregation</div><div class="toolbox-item"><i class="connector-icon"></i>Composition</div>
+        <div class="tool-group-title">▶ Common</div>
+        <div class="toolbox-footer"><b>Quick Linker</b><br />Drag the arrow on a selected element to create a valid UML relationship.</div>
+        <div class="tool-group-title">▼ Selection</div>
+        <div class="selection-inspector">
+          <div class="eyebrow">SELECTED CLASS</div>
+          <h3>SessionStore</h3>
+          <div class="source">session_store.py : 24–96</div>
+          <dl><dt>Stereotype</dt><dd>service</dd><dt>Namespace</dt><dd>Runtime::Stores</dd><dt>Members</dt><dd>5 operations</dd><dt>Relations</dt><dd>3 outgoing</dd></dl>
+        </div>
+      </aside>
+
+      <section class="dock properties">
+        <div class="property-tabs"><div class="property-tab active">PROPERTIES</div><div class="property-tab">FEATURES</div><div class="property-tab">RELATIONSHIPS</div><div class="property-tab">SOURCE</div><div class="property-tab">TRACE</div><div class="property-tab">MESSAGES <b style="color:#9b6515">2</b></div></div>
+        <div class="property-body">
+          <div class="property-grid">
+            <div class="property-row"><div class="property-key">Name</div><div class="property-value">SessionStore</div></div>
+            <div class="property-row"><div class="property-key">Type</div><div class="property-value">Class</div></div>
+            <div class="property-row"><div class="property-key">Stereotype</div><div class="property-value">service</div></div>
+            <div class="property-row"><div class="property-key">Namespace</div><div class="property-value">Asymm::Runtime::Stores</div></div>
+            <div class="property-row"><div class="property-key">Source</div><div class="property-value">session_store.py : 24–96</div></div>
+            <div class="property-row"><div class="property-key">Visibility</div><div class="property-value">public</div></div>
+          </div>
+          <div class="notes"><h4>Element Notes</h4><p>Maintains runtime sessions and report history. Synchronized from Python source; changes to UML metadata remain model-owned until explicitly written back.</p></div>
+          <div class="sync-panel"><div class="sync-head">SOURCE SYNCHRONIZATION <span class="ok">● CLEAN</span></div><div class="sync-event"><b>96 lines</b> parsed from session_store.py</div><div class="sync-event"><b>3 relationships</b> verified against imports</div><div class="sync-event"><b>0 conflicts</b> between model and source</div></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="product-workspace">
+      <aside class="product-panel sheet-rail">
+        <div class="product-panel-title">DRAWINGS <span class="panel-tools">⌄ □</span></div>
+        <div class="sheet-caption">LIVE MODEL</div>
+        <div class="sheet-row active"><span class="sheet-icon">▦</span><b>The Floor</b><small>LIVE</small></div>
+        <div class="sheet-caption">OVERLAY SHEETS</div>
+        <div class="sheet-row"><span class="layer-eye">✓</span><span class="sheet-icon">◇</span><b>Runtime Draft</b><small>3</small></div>
+        <div class="sheet-row"><span class="layer-eye"></span><span class="sheet-icon">◇</span><b>Data Model</b><small>8</small></div>
+        <div class="sheet-row"><span class="layer-eye"></span><span class="sheet-icon">◇</span><b>Investigation 07</b><small>12s</small></div>
+        <div class="sheet-hint"><b>THE FLOOR</b><br />Live systems and source files. Zoom into a system to reveal its children and symbols.</div>
+        <button class="new-sheet">＋ NEW SHEET</button>
+      </aside>
+
+      <main class="product-panel product-stage">
+        <div class="stagebar">
+          <div class="stage-path"><b>THE FLOOR</b><span>›</span><span>Asymm</span><span>›</span><span>Runtime</span></div>
+          <div class="semantic-level"><span>SEMANTIC DETAIL</span><span class="semantic-meter"><i></i></span><b>SYMBOLS</b></div>
+        </div>
+        <div class="code-canvas">
+          <div class="floor-label">LIVE CODEBASE / <b>10 SYSTEMS · 45 FILES</b></div>
+          <svg class="graph-wires" viewBox="0 0 1070 807" preserveAspectRatio="none">
+            <defs><marker id="wire-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#768580"/></marker></defs>
+            <path d="M688 172 H708 V183 H726" marker-end="url(#wire-arrow)" />
+            <path class="soft" d="M688 430 H714 V412 H738" marker-end="url(#wire-arrow)" />
+            <text x="696" y="163">imports</text><text x="696" y="422">reads db</text>
+          </svg>
+
+          <section class="system-frame runtime-system">
+            <svg class="system-shape" viewBox="0 0 648 462" preserveAspectRatio="none" aria-hidden="true"><path d="M1 461 L1 1 L194 1 L207 21 L647 21 L647 461 Z"/><line x1="2" y1="2" x2="2" y2="460"/></svg>
+            <div class="system-tab">SYSTEM <span class="child-chip">4</span></div>
+            <header class="system-heading"><h2>Runtime / Stores</h2></header>
+            <svg class="graph-wires" viewBox="0 0 648 462" preserveAspectRatio="none">
+              <path d="M300 167 H329 V132 H362" marker-end="url(#wire-arrow)" />
+              <path d="M300 190 H329 V276 H362" marker-end="url(#wire-arrow)" />
+              <path class="soft" d="M300 352 H329 V313 H362" marker-end="url(#wire-arrow)" />
+              <text x="307" y="158">imports</text><text x="307" y="268">writes</text>
+            </svg>
+
+            <div class="selected-node-frame">
+              <article class="leaf-card class-card">
+                <header class="leaf-head"><span class="language-icon">Py</span><div class="leaf-title"><strong>session_store.py</strong></div><span class="line-count">96</span></header>
+                <div class="symbol-body">
+                  <div class="symbol-list">
+                    <div class="symbol-row"><i>ƒ</i><span>from_report</span><em>: 38</em></div>
+                    <div class="symbol-row"><i>ƒ</i><span>__init__</span><em>: 60</em></div>
+                    <div class="symbol-row watch"><i>ƒ</i><span>save</span><em>12×</em></div>
+                    <div class="symbol-row"><i>ƒ</i><span>history</span><em>: 85</em></div>
+                    <div class="symbol-row"><i>ƒ</i><span>exercises</span><em>: 91</em></div>
+                  </div>
+                  <div class="symbol-tabs"><span class="active">ƒ</span><span>v</span><span>C</span></div>
+                </div>
+              </article>
+              <i class="resize-dot r-nw"></i><i class="resize-dot r-n"></i><i class="resize-dot r-ne"></i><i class="resize-dot r-w"></i><i class="resize-dot r-e"></i><i class="resize-dot r-sw"></i><i class="resize-dot r-s"></i><i class="resize-dot r-se"></i><span class="runtime-badge">12</span>
+            </div>
+
+            <div class="compact-leaf graph-card"><article class="leaf-card class-card"><span class="language-icon">Py</span><strong>graph_store.py</strong><small>148 LINES · ACTIVE</small></article></div>
+            <div class="compact-leaf report-card"><article class="leaf-card"><span class="language-icon">Py</span><strong>report_store.py</strong><small>85 LINES</small></article></div>
+            <div class="compact-leaf planned-card"><article class="leaf-card class-card"><div class="planned-node-head"><div class="planned-title-row"><span class="planned-status">PLANNED</span><strong>SessionPolicy</strong></div><div class="planned-path">set target path…</div></div><div class="planned-members">− retention_days: int<br />＋ should_archive(session)</div></article></div>
+          </section>
+
+          <section class="system-frame viz-system">
+            <svg class="system-shape" viewBox="0 0 268 172" preserveAspectRatio="none" aria-hidden="true"><path d="M1 171 L1 1 L80 1 L91 21 L267 21 L267 171 Z"/><line x1="2" y1="2" x2="2" y2="170"/></svg>
+            <div class="system-tab" style="width:74px">SYSTEM</div>
+            <div class="collapsed-identity"><h3>Visualization</h3><span>7</span></div>
+          </section>
+
+          <article class="infra-card">
+            <svg class="infra-shape" viewBox="0 0 244 146" preserveAspectRatio="none" aria-hidden="true"><path d="M1 11 A121 10 0 0 1 243 11 L243 135 A121 10 0 0 1 1 135 Z"/><path d="M1 11 A121 10 0 0 0 243 11" fill="none"/></svg>
+            <div class="infra-node-body"><div class="infra-title-row"><span class="provider-mark">SQL</span><strong>SQLite DB</strong></div><div class="infra-legend"><span>◉</span><span>DATABASE · SQL</span></div></div>
+          </article>
+
+          <div class="canvas-floater zoom-floater"><button>＋</button><button>−</button><button>⊡</button><span>100.00% · X 215 Y 408</span></div>
+          <div class="canvas-floater layer-floater"><span>VISIBLE</span><b>THE FLOOR + RUNTIME DRAFT</b><span>⌄</span></div>
+          <div class="product-minimap"><i class="mm1"></i><i class="mm2"></i><i class="mm3"></i><i class="view"></i></div>
+        </div>
+      </main>
+
+      <aside class="product-panel product-inspector">
+        <div class="product-panel-title">INSPECTOR <span class="panel-tools">□ ×</span></div>
+        <div class="inspector-identity">
+          <div class="inspector-kicker">SELECTED CLASS FILE</div>
+          <h2>session_store.py</h2>
+          <div class="inspector-path">harness/asymm/runtime/session_store.py</div>
+          <div class="inspector-actions"><button class="primary">OPEN SOURCE</button><button>SHOW IN FOLDER</button><button>WATCH SYMBOL</button><button>TRACE SLICE</button></div>
+        </div>
+        <div class="inspector-section-title">GENERAL</div>
+        <dl class="inspector-grid"><dt>Language</dt><dd>Python</dd><dt>Shape</dt><dd>Class</dd><dt>System</dt><dd>Runtime / Stores</dd><dt>Lines</dt><dd>96</dd><dt>Churn</dt><dd>0.31 · quiet</dd></dl>
+        <div class="inspector-section-title">SOURCE SYMBOLS · 9</div>
+        <div class="dependency-row"><i>ƒ</i><span>from_report(report)</span><em>:38</em></div>
+        <div class="dependency-row"><i>ƒ</i><span>save(session)</span><em>:70</em></div>
+        <div class="dependency-row"><i>ƒ</i><span>history()</span><em>:85</em></div>
+        <div class="inspector-section-title">DEPENDENCIES</div>
+        <div class="dependency-row"><i>→</i><span>report_store.py</span><em>IMPORTS</em></div>
+        <div class="dependency-row"><i>←</i><span>graph_store.py</span><em>IMPORTED BY</em></div>
+        <div class="runtime-strip"><b>RUNTIME WATCH</b><br />save(session) · 12 calls<br />Last return: <code>Session#4d91</code></div>
+      </aside>
+    </section>
+
+    <footer class="statusbar"><div class="status-segment"><i class="dot"></i>ARCHD CONNECTED</div><div class="status-segment">WORKSPACE: ASYMM</div><div class="status-segment">10 SYSTEMS · 45 FILES · 18 DEPENDENCIES</div><div class="status-segment"><i class="dot warn-dot"></i>2 MESSAGES QUEUED</div><div class="status-segment right">SELECT · THE FLOOR · ZOOM 100.00%</div></footer>
+  </main>
+</body>
+</html>
