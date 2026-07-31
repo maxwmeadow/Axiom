@@ -261,6 +261,24 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 - A node the sheet has an opinion about is marked, so what a proposal *changes*
   is distinguishable from what it merely *contains*.
 
+### Sheet mode enters and leaves symmetrically
+
+- Sheet mode is a PHASE, not a boolean. It stays applied through `leaving` long
+  enough for the exit to play, and only then unmounts.
+- A CSS keyframe on a pseudo-element that exists only while the mode class is
+  applied can animate IN and never OUT: the moment the class is removed the
+  element is gone. Every value in the sheet chrome is therefore a transition on
+  a presence variable, which makes both directions the same move run in
+  opposite directions, and makes an interrupted switch resolve to a real value
+  rather than jumping.
+- `leaving` keeps the sheet id, so the chrome it belongs to is still on screen
+  to animate. Dropping the id with the phase is what makes an exit snap.
+- Switching directly between two sheets re-enters rather than leaving, because
+  the board never goes away and a fade-out/fade-in would read as a flicker.
+- Anything that changes value with the mode — including the header shelf colour
+  — transitions back on exit. A single snapping value is as conspicuous as an
+  entirely missing animation.
+
 ### Sheet transitions
 
 - Switching between the Floor and a sheet animates, because a cut between two

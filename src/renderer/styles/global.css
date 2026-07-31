@@ -6277,21 +6277,32 @@ select.axiom-inspector-input {
 /* ─── Sheet mode ────────────────────────────────────────────────────────────
    How you know you are on a sheet rather than the live Floor.
 
-   The first answer was to fade the architecture to 45% and make it inert. That
-   communicates "not live" by making the map unusable, which is backwards: a
-   sheet is precisely where you work ON the architecture.
+   The signal is a change of MATERIAL, not of legibility: the board becomes a
+   real cyanotype and the nodes become warm pad stock laid on it. Nothing is
+   dimmed; you are simply working on different paper.
 
-   So the signal is a change of MATERIAL, not of legibility. The board becomes
-   a real cyanotype — a 1920 blueprint scan, mirrored into a seamless tile —
-   and the nodes become warm pad and folder stock laid on top of it. Nothing is
-   dimmed; you are simply working on different paper. */
+   EVERY value here is a transition on a presence variable, never a keyframe
+   animation. A keyframe on a pseudo-element that only exists while the mode
+   class is applied can only ever play IN — the moment the class goes, the
+   element is gone and the exit snaps. Driving presence instead makes both
+   directions symmetric by construction, and makes an interrupted switch
+   resolve to a real value rather than jumping. */
 .axiom-sheet-mode {
   --sheet-ink: #1d4a63;
   --sheet-rule: rgba(232, 244, 250, 0.5);
-  /* The pad's colour lives in its header strip, not in the page. A file's
-     body is where the symbols are listed, so it stays plain paper; the band
-     carrying the filename is the yellow binding above it. */
+  /* The pad's colour lives in its header strip, not in the page. */
   --card-head: #ecd88f;
+  --sheet-presence: 1;
+}
+
+/* Both ends of the journey sit at zero, so entry and exit are the same move
+   run in opposite directions. */
+.axiom-sheet-mode[data-sheet-phase='entering'],
+.axiom-sheet-mode[data-sheet-phase='leaving'] {
+  --sheet-presence: 0;
+  /* On the way out the pad yellow has to travel back to the Floor's shelf, or
+     the header would snap even though everything around it faded. */
+  --card-head: #e7dfc4;
 }
 
 /* The board. A photograph of blueprint paper, tiled — not a blue fill. */
@@ -6302,8 +6313,8 @@ select.axiom-inspector-input {
   background-image: url('../assets/textures/blueprint.jpg');
   background-repeat: repeat;
   background-size: 420px auto;
-  opacity: 0;
-  animation: axiomBoardIn 460ms ease-out forwards;
+  opacity: var(--sheet-presence);
+  transition: opacity 460ms ease-out;
   pointer-events: none;
 }
 
@@ -6316,14 +6327,9 @@ select.axiom-inspector-input {
     linear-gradient(var(--sheet-rule) 1px, transparent 1px),
     linear-gradient(90deg, var(--sheet-rule) 1px, transparent 1px);
   background-size: 96px 96px, 96px 96px;
-  opacity: 0;
-  animation: axiomBoardIn 460ms ease-out 90ms forwards;
+  opacity: var(--sheet-presence);
+  transition: opacity 380ms ease-out 60ms;
   pointer-events: none;
-}
-
-@keyframes axiomBoardIn {
-  from { opacity: 0; }
-  to   { opacity: 1; }
 }
 
 /* An inset frame: you are working inside a proposal laid over the map. */
@@ -6337,18 +6343,19 @@ select.axiom-inspector-input {
   box-shadow:
     inset 0 0 0 1px rgba(232, 244, 250, 0.28),
     inset 0 0 52px rgba(16, 52, 72, 0.3);
+  opacity: var(--sheet-presence);
+  transition: opacity 340ms ease-out;
   pointer-events: none;
-  animation: axiomBoardIn 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Standing mark, so the mode is legible on a viewport full of nodes. */
+/* Standing mark, so the mode is legible on a viewport full of nodes. It also
+   slides under the top edge on the way out rather than blinking off. */
 .axiom-sheet-mode::before {
   position: absolute;
   top: 0;
   left: 50%;
   z-index: 6;
   padding: 3px 12px 4px;
-  transform: translateX(-50%);
   content: 'PROPOSAL — the live map is untouched';
   border: 1px solid rgba(232, 244, 250, 0.34);
   border-top: 0;
@@ -6359,8 +6366,10 @@ select.axiom-inspector-input {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.09em;
+  opacity: var(--sheet-presence);
+  transform: translateX(-50%) translateY(calc((1 - var(--sheet-presence)) * -100%));
+  transition: opacity 300ms ease-out, transform 340ms cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: none;
-  animation: axiomBoardIn 340ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
 }
 
 /* A node the sheet has an opinion about is pinned to the board. */
@@ -6373,7 +6382,7 @@ select.axiom-inspector-input {
   .axiom-sheet-mode .react-flow__pane::after,
   .axiom-sheet-mode::after,
   .axiom-sheet-mode::before {
-    animation-duration: 1ms;
+    transition-duration: 1ms;
   }
 }
 
@@ -6385,11 +6394,13 @@ select.axiom-inspector-input {
 .axiom-shape-texture {
   fill: none;
   opacity: 0;
-  transition: opacity 420ms ease-out;
+  transition: opacity 460ms ease-out;
   pointer-events: none;
 }
 
-.axiom-sheet-mode .axiom-shape-texture { opacity: 1; }
+/* Presence, not the class, so the paper leaves with the board it was laid on
+   rather than vanishing the instant the mode ends. */
+.axiom-sheet-mode .axiom-shape-texture { opacity: var(--sheet-presence); }
 
 .axiom-sheet-mode .axiom-shape-texture[data-stock='paper']     { fill: url(#axiom-paper-sheet); }
 .axiom-sheet-mode .axiom-shape-texture[data-stock='card']      { fill: url(#axiom-card-sheet); }

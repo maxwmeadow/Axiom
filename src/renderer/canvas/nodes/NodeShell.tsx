@@ -173,7 +173,7 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
           <clipPath id={clipId}><path ref={clipRef} d={shellPath(shape, 180, 72)} /></clipPath>
           <rect x={0} y={0} width="100%" height={headBand} clipPath={`url(#${clipId})`}
             fill="var(--card-head)" opacity={headBandOpacity}
-            style={{ transition: 'opacity 0.25s ease' }} />
+            style={{ transition: 'opacity 0.25s ease, fill 420ms ease-out' }} />
         </>
       ) : null}
       {shape === 'cylinder' && (

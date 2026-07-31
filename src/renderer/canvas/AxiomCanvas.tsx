@@ -70,6 +70,7 @@ import { applyZoomVisibility, makeFullyVisible } from './semanticZoom'
 import { livingVisibilityIndex, surfaceLivingNodeFx } from './livingVisibility'
 import { applyDeltaMarks, buildDeltaReview, claimFocusTargets, clampClaimCursor } from './deltaReview'
 import { applyAgentAttention, surfaceAgentAttention } from './agentAttentionProjection'
+import { useSheetPhase } from './sheetPhase'
 import { stampAgentPresence } from './agentPresence'
 import { LivingFlowOverlay } from './LivingFlowOverlay'
 import { inspectFloorScene, partitionCanvasNodeChanges } from './sceneIntegrity'
@@ -1422,6 +1423,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   // live nodes in place (stencil highlight), draw planned UML elements and
   // planned edges on top. Live members keep their Floor positions.
   const overlaySheetId = useSheetStore(s => s.activeSheetId)
+  // Sheet mode outlives its own exit so the departure can animate. See
+  // sheetPhase.ts — a class that vanishes with the state can only fade IN.
+  const sheetPhase = useSheetPhase(overlaySheetId)
   const visibleSheetIds = useSheetStore(s => s.visibleSheetIds)
   const layersById = useSheetStore(s => s.layersById)
   const overlayElements = useSheetStore(s => s.elements)
@@ -3622,8 +3626,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         // Sheet mode is signalled by the SURFACE, not by degrading the nodes.
         // The architecture stays at full fidelity because a sheet is where you
         // work on it; the environment is what tells you edits are a proposal.
-        overlaySheetId ? 'axiom-sheet-mode' : '',
+        // Driven by phase, not by the raw id, so leaving animates too.
+        sheetPhase.phase ? 'axiom-sheet-mode' : '',
       ].filter(Boolean).join(' ') || undefined}
+      data-sheet-phase={sheetPhase.phase ?? undefined}
       onDragOverCapture={onOverlayDragOver}
       onDropCapture={onOverlayDrop}
       onPointerDownCapture={traceCanvasHit}
