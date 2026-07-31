@@ -6355,16 +6355,24 @@ select.axiom-inspector-input {
   }
 }
 
-/* Node paper stock.
-   Which material a node is made of is semantic and set by the component;
-   which LIGHT it is under is contextual and set here, so sheet mode changes
-   every surface at once without any node component knowing sheets exist. */
-.axiom-shape-texture[data-stock='paper']     { fill: var(--stock-paper, url(#axiom-paper)); }
-.axiom-shape-texture[data-stock='card']      { fill: var(--stock-card, url(#axiom-card)); }
-.axiom-shape-texture[data-stock='blueprint'] { fill: var(--stock-blueprint, url(#axiom-blueprint)); }
+/* Node paper stock — SHEETS ONLY.
+   The Floor is the live map and stays clean. A sheet is a proposal drawn on
+   top of it, so the sheet is the thing that gets a surface. The texture fades
+   in on entry and out on exit, which doubles as the quietest possible reminder
+   of which mode you are in. */
+.axiom-shape-texture {
+  fill: none;
+  opacity: 0;
+  transition: opacity 420ms ease-out;
+  pointer-events: none;
+}
 
-.axiom-sheet-mode {
-  --stock-paper: url(#axiom-paper-sheet);
-  --stock-card: url(#axiom-card-sheet);
-  --stock-blueprint: url(#axiom-blueprint-sheet);
+.axiom-sheet-mode .axiom-shape-texture { opacity: 1; }
+
+.axiom-sheet-mode .axiom-shape-texture[data-stock='paper']     { fill: url(#axiom-paper-sheet); }
+.axiom-sheet-mode .axiom-shape-texture[data-stock='card']      { fill: url(#axiom-card-sheet); }
+.axiom-sheet-mode .axiom-shape-texture[data-stock='blueprint'] { fill: url(#axiom-blueprint-sheet); }
+
+@media (prefers-reduced-motion: reduce) {
+  .axiom-shape-texture { transition-duration: 1ms; }
 }
