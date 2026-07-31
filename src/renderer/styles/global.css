@@ -6270,3 +6270,87 @@ select.axiom-inspector-input {
   background: #e2e4e6;
   color: #555d65;
 }
+
+/* ─── Sheet mode ────────────────────────────────────────────────────────────
+   How you know you are on a sheet rather than the live Floor.
+
+   The previous answer was to fade the architecture to 45% and make it inert.
+   That communicates "not live" by making the map unusable, which is backwards:
+   a sheet is precisely where you work ON the architecture, so the architecture
+   has to stay fully legible and clickable.
+
+   So the signal lives entirely in the SURFACE — a cooler paper tint, a visible
+   frame around the viewport, and a corner mark. Content is never degraded to
+   indicate mode. */
+.axiom-sheet-mode {
+  --sheet-accent: #7a6ea8;
+  --sheet-accent-soft: rgba(122, 110, 168, 0.5);
+}
+
+/* Cooler paper: the same drafting table under different light. Sits beneath
+   the nodes and never touches their opacity. */
+.axiom-sheet-mode .react-flow__pane::before {
+  position: absolute;
+  content: '';
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(122, 110, 168, 0.13), transparent 62%),
+    linear-gradient(180deg, rgba(122, 110, 168, 0.09), rgba(122, 110, 168, 0.05));
+  pointer-events: none;
+}
+
+/* An inset frame: you are working inside a proposal laid over the map. Drawn
+   on the container so it stays put while the canvas pans and zooms. */
+.axiom-sheet-mode::after {
+  position: absolute;
+  z-index: 5;
+  content: '';
+  inset: 0;
+  border: 2px solid var(--sheet-accent-soft);
+  border-radius: 3px;
+  box-shadow:
+    inset 0 0 0 1px rgba(122, 110, 168, 0.22),
+    inset 0 0 46px rgba(122, 110, 168, 0.14);
+  pointer-events: none;
+  animation: axiomSheetFrameIn 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes axiomSheetFrameIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Corner mark, so the mode is legible even on a viewport full of nodes. */
+.axiom-sheet-mode::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 6;
+  padding: 3px 12px 4px;
+  transform: translateX(-50%);
+  content: 'PROPOSAL — the live map is untouched';
+  border: 1px solid var(--sheet-accent-soft);
+  border-top: 0;
+  border-radius: 0 0 3px 3px;
+  background: #3b3357;
+  color: #ded7f2;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  pointer-events: none;
+  animation: axiomSheetFrameIn 340ms cubic-bezier(0.22, 1, 0.36, 1) 80ms both;
+}
+
+/* A node the sheet has an opinion about wears a quiet violet edge, so you can
+   tell what this proposal actually changes from what it merely contains. */
+.axiom-sheet-mode .react-flow__node[data-sheet-placed='true'] {
+  filter: drop-shadow(0 0 0 1px var(--sheet-accent));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axiom-sheet-mode::after,
+  .axiom-sheet-mode::before {
+    animation-duration: 1ms;
+  }
+}

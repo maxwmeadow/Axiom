@@ -1919,14 +1919,18 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         style: {
           ...sheetNode.style,
           ...(isStructuralFloorContext ? { width: renderedW, height: renderedH } : {}),
-          ...(isFloorContextNode ? {
-            opacity: Math.min(nodeOpacity, 0.45),
-            pointerEvents: 'none' as const,
-          } : {}),
+          // Structural context is NOT scenery. It renders at full fidelity and
+          // stays clickable, because a sheet is where you work on the
+          // architecture — dimming the thing you are reasoning about is what
+          // made a sheet feel like drawing on glass over the map.
+          ...(isFloorContextNode ? { pointerEvents: 'auto' as const } : {}),
           transition,
         },
         draggable: activeNodeIds.has(sheetNode.id) && nodeOpacity > 0.1,
-        selectable: !isFloorContextNode && nodeOpacity > 0.1,
+        // Context nodes are selectable so they can be inspected, connected and
+        // included in a prompt. Only repositioning is reserved for the sheet's
+        // own members, since a sheet-local move has to persist as an override.
+        selectable: nodeOpacity > 0.1,
         zIndex: sheetNode.id.startsWith('planned:') ? 10000 : sheetNode.zIndex,
       }
     })
@@ -1941,10 +1945,15 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         // recursively transform the live system's Floor descendants.
         parentId: undefined,
         position: floorAbsolutePosition(n),
-        // Keep the Floor legible beneath a sheet without reviving descendants
-        // that semantic zoom has intentionally hidden.
-        style: { ...n.style, opacity: Math.min(floorOpacity, 0.45), pointerEvents: 'none' as const, transition },
-        selectable: false, draggable: false,
+        // Full fidelity. A sheet proposes an alternative arrangement of THIS
+        // architecture, so the architecture has to stay readable and usable
+        // while you draw the proposal. Mode is communicated by the canvas
+        // surface, never by degrading the content.
+        style: { ...n.style, opacity: floorOpacity, transition },
+        selectable: true,
+        // Repositioning stays a Floor gesture until a sheet-local move has
+        // somewhere to persist to; selecting, inspecting and connecting do not.
+        draggable: false,
       }]
     })
     return [...dimmedFloor, ...morphed]
@@ -3610,6 +3619,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       className={[
         isTransitioningLayout ? 'layout-transition' : '',
         isDraggingScene ? 'axiom-dragging' : '',
+        // Sheet mode is signalled by the SURFACE, not by degrading the nodes.
+        // The architecture stays at full fidelity because a sheet is where you
+        // work on it; the environment is what tells you edits are a proposal.
+        overlaySheetId ? 'axiom-sheet-mode' : '',
       ].filter(Boolean).join(' ') || undefined}
       onDragOverCapture={onOverlayDragOver}
       onDropCapture={onOverlayDrop}
