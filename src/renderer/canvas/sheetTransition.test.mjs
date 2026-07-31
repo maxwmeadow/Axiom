@@ -7,24 +7,36 @@ import {
   SHEET_MOVE_MS,
 } from './sheetTransition.ts'
 
-test('moving and fading are different signals and never overlap', () => {
-  // A node that exists in both worlds must glide, not fade — fading would say
-  // it is being created or destroyed, which is untrue.
-  const plan = planSheetTransition({
-    direction: 'enter',
-    movedIds: ['live1', 'live2'],
-    sheetOnlyIds: ['planned1', 'live1'],
+const plan = (overrides = {}) => planSheetTransition({
+  direction: 'enter', movedIds: [], sheetOnlyIds: [], removedIds: [], ...overrides,
+})
+
+test('a node that exists in both worlds glides and is never faded', () => {
+  const result = plan({ movedIds: ['live1'], sheetOnlyIds: ['planned1', 'live1'] })
+  assert.deepEqual(result.movingIds, ['live1'])
+  assert.deepEqual(result.appearingIds, ['planned1'], 'a moving node is never also faded')
+})
+
+test('entering: additions arrive, removals depart', () => {
+  const result = plan({ sheetOnlyIds: ['planned1'], removedIds: ['live1'] })
+  assert.deepEqual(result.appearingIds, ['planned1'])
+  assert.deepEqual(result.departingIds, ['live1'])
+})
+
+test('leaving inverts it: the Floor takes its removed nodes back', () => {
+  // A removal is an addition seen from the other side.
+  const result = plan({
+    direction: 'leave', sheetOnlyIds: ['planned1'], removedIds: ['live1'],
   })
-  assert.deepEqual(plan.movingIds, ['live1', 'live2'])
-  assert.deepEqual(plan.fadingIds, ['planned1'], 'a moving node is never also faded')
+  assert.deepEqual(result.appearingIds, ['live1'])
+  assert.deepEqual(result.departingIds, ['planned1'])
 })
 
 test('a transition with nothing to show costs nothing', () => {
-  const plan = planSheetTransition({ direction: 'enter', movedIds: [], sheetOnlyIds: [] })
-  assert.equal(plan.durationMs, 0)
-
+  const empty = plan()
+  assert.equal(empty.durationMs, 0)
   const nodes = [{ id: 'a', style: {} }]
-  assert.equal(applySheetTransition(nodes, plan, 0.5), nodes)
+  assert.equal(applySheetTransition(nodes, empty, 0.5), nodes)
 })
 
 test('a null plan is a no-op', () => {
@@ -32,36 +44,38 @@ test('a null plan is a no-op', () => {
   assert.equal(applySheetTransition(nodes, null, 0.5), nodes)
 })
 
-test('entering fades additions in, leaving fades them out', () => {
-  const nodes = [{ id: 'planned1', style: {} }]
-  const entering = planSheetTransition({
-    direction: 'enter', movedIds: [], sheetOnlyIds: ['planned1'],
-  })
-  const leaving = planSheetTransition({
-    direction: 'leave', movedIds: [], sheetOnlyIds: ['planned1'],
-  })
+test('opacity runs the right way for each role', () => {
+  const nodes = [{ id: 'planned1', style: {} }, { id: 'live1', style: {} }]
+  const entering = plan({ sheetOnlyIds: ['planned1'], removedIds: ['live1'] })
 
-  assert.equal(applySheetTransition(nodes, entering, 0)[0].style.opacity, 0)
-  assert.equal(applySheetTransition(nodes, entering, 1)[0].style.opacity, 1)
-  assert.equal(applySheetTransition(nodes, leaving, 0)[0].style.opacity, 1)
-  assert.equal(applySheetTransition(nodes, leaving, 1)[0].style.opacity, 0)
+  const atStart = applySheetTransition(nodes, entering, 0)
+  assert.equal(atStart[0].style.opacity, 0, 'the addition is not there yet')
+  assert.equal(atStart[1].style.opacity, 1, 'the removed node is still there')
+
+  const atEnd = applySheetTransition(nodes, entering, 1)
+  assert.equal(atEnd[0].style.opacity, 1)
+  assert.equal(atEnd[1].style.opacity, 0)
 })
 
-test('a half-faded addition does not swallow clicks meant for the map', () => {
+test('a half-faded node does not swallow clicks meant for the map', () => {
   const nodes = [{ id: 'planned1', style: {} }]
-  const plan = planSheetTransition({
-    direction: 'enter', movedIds: [], sheetOnlyIds: ['planned1'],
-  })
-  assert.equal(applySheetTransition(nodes, plan, 0.2)[0].style.pointerEvents, 'none')
-  assert.equal(applySheetTransition(nodes, plan, 0.9)[0].style.pointerEvents, undefined)
+  const entering = plan({ sheetOnlyIds: ['planned1'] })
+  assert.equal(applySheetTransition(nodes, entering, 0.2)[0].style.pointerEvents, 'none')
+  assert.equal(applySheetTransition(nodes, entering, 0.9)[0].style.pointerEvents, undefined)
+})
+
+test('arrivals wait for the rearrangement; departures do not', () => {
+  const nodes = [{ id: 'in', style: {} }, { id: 'out', style: {} }]
+  const result = plan({ sheetOnlyIds: ['in'], removedIds: ['out'] })
+  const out = applySheetTransition(nodes, result, 0.5)
+
+  assert.match(out[0].style.transition, /ease-out 160ms/, 'arrival is delayed')
+  assert.match(out[1].style.transition, /ease-out 0ms/, 'departure is immediate')
 })
 
 test('moving nodes get easing but never an opacity', () => {
   const nodes = [{ id: 'live1', style: {} }]
-  const plan = planSheetTransition({
-    direction: 'enter', movedIds: ['live1'], sheetOnlyIds: [],
-  })
-  const out = applySheetTransition(nodes, plan, 0.5)[0]
+  const out = applySheetTransition(nodes, plan({ movedIds: ['live1'] }), 0.5)[0]
 
   assert.match(out.style.transition, new RegExp(`transform ${SHEET_MOVE_MS}ms`))
   assert.equal(out.style.opacity, undefined, 'a node that exists in both worlds never fades')
@@ -70,41 +84,29 @@ test('moving nodes get easing but never an opacity', () => {
 
 test('progress is clamped so an overshooting animation cannot invert', () => {
   const nodes = [{ id: 'planned1', style: {} }]
-  const plan = planSheetTransition({
-    direction: 'enter', movedIds: [], sheetOnlyIds: ['planned1'],
-  })
-  assert.equal(applySheetTransition(nodes, plan, -3)[0].style.opacity, 0)
-  assert.equal(applySheetTransition(nodes, plan, 4)[0].style.opacity, 1)
+  const entering = plan({ sheetOnlyIds: ['planned1'] })
+  assert.equal(applySheetTransition(nodes, entering, -3)[0].style.opacity, 0)
+  assert.equal(applySheetTransition(nodes, entering, 4)[0].style.opacity, 1)
 })
 
-test('switching sheets mid-flight still clears the previous additions', () => {
-  // Otherwise the old sheet's content is stranded half-visible forever.
-  const previous = planSheetTransition({
-    direction: 'enter', movedIds: [], sheetOnlyIds: ['oldPlanned'],
-  })
-  const next = planSheetTransition({
-    direction: 'enter', movedIds: [], sheetOnlyIds: ['newPlanned'],
-  })
+test('switching sheets mid-flight takes out what the old sheet was bringing in', () => {
+  // Otherwise the previous sheet's content is stranded half-visible forever.
+  const previous = plan({ sheetOnlyIds: ['oldPlanned'] })
+  const next = plan({ sheetOnlyIds: ['newPlanned'] })
   const merged = supersedeTransition(previous, next)
 
-  assert.ok(merged.fadingIds.includes('newPlanned'))
-  assert.ok(merged.fadingIds.includes('oldPlanned'), 'stranded content is taken out')
+  assert.ok(merged.appearingIds.includes('newPlanned'))
+  assert.ok(merged.departingIds.includes('oldPlanned'), 'stranded content is taken out')
 })
 
-test('superseding does not re-fade something the new plan is moving', () => {
-  const previous = planSheetTransition({
-    direction: 'enter', movedIds: [], sheetOnlyIds: ['shared'],
-  })
-  const next = planSheetTransition({
-    direction: 'enter', movedIds: ['shared'], sheetOnlyIds: [],
-  })
+test('superseding never re-fades something the new plan already accounts for', () => {
+  const previous = plan({ sheetOnlyIds: ['shared'] })
+  const next = plan({ movedIds: ['shared'] })
   const merged = supersedeTransition(previous, next)
-  assert.deepEqual(merged.fadingIds, [], 'a node now moving must not also fade')
+  assert.deepEqual(merged.departingIds, [], 'a node now moving must not also fade')
 })
 
 test('the first transition needs no merge', () => {
-  const next = planSheetTransition({
-    direction: 'enter', movedIds: ['a'], sheetOnlyIds: [],
-  })
+  const next = plan({ movedIds: ['a'] })
   assert.equal(supersedeTransition(null, next), next)
 })

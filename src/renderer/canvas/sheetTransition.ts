@@ -2,45 +2,51 @@
  * Sheet transitions.
  *
  * Switching between the Floor and a sheet is the moment the idea lands: you
- * see the same architecture rearrange itself into the alternative you drew,
+ * watch the same architecture rearrange itself into the alternative you drew,
  * and rearrange back when you leave. A cut between two static layouts throws
- * that away — you cannot tell what moved, or that it is even the same map.
+ * that away — you cannot tell what moved, what the sheet added, what it took
+ * out, or that it is even the same map.
  *
- * So the transition carries two distinct signals, and they must not be
- * confused with each other:
+ * One rule decides everything:
  *
- *   MOVEMENT — live nodes the sheet has an opinion about glide between their
- *   Floor position and their sheet position. They never fade, because they
- *   exist in both worlds. Fading them would say "this is being created or
- *   destroyed", which is a lie.
+ *   A NODE FADES WHEN IT EXISTS IN ONE WORLD AND NOT THE OTHER.
+ *   A NODE GLIDES WHEN IT EXISTS IN BOTH.
  *
- *   PRESENCE — sheet-only additions fade in on entry and out on exit, because
- *   they genuinely do not exist on the Floor.
+ * So:
+ *
+ *   MOVES     live in both worlds, so they glide and never fade. Fading one
+ *             would say "created" or "destroyed", which is a lie about a file
+ *             that exists either way.
+ *   ADDITIONS live only on the sheet: they appear on entry, depart on exit.
+ *   REMOVALS  live only on the Floor: they depart on entry, appear on exit —
+ *             the same vocabulary, inverted, because a removal is an addition
+ *             seen from the other side.
  *
  * Live nodes the sheet says nothing about do neither. They are already in the
- * right place, and animating them would imply the sheet had an opinion it does
- * not have.
+ * right place, and animating them would imply an opinion the sheet never had.
  */
 
 export type SheetTransitionDirection = 'enter' | 'leave'
 
 /** Long enough to read as one coordinated rearrangement, short enough to feel instant. */
 export const SHEET_MOVE_MS = 520
-/** Additions resolve slightly faster, so movement reads as the primary event. */
+/** Presence resolves faster, so movement reads as the primary event. */
 export const SHEET_FADE_MS = 320
 /**
- * Entering, additions appear only once the rearrangement is underway, so the
- * eye follows the movement first. Leaving, they clear out immediately so they
- * are gone before the map settles back.
+ * Things arriving wait for the rearrangement to be underway, so the eye follows
+ * movement first. Things leaving go immediately, so they are out of the way
+ * before the map settles.
  */
-export const SHEET_FADE_DELAY_MS = 160
+export const SHEET_APPEAR_DELAY_MS = 160
 
 export interface SheetTransitionPlan {
   direction: SheetTransitionDirection
   /** Node IDs gliding between two positions. */
   movingIds: string[]
-  /** Node IDs fading in or out. */
-  fadingIds: string[]
+  /** Node IDs coming into this world. */
+  appearingIds: string[]
+  /** Node IDs leaving this world. */
+  departingIds: string[]
   /** Total time before the transition is settled. */
   durationMs: number
 }
@@ -48,23 +54,37 @@ export interface SheetTransitionPlan {
 export interface SheetTransitionInputs {
   direction: SheetTransitionDirection
   /** Live nodes the sheet repositions. */
-  movedIds: string[]
+  movedIds: readonly string[]
   /** Elements that exist only on the sheet. */
-  sheetOnlyIds: string[]
+  sheetOnlyIds: readonly string[]
+  /** Live nodes the sheet proposes removing — they exist only on the Floor. */
+  removedIds?: readonly string[]
 }
 
 export function planSheetTransition(inputs: SheetTransitionInputs): SheetTransitionPlan {
   const movingIds = [...new Set(inputs.movedIds)]
-  const fadingIds = [...new Set(inputs.sheetOnlyIds)].filter(id => !movingIds.includes(id))
+  const moving = new Set(movingIds)
+  const exclusive = (ids: readonly string[]) =>
+    [...new Set(ids)].filter(id => !moving.has(id))
+
+  const additions = exclusive(inputs.sheetOnlyIds)
+  const removals = exclusive(inputs.removedIds ?? [])
+
+  // Entering the sheet, its additions arrive and its removals go. Leaving, the
+  // Floor takes its removed nodes back and the additions go with the sheet.
+  const appearingIds = inputs.direction === 'enter' ? additions : removals
+  const departingIds = inputs.direction === 'enter' ? removals : additions
 
   const moveTime = movingIds.length > 0 ? SHEET_MOVE_MS : 0
-  const fadeTime = fadingIds.length > 0 ? SHEET_FADE_DELAY_MS + SHEET_FADE_MS : 0
+  const appearTime = appearingIds.length > 0 ? SHEET_APPEAR_DELAY_MS + SHEET_FADE_MS : 0
+  const departTime = departingIds.length > 0 ? SHEET_FADE_MS : 0
 
   return {
     direction: inputs.direction,
     movingIds,
-    fadingIds,
-    durationMs: Math.max(moveTime, fadeTime),
+    appearingIds,
+    departingIds,
+    durationMs: Math.max(moveTime, appearTime, departTime),
   }
 }
 
@@ -75,14 +95,14 @@ interface TransitionableNode {
 }
 
 /**
- * Stamps the transition onto nodes as a projection — never as canvas state,
- * so a layout, zoom or selection pass cannot strand a node mid-flight and
- * ending the transition restores the untouched nodes.
+ * Stamps the transition onto nodes as a projection — never as canvas state, so
+ * a layout, zoom or selection pass cannot strand a node mid-flight, and ending
+ * the transition restores the untouched nodes.
  *
- * `progress` is 0 at the start and 1 once settled. Fading nodes are driven
- * from it directly rather than from a CSS keyframe, so an interrupted
- * transition (switching sheets mid-flight) resolves to a real opacity instead
- * of snapping to whatever the animation happened to be at.
+ * `progress` runs 0 → 1. Opacity is driven from it directly rather than from a
+ * CSS keyframe, so an interrupted transition (switching sheets mid-flight)
+ * resolves to a real value instead of snapping to wherever the animation
+ * happened to be.
  */
 export function applySheetTransition<T extends TransitionableNode>(
   nodes: T[],
@@ -92,12 +112,11 @@ export function applySheetTransition<T extends TransitionableNode>(
   if (!plan) return nodes
 
   const moving = new Set(plan.movingIds)
-  const fading = new Set(plan.fadingIds)
-  if (moving.size === 0 && fading.size === 0) return nodes
+  const appearing = new Set(plan.appearingIds)
+  const departing = new Set(plan.departingIds)
+  if (moving.size === 0 && appearing.size === 0 && departing.size === 0) return nodes
 
   const clamped = Math.max(0, Math.min(1, progress))
-  // Entering, additions arrive; leaving, they depart.
-  const fadeOpacity = plan.direction === 'enter' ? clamped : 1 - clamped
 
   let touched = false
   const projected = nodes.map(node => {
@@ -113,21 +132,24 @@ export function applySheetTransition<T extends TransitionableNode>(
         data: { ...node.data, sheetMoving: true },
       }
     }
-    if (fading.has(node.id)) {
-      touched = true
-      return {
-        ...node,
-        style: {
-          ...node.style,
-          opacity: fadeOpacity,
-          transition: `opacity ${SHEET_FADE_MS}ms ease-out ${
-            plan.direction === 'enter' ? SHEET_FADE_DELAY_MS : 0}ms`,
-          // A half-faded addition must not swallow clicks meant for the map.
-          pointerEvents: fadeOpacity < 0.5 ? ('none' as const) : undefined,
-        },
-      }
+
+    const isAppearing = appearing.has(node.id)
+    if (!isAppearing && !departing.has(node.id)) return node
+
+    touched = true
+    const opacity = isAppearing ? clamped : 1 - clamped
+    return {
+      ...node,
+      style: {
+        ...node.style,
+        opacity,
+        transition: `opacity ${SHEET_FADE_MS}ms ease-out ${
+          isAppearing ? SHEET_APPEAR_DELAY_MS : 0}ms`,
+        // A half-faded node must not swallow clicks meant for the map.
+        pointerEvents: opacity < 0.5 ? ('none' as const) : undefined,
+      },
+      data: { ...node.data, sheetDeparting: !isAppearing || undefined },
     }
-    return node
   })
 
   return touched ? projected : nodes
@@ -136,22 +158,26 @@ export function applySheetTransition<T extends TransitionableNode>(
 /**
  * Merges a new transition over one already running.
  *
- * Switching sheets mid-flight is normal, and the old plan's fading nodes must
- * not be abandoned part-way: anything the previous plan was showing that the
- * new one does not mention still needs to be taken out.
+ * Switching sheets mid-flight is normal, and the previous plan's arrivals must
+ * not be abandoned part-way: anything it was bringing in that the new plan does
+ * not mention still has to be taken back out, or it is stranded half-visible
+ * forever.
  */
 export function supersedeTransition(
   previous: SheetTransitionPlan | null,
   next: SheetTransitionPlan,
 ): SheetTransitionPlan {
   if (!previous) return next
-  const orphanedFades = previous.fadingIds.filter(
-    id => !next.fadingIds.includes(id) && !next.movingIds.includes(id),
-  )
-  if (orphanedFades.length === 0) return next
+
+  const accountedFor = new Set([
+    ...next.movingIds, ...next.appearingIds, ...next.departingIds,
+  ])
+  const stranded = previous.appearingIds.filter(id => !accountedFor.has(id))
+  if (stranded.length === 0) return next
+
   return {
     ...next,
-    fadingIds: [...next.fadingIds, ...orphanedFades],
+    departingIds: [...next.departingIds, ...stranded],
     durationMs: Math.max(next.durationMs, SHEET_FADE_MS),
   }
 }

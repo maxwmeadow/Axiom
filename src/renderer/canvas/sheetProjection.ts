@@ -1,28 +1,36 @@
 /**
  * Sheet projection — what a sheet actually is.
  *
- * A sheet is NOT a subset of the map, and it is not a copy of it. It is:
+ * A sheet is NOT a subset of the map, and it is not a copy of it. It is a
+ * PROPOSAL, made of three kinds of opinion about the live architecture:
  *
- *   1. a set of POSITION OPINIONS about live nodes, and
- *   2. a set of ADDITIONS that exist only on this sheet.
+ *   1. MOVES      — where a live node should sit instead
+ *   2. ADDITIONS  — things that should exist and do not yet
+ *   3. REMOVALS   — things that should go away
  *
- * That framing matters because it makes a sheet an *alternative architecture*
- * you can propose — a what-if you can draw, then hand to an agent — rather
- * than a diagram you curate.
+ * All three are design intent, which is why removal has to be expressible:
+ * "this system should be dissolved" is as much a part of proposing an
+ * architecture as drawing a new box. A sheet you cannot delete from can only
+ * describe growth.
  *
- * Two rules follow, and they are the whole design:
+ * Three rules follow, and they are the whole design:
  *
- *   LIVE NODES ARE ANCHORED. A sheet may move a live node anywhere, but it can
- *   never delete one. The sheet has opinions about arrangement; reality decides
- *   what exists. "Removing" a live node from a sheet only discards the sheet's
- *   opinion about where it sits, returning it to its Floor position.
+ *   A PROPOSAL NEVER TOUCHES REALITY. Removing a live node on a sheet takes it
+ *   out of that sheet's picture only. The file, the system, the code are all
+ *   untouched on the Floor. Leave the sheet and it is simply there again.
+ *
+ *   A REMOVAL IS ALWAYS RECOVERABLE, AND NOT THROUGH UNDO. Undo is a keystroke
+ *   you have to think of in time, and it decays the moment you do something
+ *   else. Every removal stays listed on the sheet that made it, restorable long
+ *   afterwards, because changing your mind about a proposal is normal rather
+ *   than an error to be rescued from.
  *
  *   NOTHING IS SCENERY. The previous implementation rendered the Floor twice —
  *   a flattened, dimmed, non-interactive base layer plus morphed copies for
- *   sheet members. Duplication forced the base layer to be inert, which is
+ *   sheet members. That duplication forced the base layer to be inert, which is
  *   exactly why working on a sheet felt like drawing on glass over the
- *   architecture instead of in it. Every live node now renders exactly once,
- *   at whichever position applies, fully interactive.
+ *   architecture instead of in it. Every live node now renders exactly once, at
+ *   whichever position applies, fully interactive.
  */
 
 export interface SheetOverride {
@@ -66,76 +74,120 @@ export interface SheetProjectionResult<T> {
   nodes: T[]
   /** Live nodes this sheet moved, and where from — the transition endpoints. */
   moved: Array<{ id: string; from: { x: number; y: number }; to: { x: number; y: number } }>
+  /** Live nodes this sheet proposes removing. Absent from `nodes`, never gone. */
+  removed: string[]
 }
 
 /**
  * Places live nodes at their sheet positions where the sheet has an opinion,
- * and leaves everything else exactly where the Floor put it.
+ * omits the ones it proposes removing, and leaves everything else exactly where
+ * the Floor put it.
  *
- * A moved node is flattened to absolute coordinates and detached from its
- * Floor parent, because a sheet arrangement is not bound by Floor containment —
- * that is the point of proposing a different architecture. Unmoved nodes keep
- * their parent relationship untouched, so the Floor's own layout continues to
- * work normally underneath.
+ * A moved node is flattened to absolute coordinates and detached from its Floor
+ * parent, because a proposed arrangement is not bound by the current one — that
+ * is the point. Unmoved nodes keep their parent relationship untouched, so the
+ * Floor's own layout continues to work normally underneath.
  */
 export function projectSheetNodes<T extends ProjectableNode>(
   floorNodes: T[],
   overrides: SheetOverride[],
+  removedIds: readonly string[] = [],
 ): SheetProjectionResult<T> {
-  if (overrides.length === 0) return { nodes: floorNodes, moved: [] }
+  if (overrides.length === 0 && removedIds.length === 0) {
+    return { nodes: floorNodes, moved: [], removed: [] }
+  }
 
   const byId = new Map(floorNodes.map(node => [node.id, node]))
   const overrideById = new Map(overrides.map(override => [override.nodeId, override]))
+  const removedSet = new Set(removedIds)
   const moved: SheetProjectionResult<T>['moved'] = []
+  const removed: string[] = []
 
-  const nodes = floorNodes.map(node => {
+  const nodes: T[] = []
+  for (const node of floorNodes) {
+    if (removedSet.has(node.id)) {
+      removed.push(node.id)
+      continue
+    }
+
     const override = overrideById.get(node.id)
-    if (!override) return node
+    if (!override) {
+      nodes.push(node)
+      continue
+    }
 
     const from = absolutePosition(node, byId)
     const to = { x: override.x, y: override.y }
     moved.push({ id: node.id, from, to })
 
-    return {
+    nodes.push({
       ...node,
       position: to,
       parentId: override.parentSystemId ?? undefined,
       data: { ...node.data, sheetPlaced: true },
-    }
-  })
+    })
+  }
 
-  return { nodes, moved }
+  return { nodes, moved, removed }
 }
 
 /**
- * Whether a delete gesture may proceed, and what it means if not.
+ * What a delete gesture means in the context it was made.
  *
- * A sheet cannot delete reality. Offering a destructive-looking action that
- * silently does something else would be worse than refusing, so this returns
- * the honest outcome and the UI states it.
+ * Deleting is always allowed. What differs is the consequence, and the UI has
+ * to state it rather than let a destructive-looking gesture stay ambiguous —
+ * the same key doing something recoverable in one place and permanent in
+ * another is exactly the situation that needs labelling.
  */
-export type SheetDeleteVerdict =
-  | { allowed: true; kind: 'sheet-element' }
-  | { allowed: false; kind: 'reset-to-floor'; reason: string }
-  | { allowed: false; kind: 'anchored'; reason: string }
+export type SheetDeleteIntent =
+  /** The sheet's own content. Deleting it really deletes it. */
+  | { kind: 'sheet-element'; destructive: true; label: string }
+  /** Live code, on a sheet. Proposes removal; reality is untouched. */
+  | { kind: 'propose-removal'; destructive: false; label: string; restoreHint: string }
+  /** Live code, on the Floor. The only place live code actually dies. */
+  | { kind: 'delete-live'; destructive: true; label: string }
 
-export function sheetDeleteVerdict(
-  nodeId: string,
-  options: { isSheetOnly: boolean; hasOverride: boolean },
-): SheetDeleteVerdict {
-  // Sheet-only content belongs to the sheet, so the sheet may remove it.
-  if (options.isSheetOnly) return { allowed: true, kind: 'sheet-element' }
-
-  if (options.hasOverride) {
-    return {
-      allowed: false,
-      kind: 'reset-to-floor',
-      reason: 'Live code is anchored. This returns it to its Floor position instead.',
-    }
+export function sheetDeleteIntent(options: {
+  onSheet: boolean
+  isSheetOnly: boolean
+}): SheetDeleteIntent {
+  if (options.isSheetOnly) {
+    return { kind: 'sheet-element', destructive: true, label: 'Delete' }
+  }
+  if (!options.onSheet) {
+    return { kind: 'delete-live', destructive: true, label: 'Delete' }
   }
   return {
-    allowed: false,
-    kind: 'anchored',
-    reason: 'Live code is anchored to the Floor. Delete it from the Floor, not a sheet.',
+    kind: 'propose-removal',
+    destructive: false,
+    label: 'Remove from sheet',
+    restoreHint: 'Kept in Removed on this sheet — restore it any time.',
   }
+}
+
+/** One entry in a sheet's Removed list: what was taken out, and enough to name it. */
+export interface SheetRemoval {
+  nodeId: string
+  label: string
+  /** False when the node has since left the Floor as well. */
+  stillLive: boolean
+}
+
+/**
+ * The restorable removals for a sheet.
+ *
+ * A removal whose node has since genuinely disappeared from the Floor is kept
+ * and marked rather than silently dropped. "The thing you proposed removing is
+ * now actually gone" is information, and quietly erasing the entry would make
+ * the list something you cannot trust to be complete.
+ */
+export function sheetRemovals(
+  removedIds: readonly string[],
+  liveLabels: ReadonlyMap<string, string>,
+): SheetRemoval[] {
+  return removedIds.map(nodeId => ({
+    nodeId,
+    label: liveLabels.get(nodeId) ?? nodeId,
+    stillLive: liveLabels.has(nodeId),
+  }))
 }
