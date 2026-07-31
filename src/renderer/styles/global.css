@@ -1293,10 +1293,9 @@ a { color: var(--accent); text-decoration: none; }
   --bg-surface: #f4f0e3;   /* leaf / file cards */
   --bg-raised:  #e6e3d9;   /* chips, hovers, count badges */
   --bg-overlay: #eeece2;   /* in-canvas tooltips */
-  /* Leaf-card header shelf. Neutral by design: the Floor is the live map, so
-     its cards are plain stock. The pad yellow belongs to sheets, where it says
-     "proposal". The original value was a cool gray-green that read as a cold
-     blue against a cream card; this is the same weight without the hue. */
+  /* FLOOR STOCK — see "SHEET STOCK" for the other half of this pair.
+     Neutral by design: the Floor is the live map, so its cards are plain.
+     The pad yellow belongs to sheets, where it means "proposal". */
   --card-head:  #e2ded1;
   --infra-surface: #e5dcc5; /* infrastructure body — warm tan, distinct from code */
   --infra-border:  #9a7c5f; /* infrastructure hairline — amber-gray */
@@ -6291,8 +6290,6 @@ select.axiom-inspector-input {
 .axiom-sheet-mode {
   --sheet-ink: #1d4a63;
   --sheet-rule: rgba(232, 244, 250, 0.5);
-  /* The pad's colour lives in its header strip, not in the page. */
-  --card-head: #ecd88f;
   --sheet-presence: 1;
 }
 
@@ -6301,9 +6298,28 @@ select.axiom-inspector-input {
 .axiom-sheet-mode[data-sheet-phase='entering'],
 .axiom-sheet-mode[data-sheet-phase='leaving'] {
   --sheet-presence: 0;
-  /* On the way out the pad yellow travels back to the Floor's own shelf, or
-     the header would snap even though everything around it faded. This must
-     stay equal to the --card-head defined on .react-flow. */
+}
+
+/* ── SHEET STOCK ────────────────────────────────────────────────────────────
+   The other half of the pair declared on .react-flow. Node material lives in
+   exactly these two blocks, using the same token names, so unifying them later
+   is a matter of reconciling two lists rather than hunting the codebase.
+
+   CRITICAL: these MUST be scoped to `.react-flow` itself, not to the
+   .axiom-sheet-mode container that wraps it. .react-flow declares these tokens
+   on itself, and a custom property declared on a closer ancestor always beats
+   one inherited from further up — so setting them on the container silently
+   does nothing at all. That was a real bug: sheet headers stayed Floor-grey
+   while every other part of sheet mode worked. */
+.axiom-sheet-mode .react-flow {
+  /* The pad's colour lives in its header strip, never in the page below it. */
+  --card-head: #ecd88f;
+}
+
+/* Both ends of the journey return to Floor stock, so the header travels with
+   the board instead of snapping. Must stay equal to the Floor value above. */
+.axiom-sheet-mode[data-sheet-phase='entering'] .react-flow,
+.axiom-sheet-mode[data-sheet-phase='leaving'] .react-flow {
   --card-head: #e2ded1;
 }
 

@@ -261,6 +261,23 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 - A node the sheet has an opinion about is marked, so what a proposal *changes*
   is distinguishable from what it merely *contains*.
 
+### Node material is declared in exactly two blocks
+
+- Floor stock is declared on `.react-flow`; sheet stock on
+  `.axiom-sheet-mode .react-flow`. Same token names, two values. Node material
+  lives nowhere else, so reconciling or unifying the two is a matter of
+  comparing two lists rather than searching the codebase.
+- Sheet stock MUST be scoped to `.react-flow` itself, never to the
+  `.axiom-sheet-mode` container that wraps it. `.react-flow` declares these
+  tokens on itself, and a custom property declared on a closer ancestor always
+  beats one inherited from further up — so setting them on the container is
+  silently a no-op. This produced a real bug with no error and no warning:
+  sheet headers stayed Floor-grey while every other part of sheet mode worked.
+- Tokens the canvas does not redeclare (`--sheet-presence`, `--sheet-ink`)
+  belong on the container, with the chrome that reads them.
+- The exit target for any token that changes with the mode must equal its Floor
+  value, or leaving fades to a colour the Floor never uses.
+
 ### Sheet mode enters and leaves symmetrically
 
 - Sheet mode is a PHASE, not a boolean. It stays applied through `leaving` long
