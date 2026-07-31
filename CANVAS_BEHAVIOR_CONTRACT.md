@@ -263,10 +263,17 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 
 ### Node material is declared in exactly two blocks
 
-- Floor stock is declared on `.react-flow`; sheet stock on
-  `.axiom-sheet-mode .react-flow`. Same token names, two values. Node material
-  lives nowhere else, so reconciling or unifying the two is a matter of
-  comparing two lists rather than searching the codebase.
+- Floor stock is declared on `.react-flow`; sheet stock on planned elements
+  within a sheet. Same token names, two values. Node material lives nowhere
+  else, so reconciling or unifying the two is a matter of comparing two lists
+  rather than searching the codebase.
+- **Material marks what is PROPOSED, not which surface you are looking at.**
+  Live code renders identically on the Floor and on a sheet. Only planned
+  elements — new files, classes, systems — take sheet stock. If the same file
+  changed appearance between views, the map would stop being one thing you
+  trust and become two drawings of it.
+- The BOARD still changes with the mode, because the board is the mode. The
+  nodes are not.
 - Sheet stock MUST be scoped to `.react-flow` itself, never to the
   `.axiom-sheet-mode` container that wraps it. `.react-flow` declares these
   tokens on itself, and a custom property declared on a closer ancestor always

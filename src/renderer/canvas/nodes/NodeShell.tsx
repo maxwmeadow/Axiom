@@ -231,6 +231,17 @@ export function NodeShell({
           strokeDasharray={dashed ? '6 4' : undefined}
           style={{ filter: CARD_SHADOW, transition: 'stroke-opacity 0.2s ease' }}
         />
+        {/* Paper stock, clipped to the silhouette by sharing the shell path.
+            Planned elements are the only nodes that take it — see the SHEET
+            STOCK block: a sheet's material marks what is PROPOSED, so live
+            code must look identical whichever surface you view it on. */}
+        <path
+          className="axiom-shape-texture"
+          data-stock="paper"
+          d={shellPath(shape, w, h)}
+          stroke="none"
+          pointerEvents="none"
+        />
         {shape === 'cylinder' && (
           <path d={cylinderRimPath(w)} fill="none" stroke={accent}
             strokeOpacity={selected ? 1 : 0.55} strokeWidth={selected ? 1.8 : 1.2}

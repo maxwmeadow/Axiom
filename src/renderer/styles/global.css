@@ -6306,21 +6306,29 @@ select.axiom-inspector-input {
    exactly these two blocks, using the same token names, so unifying them later
    is a matter of reconciling two lists rather than hunting the codebase.
 
-   CRITICAL: these MUST be scoped to `.react-flow` itself, not to the
-   .axiom-sheet-mode container that wraps it. .react-flow declares these tokens
-   on itself, and a custom property declared on a closer ancestor always beats
-   one inherited from further up — so setting them on the container silently
-   does nothing at all. That was a real bug: sheet headers stayed Floor-grey
-   while every other part of sheet mode worked. */
-.axiom-sheet-mode .react-flow {
+   WHAT THE MATERIAL MEANS: paper marks what is PROPOSED, not what surface you
+   happen to be looking at. So sheet stock is scoped to planned elements only.
+   Live code renders identically on the Floor and on a sheet — if the same file
+   changed appearance between views, the map would stop being one thing you
+   trust and become two drawings of it.
+
+   The board still changes, because the BOARD is the mode. The nodes are not.
+
+   CRITICAL: token overrides MUST be scoped to an element at or inside
+   `.react-flow`, never to the .axiom-sheet-mode container that wraps it.
+   .react-flow declares these tokens on itself, and a custom property declared
+   on a closer ancestor always beats one inherited from further up — so setting
+   them on the container silently does nothing. That was a real bug: sheet
+   headers stayed Floor-grey while every other part of sheet mode worked. */
+.axiom-sheet-mode .react-flow__node[data-id^='planned:'] {
   /* The pad's colour lives in its header strip, never in the page below it. */
   --card-head: #ecd88f;
 }
 
-/* Both ends of the journey return to Floor stock, so the header travels with
-   the board instead of snapping. Must stay equal to the Floor value above. */
-.axiom-sheet-mode[data-sheet-phase='entering'] .react-flow,
-.axiom-sheet-mode[data-sheet-phase='leaving'] .react-flow {
+/* Both ends of the journey return to Floor stock, so a planned node's header
+   travels with the board instead of snapping. Must equal the Floor value. */
+.axiom-sheet-mode[data-sheet-phase='entering'] .react-flow__node[data-id^='planned:'],
+.axiom-sheet-mode[data-sheet-phase='leaving'] .react-flow__node[data-id^='planned:'] {
   --card-head: #c7d2bd;
 }
 
@@ -6417,9 +6425,12 @@ select.axiom-inspector-input {
   pointer-events: none;
 }
 
-/* Presence, not the class, so the paper leaves with the board it was laid on
-   rather than vanishing the instant the mode ends. */
-.axiom-sheet-mode .axiom-shape-texture { opacity: var(--sheet-presence); }
+/* Planned elements only, and driven by presence rather than by the class, so
+   the paper leaves with the board it was laid on instead of vanishing the
+   instant the mode ends. Live code never takes stock — see SHEET STOCK. */
+.axiom-sheet-mode .react-flow__node[data-id^='planned:'] .axiom-shape-texture {
+  opacity: var(--sheet-presence);
+}
 
 .axiom-sheet-mode .axiom-shape-texture[data-stock='paper']     { fill: url(#axiom-paper-sheet); }
 .axiom-sheet-mode .axiom-shape-texture[data-stock='card']      { fill: url(#axiom-card-sheet); }
