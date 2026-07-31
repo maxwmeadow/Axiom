@@ -68,9 +68,11 @@ export function PaperTextureDefs() {
       style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}
     >
       <defs>
-        {/* Files: legal pad. Warm yellow, the surface you write on, and the
-            thing that reads brightest against the blue board. */}
-        <Stock id="axiom-paper-sheet" tint="#f2e2a8" tintOpacity={0.5} grain={0.28} />
+        {/* Files: the pad's writing surface — where the symbols are listed, so
+            it is the plain sheet you write ON. The yellow belongs on the header
+            band above it (see --card-head), the way a notepad's colour is its
+            binding strip and never the page you write on. */}
+        <Stock id="axiom-paper-sheet" tint="#faf6ea" tintOpacity={0.55} grain={0.26} />
         {/* Systems: manila folder. Warmer and browner, coarser stock — what you
             keep the pads in. */}
         <Stock id="axiom-card-sheet" tint="#e8cf9a" tintOpacity={0.44} grain={0.36} scale={1.9} />

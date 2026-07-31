@@ -6285,6 +6285,10 @@ select.axiom-inspector-input {
 .axiom-sheet-mode {
   --sheet-ink: #1d4a63;
   --sheet-rule: rgba(232, 244, 250, 0.5);
+  /* The pad's colour lives in its header strip, not in the page. A file's
+     body is where the symbols are listed, so it stays plain paper; the band
+     carrying the filename is the yellow binding above it. */
+  --card-head: #ecd88f;
 }
 
 /* The board. A photograph of blueprint paper, tiled — not a blue fill. */
