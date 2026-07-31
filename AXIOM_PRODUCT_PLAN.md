@@ -1,7 +1,7 @@
 # Axiom — Product Plan
 
 Status: living document. Update the status markers as slices land.
-Established: 2026-07-25 (product reframe). Last updated: 2026-07-29.
+Established: 2026-07-25 (product reframe). Last updated: 2026-07-30.
 
 Related: [CANVAS_BEHAVIOR_CONTRACT.md](CANVAS_BEHAVIOR_CONTRACT.md) (observable
 behavior that must not regress), [UML_UX_PLAN.md](UML_UX_PLAN.md),
@@ -310,6 +310,61 @@ State-driven guide: `src/renderer/components/OnboardingGuide.tsx`.
 Daily read model: `archd-go/internal/api/command_deck.go`.
 
 ---
+
+## 4b. Post-slice hardening (2026-07-30)
+
+Slices ①–④ are shipped. Two agents then ran in parallel worktrees and merged
+cleanly into `main`.
+
+### Trustworthy realization — ✅ (codex/realization)
+
+The sharpest problem in the product: green did not mean anything.
+`ReconcilePlanned` matched on suffix-tolerant paths and bare lowercase symbol
+names, so a planned interface reported `realized` whenever any file contained
+a same-named method with any signature.
+
+- [x] Interface-aware reconciliation against the structured contract
+- [x] Five realization states replacing binary expected/unexpected —
+      `MATCHED` / `FLEXED` / `DRIFTED` / `MISSING` / `UNKNOWN`
+- [x] Agent-reported mappings corroborated by the indexer before reaching
+      `MATCHED`; an uncorroborated claim is `UNKNOWN`
+
+### Agent visibility — ✅ (claude/mcp)
+
+The half of the Living Canvas that shows what the AGENT is doing, not just
+what the filesystem did.
+
+- [x] `agent_actions` log capturing every MCP call from one dispatch wrapper —
+      reads included, since watching an agent trace a path is the point
+- [x] Attention signal: a read lights its targets, surfacing to the nearest
+      visible ancestor so a sweep of a large codebase is visible
+- [x] Visual log panel grouped by declared work session
+- [x] **One consequence, one animation** — the semantic stream owns animation,
+      the action stream owns attribution. Encoded and tested in
+      `agentActionVisual.ts` so the rule cannot be forgotten
+
+### MCP surface — ✅ (claude/mcp)
+
+- [x] 59 advertised tools → 14 core (+2 behind `AXIOM_MCP_PROFILE=debug`)
+- [x] ~9,600 → ~2,460 tokens per request (74% off)
+- [x] All 58 legacy handlers retained as unlisted adapters; nothing removed
+- [x] Guard tests fail the build if the surface, schema budget, or description
+      length creeps back
+- [x] E2E harness (`npm run test:mcp`) drives the real MCP over stdio against
+      a real archd on spare ports — it caught two live bugs the unit tests
+      could not see
+- [x] See [MCP_SURFACE.md](MCP_SURFACE.md)
+
+### Still open
+
+- [ ] **Agent map edits are not journaled.** `EventFileAssigned` is declared
+      and never recorded, so an agent reclassifying files leaves no trace in
+      the Morning Delta. This is the safety net that makes free curation safe:
+      the agent fixes boundaries fast, you see it in the morning and can undo.
+- [ ] MCP prompts: `/axiom:implement`, `/axiom:propose`, `/axiom:review`
+- [ ] Hub/orphan claims (need before/after graph snapshots)
+- [ ] Split Ask / Propose / Start build in the send dialog
+- [ ] Persistent Build Plan panel replacing the modal
 
 ## 5. Testing
 
