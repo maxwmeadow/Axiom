@@ -3211,7 +3211,13 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }
     const candidates = allNodes.filter(candidate => {
       if (candidate.id === node.id || isInsideDraggedSubtree(candidate.id) || candidate.type !== 'system') return false
-      if (overlaySheetId && !activeNodeIds.has(candidate.id)) return false
+      // A live system IS a valid drop target on a sheet: nesting a planned
+      // class into an existing system is the whole point of proposing one.
+      // This used to exclude anything the sheet had no opinion about, which
+      // made sense while the Floor was dimmed and inert beneath a sheet. The
+      // Floor is fully interactive now, so the exclusion only blocked nesting.
+      if (overlaySheetId && candidate.id.startsWith('planned:') &&
+          !activeNodeIds.has(candidate.id)) return false
       const internal = getInternalNode(candidate.id)
       if (!internal) return false
       const absolute = internal.internals.positionAbsolute
