@@ -85,12 +85,14 @@ function cylinderRimPath(w: number): string {
 // `3px 3px 0` material pass.
 export const CARD_SHADOW = 'drop-shadow(3px 3px 0 rgba(86,91,85,0.38))'
 
-export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = 'var(--bg-surface)', headBand, headBandOpacity = 1 }: {
+export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = 'var(--bg-surface)', stock = 'paper', headBand, headBandOpacity = 1 }: {
   shape: ShellShape
   stroke: string
   strokeWidth?: number
   dashed?: boolean
   fill?: string
+  /** Which paper this node is made of. See PaperTexture.tsx. */
+  stock?: 'paper' | 'card' | 'blueprint'
   // Optional header shelf: a darker band across the top of the card, clipped to
   // the silhouette so it follows chamfers/tab cuts (the mockup's leaf-head).
   // Height is in the card's base-pixel coordinate space; 0/undefined = none.
@@ -161,6 +163,7 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
       <path
         ref={textureRef}
         className="axiom-shape-texture"
+        data-stock={stock}
         d={shellPath(shape, 180, 72)}
         stroke="none"
         pointerEvents="none"

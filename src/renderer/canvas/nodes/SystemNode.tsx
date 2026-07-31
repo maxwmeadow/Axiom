@@ -454,6 +454,17 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
           stroke={strokeColor}
           strokeWidth={strokeW}
         />
+        {/* Folder card stock, clipped to the folder itself by sharing its path,
+            so the tab and its cut are textured too. A system is what you keep
+            files in, so it is heavier board with grain running the other way —
+            the material says "container" before any label does. */}
+        <path
+          className="axiom-shape-texture"
+          data-stock="card"
+          d={shellPath}
+          stroke="none"
+          pointerEvents="none"
+        />
         {isDeploymentBoundary ? <>
           {/* Chassis rails remain legible even around a large hosted service. */}
           <line x1={deploymentCorner * 0.46} y1={deploymentCorner + 3} x2={deploymentCorner * 0.46} y2={shellSize.h - deploymentCorner - 3} stroke={color} strokeWidth={2.5} />

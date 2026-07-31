@@ -38,7 +38,7 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       gap: 9, padding: '12px 28px',
     }}>
-      <ShapeBackdrop shape="hexagon" stroke="var(--infra-border)" strokeWidth={1} fill="var(--infra-surface)" />
+      <ShapeBackdrop stock="blueprint" shape="hexagon" stroke="var(--infra-border)" strokeWidth={1} fill="var(--infra-surface)" />
       <EditableNodeTitle value={d.name} onRename={d.onRename} style={{
         color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
         textAlign: 'center', maxWidth: '78%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -90,7 +90,7 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       transition: 'border-color 0.15s ease, opacity 0.15s ease',
       boxShadow: 'none',
     }}>
-      <ShapeBackdrop shape={shape} stroke="var(--infra-border)" strokeWidth={1} dashed={proposed} fill="var(--infra-surface)" />
+      <ShapeBackdrop stock="blueprint" shape={shape} stroke="var(--infra-border)" strokeWidth={1} dashed={proposed} fill="var(--infra-surface)" />
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         {officialIcon ? (
           <img src={officialIcon} width={14} height={14} alt="" style={{ flexShrink: 0 }} />

@@ -6355,12 +6355,16 @@ select.axiom-inspector-input {
   }
 }
 
-/* Node paper stock. Defined as a variable so sheet mode can change the light
-   without any node component knowing that sheets exist. */
-.axiom-shape-texture {
-  fill: var(--node-paper, url(#axiom-paper));
-}
+/* Node paper stock.
+   Which material a node is made of is semantic and set by the component;
+   which LIGHT it is under is contextual and set here, so sheet mode changes
+   every surface at once without any node component knowing sheets exist. */
+.axiom-shape-texture[data-stock='paper']     { fill: var(--stock-paper, url(#axiom-paper)); }
+.axiom-shape-texture[data-stock='card']      { fill: var(--stock-card, url(#axiom-card)); }
+.axiom-shape-texture[data-stock='blueprint'] { fill: var(--stock-blueprint, url(#axiom-blueprint)); }
 
 .axiom-sheet-mode {
-  --node-paper: url(#axiom-paper-sheet);
+  --stock-paper: url(#axiom-paper-sheet);
+  --stock-card: url(#axiom-card-sheet);
+  --stock-blueprint: url(#axiom-blueprint-sheet);
 }
