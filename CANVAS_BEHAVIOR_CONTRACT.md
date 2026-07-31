@@ -230,22 +230,33 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
   else. Every removal stays listed on the sheet that made it, restorable long
   afterwards, because changing your mind about a proposal is normal.
 - A removal whose node has since genuinely left the Floor is kept and marked,
-  never silently dropped — otherwise the Removed list cannot be trusted to be
-  complete.
+  never silently dropped — otherwise the Removed list cannot be trusted.
 - Removal wins over a move, so a node is never both gone and animated into
   place.
 - The same delete gesture means different things in different places, so the UI
   states which: sheet-only content is really deleted, live code on a sheet is
   proposed for removal, live code on the Floor is really deleted.
-- **Nothing is scenery.** Every live node renders exactly once, at whichever
-  position applies, fully interactive. The Floor is never drawn a second time
-  as a dimmed, non-interactive base layer beneath a sheet: that duplication is
-  what forced the base layer to be inert, and made working on a sheet feel like
-  drawing on glass over the architecture instead of in it.
 - A node the sheet has no opinion about is not re-created by the projection at
   all, so the Floor's own layout continues to work underneath unchanged.
 - A node the sheet moves detaches from Floor containment, because a proposed
   arrangement is not bound by the current one.
+
+### Sheet mode is signalled by the surface
+
+- A sheet never communicates its mode by degrading the architecture. Live nodes
+  render at full opacity and stay selectable, inspectable and connectable,
+  because a sheet is precisely where you work ON the architecture — fading the
+  thing you are reasoning about to 45% and making it inert is what made a sheet
+  feel like drawing on glass over the map.
+- The signal lives entirely in the environment: a cooler paper tint beneath the
+  nodes, a framed viewport edge, and a standing mark stating that the live map
+  is untouched.
+- Structural context nodes are equally undimmed. They are context, not scenery.
+- Repositioning remains the one gesture reserved to a sheet's own members,
+  because a sheet-local move must persist as an override rather than moving the
+  Floor. Selection, inspection and connection are never reserved.
+- A node the sheet has an opinion about is marked, so what a proposal *changes*
+  is distinguishable from what it merely *contains*.
 
 ### Sheet transitions
 
@@ -272,279 +283,6 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
   bringing in; content is never stranded half-visible. A node the new plan
   accounts for is never additionally faded.
 - A half-faded node never swallows clicks meant for the map.
-
-## Semantic zoom
-
-- Container reveal is based on rendered size, not hierarchy depth.
-- A measurable container reveals its children when
-  `sqrt(worldWidth * worldHeight) * zoom >= 480` screen pixels.
-- A child cannot reveal before all of its ancestors reveal.
-- Hidden descendants fade to opacity `0`, become non-interactive at opacity
-  `<= 0.1`, scale toward `0.92`, and blur toward `3px`.
-- Opacity transitions over `0.25s ease-out`.
-- A node being dragged or directly interacted with is forced fully visible.
-- File detail reveals when effective zoom reaches `1.075`, where effective
-  zoom is viewport zoom multiplied by the node world scale.
-- File details crossfade over `0.25s`; hidden details do not receive pointer
-  events.
-
-## World geometry and presentation
-
-- A depth-zero file frame is authored at `220 x 110` flow units.
-- File cells halve per depth level (`FILE_SCALE = 2`) with floors of
-  `80 x 44` flow units.
-- Grid gap and system header height are derived from half the file-cell height
-  at that depth.
-- File content uses a `220 x 110` presentation reference.
-- Infra content uses a `260 x 160` presentation reference.
-- Systems use their authored presentation base dimensions, falling back to
-  their current dimensions and then `620 x 420`.
-- Presentation scale is uniform and controlled by the limiting axis. Resizing
-  may change aspect ratio without stretching typography or internal chrome.
-- Presentation scale is `canonical size / authored design size`. Both terms are
-  canonical: it carries no world-scale factor on either side, so it is blind to
-  nesting depth and to interior compression. It is computed once, in the
-  projection. Components consume it and must never re-derive it from rendered
-  dimensions.
-- Depth reaches system chrome through `DEPTH_TITLE_PX` and nowhere else.
-- A frame has two scales. `scale` is its own size in its parent's space;
-  `interiorScale` is how much it compresses its contents. A child's world scale
-  is `parent.worldScale x parent.interiorScale x child.scale`.
-- A frame's own geometry, chrome, and presentation scale are never expressed in
-  terms of its `interiorScale`, so compressing an interior cannot disturb the
-  frame itself or anything outside it.
-- Child positions and sizes convert through the parent's **content** scale;
-  the parent's own box converts through its own world scale.
-- Every layout write replaces a whole row, so `interiorScale` is mandatory on
-  `FloorLayout` — a writer that is not about compression must carry it through.
-- Node shells fill the live frame synchronously. Shell geometry must not trail
-  resizing through a React-state measurement loop.
-- Container children remain visually stationary when a north or west parent
-  edge moves; their persisted local positions are compensated accordingly.
-- Dragging a container moves every descendant as one rigid visual body; child
-  wrappers must not ease behind the parent.
-
-## Node visual states
-
-### Files
-
-- Compact and detailed states share one shell and one frame.
-- Detailed symbol content remains `nodrag` and `nopan` but does not suppress
-  canvas wheel zoom.
-- Dimmed files render at opacity `0.22` with reduced saturation.
-- Watched/runtime files can display pulse, call count, args, return,
-  exception, rate-limit, perturbation, and verdict feedback.
-- Runtime exception, rate-limit, perturbation, and success states keep their
-  current semantic colors.
-- Live filesystem edits always ping the affected file regardless of writer.
-  Updates use teal, creation uses green, and deletion performs a red exit
-  before semantic removal.
-- File connection handles remain invisible until React Flow needs them and
-  must never create a large invisible interaction surface at extreme zoom.
-
-### Systems
-
-- The system structural silhouette exists at every zoom.
-- The centered identity and the detailed header/grid crossfade according to
-  child reveal.
-- Activity on a hidden descendant surfaces on the nearest visible semantic
-  ancestor as a lower-right structural rail. The rail must remain clear of
-  both the collapsed centered identity and the expanded title/tab band.
-- Dimmed systems render at opacity `0.3`.
-- Drop preview translation affects the visual shell, not the logical React
-  Flow frame or interaction chrome.
-
-### Infrastructure
-
-- Category determines silhouette; provider/service determines identity and
-  accent treatment.
-- Proposed infrastructure is dashed and renders at opacity `0.65`.
-- Missing registry entries retain an editable fallback node rather than
-  disappearing.
-
-### Planned UML elements
-
-- Planned and partial elements remain visually distinct from realized/live
-  elements.
-- User-authored planned elements are approved intent. Agent-authored planned
-  elements enter as pending proposals and must expose Confirm/Reject directly
-  on the canvas.
-- Pending and rejected agent proposals never enter planned reconciliation,
-  build specs, or dispatched Sheet context. Rejection is final; agents poll
-  the proposal status and must not implement before approval.
-- Planned/partial outlines are dashed; realized/flattened outlines are solid.
-- Realized members display independently from pending members.
-- Status colors remain: planned/neutral, partial/warning, realized/success.
-- Dispatch snapshots the active Sheet's approved build spec together with its
-  live Floor context and the user's text. Later Sheet edits cannot mutate an
-  already queued work order.
-- Work-session presence is projected onto every declared live file/system
-  boundary. Multiple agents can remain active on the same boundary and are
-  shown together; finishing one session removes only that agent's presence.
-- Morning Delta compares agent-produced claims with immutable dispatch
-  snapshots. A matching plan or planned edge dispatched before the change is
-  EXPECTED; unmatched agent work is DRIFT. Human work is not judged against an
-  agent work order.
-
-## Selection and resize
-
-- A selected resizable node has one authoritative selection outline. Node
-  components must not add a duplicate selected-frame border.
-- The outline is one composed screen pixel at every viewport zoom.
-- Eight resize anchors are located at the exact `0%`, `50%`, and `100%` SVG
-  frame coordinates.
-- Each visible resize anchor is `8 x 8` composed screen pixels.
-- Each resize hit target is `18 x 18` composed screen pixels.
-- Outline, visible anchors, and hit targets share one SVG coordinate system.
-  CSS inverse-transform placement must not be reintroduced.
-- Resize starts from controlled fractional width/height. Integer DOM
-  `offsetWidth`/`offsetHeight` measurements are fallback data only.
-- Pointer-to-flow conversion remains floating point. At `100x`, a one-screen-
-  pixel movement changes geometry by `0.01` flow units.
-- All eight directions resize independently, preserve the opposite edge when
-  clamped, and support arbitrary aspect ratios.
-- Pointer capture loss, pointer cancellation, window blur, rerender, and
-  unmount terminate the resize session cleanly.
-- Selection chrome follows the node's own DOM transform and must not update
-  through an independently sampled portal frame.
-- The shell drop shadow is suppressed only during active resizing to prevent
-  Chromium from retaining a stale filtered surface.
-
-## Selection, editing, and connections
-
-- Read-only mode disables node changes, edge changes, dragging, connecting,
-  box selection, and element selection.
-- Box selection uses partial intersection while selection mode is active.
-- Editable text, symbol rows, buttons, and scroll regions do not begin node
-  drags or pane pans.
-- Floor nodes are not manually connectable.
-- Nodes become connectable on an active editable sheet overlay.
-- Planned edges may connect planned and live sheet members according to the
-  current sheet authoring rules.
-- Default rendered edges use the orthogonal edge implementation.
-
-## Floor, sheets, and persistence
-
-- The Floor remains the live base model.
-- Sheets are overlays over the Floor, not independent truth copies.
-
-### What a sheet is (revised 2026-07-30)
-
-- A sheet is a set of POSITION OPINIONS about live nodes plus a set of
-  ADDITIONS that exist only on that sheet. It is not a subset of the map and
-  never a copy of it. This is what makes a sheet an *alternative architecture*
-  you can propose and hand to an agent.
-- **Live nodes are anchored.** A sheet may move a live node anywhere, including
-  into a different system, but it can never delete one. Removing a live node
-  from a sheet discards only the sheet's opinion about where it sits, returning
-  it to its Floor position. Deleting live code happens on the Floor.
-- A sheet may freely delete its own content — planned elements and annotations
-  belong to the sheet.
-- **Nothing is scenery.** Every live node renders exactly once, at whichever
-  position applies, fully interactive. The Floor is never drawn a second time
-  as a dimmed, non-interactive base layer beneath a sheet: that duplication is
-  what forced the base layer to be inert, and made working on a sheet feel like
-  drawing on glass over the architecture instead of in it.
-- A node the sheet has no opinion about is not re-created by the projection at
-  all, so the Floor's own layout continues to work underneath unchanged.
-- A node the sheet moves detaches from Floor containment, because a proposed
-  arrangement is not bound by the current one.
-
-### Sheet transitions
-
-- Switching between the Floor and a sheet animates, because a cut between two
-  static layouts hides what moved and whether it is even the same map.
-- Two signals, never confused: live nodes the sheet repositions **glide**
-  between their Floor and sheet positions and never fade, because they exist in
-  both worlds; sheet-only additions **fade** in and out, because they do not.
-- Live nodes the sheet says nothing about neither move nor fade.
-- Additions resolve faster than movement and, on entry, start slightly later,
-  so the rearrangement reads as the primary event.
-- Transition state is a projection, never canvas state, so a layout, zoom or
-  selection pass cannot strand a node mid-flight.
-- Fading is driven by explicit progress rather than a CSS keyframe, so an
-  interrupted transition resolves to a real opacity instead of snapping.
-- Switching sheets mid-flight still takes out the previous sheet's additions;
-  content is never stranded half-visible. A node the new plan moves is never
-  also faded.
-- Activating a sheet preserves live identity and displays planned/floating
-  content through an interaction snapshot.
-- Floor geometry persists as canonical layout geometry, independent of the
-  current world/presentation scale.
-- Incremental layout reconciliation registers persisted siblings before
-  placing newcomers, persists missing geometry, and may grow (never shrink)
-  an authored container to contain a newly indexed child.
-- There is exactly one gap, `FRAME_ITEM_GAP`. It is the clearance between two
-  occupants of a frame *and* between an occupant and the frame's own edge.
-  Every in-frame path — drop placement, slide, interior compression, packing,
-  tidy, incremental placement, resize clamping, resize minimums — reads it.
-  No path may introduce its own spacing constant.
-- The one asymmetry is the top inset: the tab the chrome **actually draws**,
-  plus that same gap. `frameChromeBand` delegates to `systemTabHeight`, which
-  is the single authority. Layout must never restate the tab formula — an
-  independent "header budget" reserved more than twice what the tab drew, so
-  the gap above a frame's first child was several times the gap on every other
-  side.
-- Tab height is never clamped by the layout's reservation. That would be
-  circular, because the reservation is now derived from the tab.
-- The tab draws in rendered pixels and is constant per depth, so its canonical
-  cost scales inversely with world scale. That conversion is required, not
-  optional.
-- Top-level spacing on the open canvas is `FRAME_ROOT_GAP` and is deliberately
-  separate: it reads as separation between unrelated systems, not as packing.
-- Every "where may a child sit inside this frame?" question goes through
-  `contentRectFor` / `frameContentInsets`.
-- Dropping a node into a frame is resolved in order of how much it disturbs
-  what is already there:
-  1. It lands where it was released, nudged by the **minimum** amount that puts
-     it inside the frame if it overhangs an edge.
-  2. Otherwise it slides to the nearest free slot, searched outward from the
-     drop point. Existing children are immovable obstacles.
-  3. Otherwise the frame compresses its interior: every child gets uniformly
-     smaller, together, in place, by the smallest amount that opens a slot.
-- Every step nudges by the smallest amount that works. No placement step may
-  recentre, seek a midpoint, or otherwise move a node further than required.
-- The slot search is bounded by the frame's content box as a **filter**, never
-  by clamping a result afterwards. A clamped result can land back on a
-  neighbour, which reads as "no room" and escalates to compression while the
-  frame still has obvious empty space.
-- Case 3 may only be reached when no free slot exists anywhere in the frame.
-- The scene projection must be a pure function of persisted state. A node that
-  has no persisted row keeps the placement first decided for it, until it gains
-  a row or changes parent. Re-deriving it per projection made every unpersisted
-  node's position depend on the live geometry of everything around it, so one
-  drop scattered unrelated nodes.
-- A write signature used to suppress duplicate persists must cover every field
-  the write changes.
-- Clearances are compared against absolute world geometry, so the canonical gap
-  converts through the frame's content scale before use.
-- A drop never rewrites a sibling's row. Cases 1 and 2 write the newcomer only;
-  case 3 writes the newcomer and the container's `interiorScale`.
-- Compression preserves relative arrangement exactly, because it scales the
-  coordinate space rather than re-laying-out its occupants. It never reorders,
-  repacks, or resizes the container, so nothing cascades outward to parents.
-- A newcomer adopts the world scale its new siblings already share; it never
-  keeps its own.
-- Compression stops at a legibility floor measured against the frame's smallest
-  child, so it compounds honestly through nesting. At the floor the frame
-  visibly overflows rather than compressing further.
-- Compression is quantized: a drop that needs any shrink takes at least one
-  full step, so most drops change nothing instead of nudging everything.
-- Drop-induced movement animates through `.layout-transition` and must never be
-  live during an interactive drag or resize.
-- A drop commits in **two phases**. Phase one reparents the node at the exact
-  point the pointer released it, untransitioned — visually a no-op. Phase two
-  arms the transition, waits a frame, then applies the corrected geometry.
-  Committing the reparent and the correction together gives the transition no
-  previous value to interpolate from, and the node appears at its corrected
-  spot instead of travelling there. Every correction — edge push, slide off a
-  sibling, size parity, interior compression — must be a visible movement.
-- Sheet geometry persists through sheet layout mutations. The sheet layer has
-  no interior compression and keeps the whole-group reference-frame transform.
-- Resize persistence occurs at gesture end; optimistic local geometry remains
-  stable while the asynchronous save completes.
-- A persistence response or layout rebuild must not visibly snap a node back
-  to stale geometry.
 
 ## Living relationships
 
