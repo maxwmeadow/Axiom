@@ -1293,7 +1293,10 @@ a { color: var(--accent); text-decoration: none; }
   --bg-surface: #f4f0e3;   /* leaf / file cards */
   --bg-raised:  #e6e3d9;   /* chips, hovers, count badges */
   --bg-overlay: #eeece2;   /* in-canvas tooltips */
-  --card-head:  #dde2d6;   /* leaf-card header shelf — cooler than the cream body */
+  /* Leaf-card header shelf. Warm, because it is the strip at the top of a pad
+     and the body below it is the page. The old value was a cool gray-green,
+     which read as an odd cold blue against a cream card on a warm board. */
+  --card-head:  #e7dfc4;
   --infra-surface: #e5dcc5; /* infrastructure body — warm tan, distinct from code */
   --infra-border:  #9a7c5f; /* infrastructure hairline — amber-gray */
 

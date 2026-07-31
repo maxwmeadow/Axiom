@@ -125,6 +125,9 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 - Live filesystem edits always ping the affected file regardless of writer.
   Updates use teal, creation uses green, and deletion performs a red exit
   before semantic removal.
+- The header shelf is the strip at the top of a pad and the body below it is
+  the page, so the shelf carries the warmth and the body stays plain. On a
+  sheet the shelf deepens to pad yellow; on the Floor it stays quiet.
 - File connection handles remain invisible until React Flow needs them and
   must never create a large invisible interaction surface at extreme zoom.
 
