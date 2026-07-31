@@ -1293,10 +1293,11 @@ a { color: var(--accent); text-decoration: none; }
   --bg-surface: #f4f0e3;   /* leaf / file cards */
   --bg-raised:  #e6e3d9;   /* chips, hovers, count badges */
   --bg-overlay: #eeece2;   /* in-canvas tooltips */
-  /* Leaf-card header shelf. Warm, because it is the strip at the top of a pad
-     and the body below it is the page. The old value was a cool gray-green,
-     which read as an odd cold blue against a cream card on a warm board. */
-  --card-head:  #e7dfc4;
+  /* Leaf-card header shelf. Neutral by design: the Floor is the live map, so
+     its cards are plain stock. The pad yellow belongs to sheets, where it says
+     "proposal". The original value was a cool gray-green that read as a cold
+     blue against a cream card; this is the same weight without the hue. */
+  --card-head:  #e2ded1;
   --infra-surface: #e5dcc5; /* infrastructure body — warm tan, distinct from code */
   --infra-border:  #9a7c5f; /* infrastructure hairline — amber-gray */
 
@@ -6300,9 +6301,10 @@ select.axiom-inspector-input {
 .axiom-sheet-mode[data-sheet-phase='entering'],
 .axiom-sheet-mode[data-sheet-phase='leaving'] {
   --sheet-presence: 0;
-  /* On the way out the pad yellow has to travel back to the Floor's shelf, or
-     the header would snap even though everything around it faded. */
-  --card-head: #e7dfc4;
+  /* On the way out the pad yellow travels back to the Floor's own shelf, or
+     the header would snap even though everything around it faded. This must
+     stay equal to the --card-head defined on .react-flow. */
+  --card-head: #e2ded1;
 }
 
 /* The board. A photograph of blueprint paper, tiled — not a blue fill. */
