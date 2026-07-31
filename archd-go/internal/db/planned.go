@@ -6,17 +6,39 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
 
+type RealizationState string
+
+const (
+	RealizationMatched RealizationState = "MATCHED"
+	RealizationFlexed  RealizationState = "FLEXED"
+	RealizationDrifted RealizationState = "DRIFTED"
+	RealizationMissing RealizationState = "MISSING"
+	RealizationUnknown RealizationState = "UNKNOWN"
+)
+
+type RealizationEvidence struct {
+	Kind   string `json:"kind"`
+	Detail string `json:"detail"`
+}
+
 // PlannedMember is one declared function/method in a planned node.
 type PlannedMember struct {
-	Signature string `json:"signature"`        // "login(email, password)"
-	Intent    string `json:"intent,omitempty"` // one-line description
-	Realized  bool   `json:"realized"`         // set by reconciliation
+	Signature           string                `json:"signature"`        // "login(email, password)"
+	Intent              string                `json:"intent,omitempty"` // one-line description
+	Realized            bool                  `json:"realized"`         // true only for MATCHED or FLEXED
+	RealizationState    RealizationState      `json:"realizationState,omitempty"`
+	QualifiedSymbol     string                `json:"qualifiedSymbol,omitempty"`
+	RealizationEvidence []RealizationEvidence `json:"realizationEvidence,omitempty"`
 }
 
 type PlannedNode struct {
@@ -261,7 +283,56 @@ func DeletePlannedEdge(db *sql.DB, id string) error {
 
 // ─── Reconciliation ───────────────────────────────────────────────────────────
 
-// memberName extracts the bare function name from "login(email, pw)".
+type plannedParameter struct {
+	Name     string `json:"name"`
+	DataType string `json:"dataType"`
+}
+
+type plannedMethod struct {
+	Visibility string              `json:"visibility"`
+	Name       string              `json:"name"`
+	Parameters *[]plannedParameter `json:"parameters"`
+	ReturnType string              `json:"returnType"`
+}
+
+type plannedRealization struct {
+	State            RealizationState      `json:"state"`
+	PathMatchQuality string                `json:"pathMatchQuality"`
+	QualifiedSymbol  string                `json:"qualifiedSymbol,omitempty"`
+	Evidence         []RealizationEvidence `json:"evidence"`
+}
+
+type plannedMetadata struct {
+	Version     int                 `json:"version"`
+	Path        string              `json:"path,omitempty"`
+	Methods     *[]plannedMethod    `json:"methods,omitempty"`
+	Endpoints   *[]plannedMethod    `json:"endpoints,omitempty"`
+	Realization *plannedRealization `json:"realization,omitempty"`
+}
+
+type memberAssertion struct {
+	Name       string
+	Visibility string
+	Parameters *[]plannedParameter
+	ReturnType string
+	Structured bool
+}
+
+type actualContract struct {
+	ParameterTypes  []string
+	ArityKnown      bool
+	ReturnType      string
+	ReturnKnown     bool
+	Visibility      string
+	VisibilityKnown bool
+}
+
+type pathMatch struct {
+	File    *File
+	Quality string
+	Detail  string
+}
+
 func memberName(sig string) string {
 	if i := strings.IndexAny(sig, "( "); i > 0 {
 		return strings.TrimSpace(sig[:i])
@@ -269,73 +340,872 @@ func memberName(sig string) string {
 	return strings.TrimSpace(sig)
 }
 
-// ReconcilePlanned matches open planned nodes against reality after an index
-// pass. Exact declared_path match (suffix-tolerant) links the node; member
-// signatures match against the file's symbol names. Returns nodes whose
-// status or member realization changed (caller broadcasts).
-func ReconcilePlanned(db *sql.DB, workspaceID string) ([]PlannedNode, error) {
-	open, err := GetOpenPlannedNodes(db, workspaceID)
+func normalizedPlannedPath(path string) string {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	path = strings.TrimPrefix(path, "./")
+	return strings.ToLower(strings.Trim(path, "/"))
+}
+
+// matchPlannedPath refuses ambiguous suffix matches. A unique suffix is kept
+// as explicit FLEXED evidence; it can never be reported as an exact match.
+func matchPlannedPath(files []File, declared string) pathMatch {
+	want := normalizedPlannedPath(declared)
+	if want == "" {
+		return pathMatch{Quality: "none", Detail: "no target path was declared"}
+	}
+	var suffixes []*File
+	for i := range files {
+		rel := normalizedPlannedPath(files[i].RelPath)
+		if rel == want {
+			return pathMatch{File: &files[i], Quality: "exact", Detail: files[i].RelPath}
+		}
+		if strings.HasSuffix(rel, "/"+want) {
+			suffixes = append(suffixes, &files[i])
+		}
+	}
+	if len(suffixes) == 1 {
+		return pathMatch{
+			File: suffixes[0], Quality: "unique-suffix",
+			Detail: fmt.Sprintf("%s matched declared suffix %s", suffixes[0].RelPath, declared),
+		}
+	}
+	if len(suffixes) > 1 {
+		return pathMatch{
+			Quality: "ambiguous-suffix",
+			Detail:  fmt.Sprintf("%d indexed files end with %s", len(suffixes), declared),
+		}
+	}
+	return pathMatch{Quality: "missing", Detail: fmt.Sprintf("no indexed file matches %s", declared)}
+}
+
+func structuredAssertions(metadata plannedMetadata) ([]memberAssertion, bool) {
+	var methods []plannedMethod
+	switch {
+	case metadata.Methods != nil:
+		methods = *metadata.Methods
+	case metadata.Endpoints != nil:
+		methods = *metadata.Endpoints
+	default:
+		return nil, false
+	}
+	out := make([]memberAssertion, 0, len(methods))
+	for _, method := range methods {
+		if strings.TrimSpace(method.Name) == "" {
+			continue
+		}
+		out = append(out, memberAssertion{
+			Name: strings.TrimSpace(method.Name), Visibility: strings.TrimSpace(method.Visibility),
+			Parameters: method.Parameters, ReturnType: strings.TrimSpace(method.ReturnType),
+			Structured: true,
+		})
+	}
+	return out, true
+}
+
+func legacyAssertions(members []PlannedMember) []memberAssertion {
+	out := make([]memberAssertion, 0, len(members))
+	for _, member := range members {
+		if name := memberName(member.Signature); name != "" {
+			out = append(out, memberAssertion{Name: name})
+		}
+	}
+	return out
+}
+
+func assertionSignature(assertion memberAssertion) string {
+	if !assertion.Structured {
+		return assertion.Name
+	}
+	params := []string{}
+	if assertion.Parameters != nil {
+		for _, parameter := range *assertion.Parameters {
+			value := strings.TrimSpace(parameter.Name)
+			if dataType := strings.TrimSpace(parameter.DataType); dataType != "" {
+				if value != "" {
+					value += ": "
+				}
+				value += dataType
+			}
+			params = append(params, value)
+		}
+	}
+	signature := fmt.Sprintf("%s(%s)", assertion.Name, strings.Join(params, ", "))
+	if assertion.ReturnType != "" {
+		signature += ": " + assertion.ReturnType
+	}
+	return signature
+}
+
+func sourceLinesForSymbol(lines []string, symbol Symbol) string {
+	start := max(0, symbol.LineStart-1)
+	end := min(len(lines), max(symbol.LineEnd, symbol.LineStart))
+	if start >= len(lines) || start >= end {
+		return ""
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
+func identifierStart(value, name string) int {
+	for offset := 0; offset < len(value); {
+		index := strings.Index(value[offset:], name)
+		if index < 0 {
+			return -1
+		}
+		index += offset
+		before, _ := utf8.DecodeLastRuneInString(value[:index])
+		beforeOK := index == 0 || !isIdentifierRune(before)
+		afterIndex := index + len(name)
+		after, _ := utf8.DecodeRuneInString(value[afterIndex:])
+		afterOK := afterIndex == len(value) || !isIdentifierRune(after)
+		if beforeOK && afterOK {
+			cursor := afterIndex
+			for cursor < len(value) && unicode.IsSpace(rune(value[cursor])) {
+				cursor++
+			}
+			if cursor < len(value) && (value[cursor] == '(' || value[cursor] == '<') {
+				return index
+			}
+		}
+		offset = index + len(name)
+	}
+	return -1
+}
+
+func isIdentifierRune(char rune) bool {
+	return unicode.IsLetter(char) || unicode.IsDigit(char) || char == '_' || char == '$' || char == '#'
+}
+
+func stripDeclarationComments(value string) string {
+	var result strings.Builder
+	var quote byte
+	escaped := false
+	lineComment, blockComment := false, false
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		next := byte(0)
+		if index+1 < len(value) {
+			next = value[index+1]
+		}
+		if lineComment {
+			if char == '\n' {
+				lineComment = false
+				result.WriteByte(char)
+			}
+			continue
+		}
+		if blockComment {
+			if char == '*' && next == '/' {
+				blockComment = false
+				index++
+			}
+			continue
+		}
+		if quote != 0 {
+			result.WriteByte(char)
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '/' && next == '/' {
+			lineComment = true
+			index++
+			continue
+		}
+		if char == '/' && next == '*' {
+			blockComment = true
+			index++
+			continue
+		}
+		result.WriteByte(char)
+		if char == '\'' || char == '"' || char == '`' {
+			quote = char
+		}
+	}
+	return result.String()
+}
+
+func splitTopLevel(value string, separator rune) []string {
+	var parts []string
+	start, depth := 0, 0
+	var quote rune
+	escaped := false
+	for index, char := range value {
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch char {
+		case '\'', '"', '`':
+			quote = char
+		case '(', '[', '{', '<':
+			depth++
+		case ')', ']', '}', '>':
+			if depth > 0 {
+				depth--
+			}
+		default:
+			if char == separator && depth == 0 {
+				parts = append(parts, strings.TrimSpace(value[start:index]))
+				start = index + 1
+			}
+		}
+	}
+	parts = append(parts, strings.TrimSpace(value[start:]))
+	return parts
+}
+
+func balancedParameters(declaration, name string) (before, parameters, after string, ok bool) {
+	declaration = stripDeclarationComments(declaration)
+	nameAt := identifierStart(declaration, name)
+	if nameAt < 0 {
+		return "", "", "", false
+	}
+	openOffset := strings.Index(declaration[nameAt+len(name):], "(")
+	if openOffset < 0 {
+		return "", "", "", false
+	}
+	open := nameAt + len(name) + openOffset
+	depth := 0
+	var quote byte
+	escaped := false
+	for index := open; index < len(declaration); index++ {
+		char := declaration[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+			} else if char == '\\' {
+				escaped = true
+			} else if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '\'' || char == '"' || char == '`' {
+			quote = char
+			continue
+		}
+		if char == '(' {
+			depth++
+		} else if char == ')' {
+			depth--
+			if depth == 0 {
+				return declaration[:nameAt], declaration[open+1 : index], declaration[index+1:], true
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+func stripDefault(value string) string {
+	parts := splitTopLevel(value, '=')
+	if len(parts) == 0 {
+		return strings.TrimSpace(value)
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+func trimTypeTail(value string) string {
+	value = strings.TrimSpace(value)
+	for _, token := range []string{"{", ";", "=>", "\n"} {
+		if index := strings.Index(value, token); index >= 0 {
+			value = value[:index]
+		}
+	}
+	return strings.TrimSpace(value)
+}
+
+func canonicalType(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "...")
+	return strings.Map(func(char rune) rune {
+		if unicode.IsSpace(char) {
+			return -1
+		}
+		return char
+	}, value)
+}
+
+func inferVisibility(language, name, before, containerKind string) (string, bool) {
+	lower := " " + strings.ToLower(before) + " "
+	for _, visibility := range []string{"public", "private", "protected", "package"} {
+		if strings.Contains(lower, " "+visibility+" ") {
+			return visibility, true
+		}
+	}
+	switch language {
+	case "typescript", "tsx", "javascript":
+		return "public", true
+	case "go":
+		if name != "" && unicode.IsUpper([]rune(name)[0]) {
+			return "public", true
+		}
+		return "package", true
+	case "python":
+		if strings.HasPrefix(name, "_") {
+			return "private", true
+		}
+		return "public", true
+	case "rust":
+		if strings.Contains(lower, " pub ") {
+			return "public", true
+		}
+		return "private", true
+	case "java":
+		if containerKind == "interface" {
+			return "public", true
+		}
+		return "package", true
+	case "csharp":
+		if containerKind == "interface" {
+			return "public", true
+		}
+		return "private", true
+	default:
+		return "", false
+	}
+}
+
+func actualParameterTypes(language, parameters string) ([]string, bool) {
+	if strings.TrimSpace(parameters) == "" {
+		return []string{}, true
+	}
+	raw := splitTopLevel(parameters, ',')
+	if language == "go" {
+		out := make([]string, len(raw))
+		pending := []int{}
+		for index, parameter := range raw {
+			value := stripDefault(strings.TrimSpace(parameter))
+			fields := strings.Fields(value)
+			if len(fields) < 2 {
+				pending = append(pending, index)
+				continue
+			}
+			dataType := canonicalType(strings.Join(fields[1:], ""))
+			for _, pendingIndex := range pending {
+				out[pendingIndex] = dataType
+			}
+			pending = pending[:0]
+			out[index] = dataType
+		}
+		// A trailing run of single tokens is the standard anonymous-parameter
+		// form: Allow(string, int). Each token is its own type.
+		for _, pendingIndex := range pending {
+			out[pendingIndex] = canonicalType(stripDefault(raw[pendingIndex]))
+		}
+		return out, true
+	}
+	out := make([]string, 0, len(raw))
+	for _, parameter := range raw {
+		value := stripDefault(strings.TrimSpace(parameter))
+		if value == "" {
+			continue
+		}
+		if (language == "python" || language == "rust") &&
+			(value == "self" || value == "&self" || value == "&mut self" || value == "cls") {
+			continue
+		}
+		var dataType string
+		switch language {
+		case "typescript", "tsx", "javascript", "python", "rust":
+			if colon := strings.Index(value, ":"); colon >= 0 {
+				dataType = strings.TrimSpace(value[colon+1:])
+			}
+		default:
+			fields := strings.Fields(value)
+			for len(fields) > 0 && (fields[0] == "final" || fields[0] == "ref" ||
+				fields[0] == "out" || fields[0] == "in" || strings.HasPrefix(fields[0], "@")) {
+				fields = fields[1:]
+			}
+			if len(fields) >= 2 {
+				dataType = strings.Join(fields[:len(fields)-1], " ")
+			}
+		}
+		out = append(out, canonicalType(dataType))
+	}
+	return out, true
+}
+
+func actualReturnType(language, before, after string) (string, bool) {
+	switch language {
+	case "typescript", "tsx", "javascript":
+		after = strings.TrimSpace(after)
+		if strings.HasPrefix(after, ":") {
+			return canonicalType(trimTypeTail(strings.TrimPrefix(after, ":"))), true
+		}
+	case "python", "rust":
+		if arrow := strings.Index(after, "->"); arrow >= 0 {
+			value := trimTypeTail(after[arrow+2:])
+			if colon := strings.LastIndex(value, ":"); language == "python" && colon >= 0 {
+				value = value[:colon]
+			}
+			return canonicalType(value), true
+		}
+	case "go":
+		value := trimTypeTail(after)
+		if value != "" {
+			return canonicalType(value), true
+		}
+	default:
+		modifiers := map[string]bool{
+			"public": true, "private": true, "protected": true, "package": true,
+			"static": true, "final": true, "abstract": true, "async": true,
+			"virtual": true, "override": true, "extern": true, "unsafe": true,
+		}
+		tokens := strings.Fields(strings.TrimSpace(before))
+		for len(tokens) > 0 &&
+			(modifiers[strings.ToLower(tokens[0])] || strings.HasPrefix(tokens[0], "@")) {
+			tokens = tokens[1:]
+		}
+		if len(tokens) > 0 {
+			return canonicalType(strings.Join(tokens, " ")), true
+		}
+	}
+	return "", false
+}
+
+func parseActualContract(language, declaration, name, containerKind string) (actualContract, bool) {
+	before, parameters, after, ok := balancedParameters(declaration, name)
+	if !ok {
+		return actualContract{}, false
+	}
+	parameterTypes, arityKnown := actualParameterTypes(language, parameters)
+	returnType, returnKnown := actualReturnType(language, before, after)
+	visibility, visibilityKnown := inferVisibility(language, name, before, containerKind)
+	return actualContract{
+		ParameterTypes: parameterTypes, ArityKnown: arityKnown,
+		ReturnType: returnType, ReturnKnown: returnKnown,
+		Visibility: visibility, VisibilityKnown: visibilityKnown,
+	}, true
+}
+
+func compareContract(assertion memberAssertion, actual actualContract) (RealizationState, []RealizationEvidence) {
+	evidence := []RealizationEvidence{}
+	unknown := false
+	if assertion.Parameters != nil {
+		if !actual.ArityKnown {
+			unknown = true
+			evidence = append(evidence, RealizationEvidence{Kind: "contract.unknown", Detail: "parameter arity could not be parsed"})
+		} else if len(*assertion.Parameters) != len(actual.ParameterTypes) {
+			return RealizationDrifted, []RealizationEvidence{{
+				Kind:   "contract.arity",
+				Detail: fmt.Sprintf("planned %d parameters, indexed declaration has %d", len(*assertion.Parameters), len(actual.ParameterTypes)),
+			}}
+		} else {
+			for index, parameter := range *assertion.Parameters {
+				want := canonicalType(parameter.DataType)
+				if want == "" {
+					continue
+				}
+				got := actual.ParameterTypes[index]
+				if got == "" {
+					unknown = true
+					evidence = append(evidence, RealizationEvidence{
+						Kind:   "contract.unknown",
+						Detail: fmt.Sprintf("parameter %d type is not explicit in code", index+1),
+					})
+				} else if got != want {
+					return RealizationDrifted, []RealizationEvidence{{
+						Kind:   "contract.parameter-type",
+						Detail: fmt.Sprintf("parameter %d planned %s, indexed declaration has %s", index+1, want, got),
+					}}
+				}
+			}
+		}
+	}
+	if want := canonicalType(assertion.ReturnType); want != "" {
+		if !actual.ReturnKnown || actual.ReturnType == "" {
+			unknown = true
+			evidence = append(evidence, RealizationEvidence{Kind: "contract.unknown", Detail: "return type is not explicit in code"})
+		} else if actual.ReturnType != want {
+			return RealizationDrifted, []RealizationEvidence{{
+				Kind:   "contract.return-type",
+				Detail: fmt.Sprintf("planned %s, indexed declaration has %s", want, actual.ReturnType),
+			}}
+		}
+	}
+	if want := strings.ToLower(strings.TrimSpace(assertion.Visibility)); want != "" {
+		if !actual.VisibilityKnown {
+			unknown = true
+			evidence = append(evidence, RealizationEvidence{Kind: "contract.unknown", Detail: "visibility could not be proven"})
+		} else if actual.Visibility != want {
+			return RealizationDrifted, []RealizationEvidence{{
+				Kind:   "contract.visibility",
+				Detail: fmt.Sprintf("planned %s, indexed declaration is %s", want, actual.Visibility),
+			}}
+		}
+	}
+	if unknown {
+		return RealizationUnknown, evidence
+	}
+	return RealizationMatched, evidence
+}
+
+func enclosingContainer(symbols []Symbol, node PlannedNode) (*Symbol, bool) {
+	var matches []Symbol
+	for _, symbol := range symbols {
+		if symbol.Name == node.Name &&
+			(symbol.Kind == "class" || symbol.Kind == "interface" || symbol.Kind == "type") {
+			matches = append(matches, symbol)
+		}
+	}
+	if len(matches) == 1 {
+		return &matches[0], true
+	}
+	if len(matches) > 1 || node.Kind == "class" {
+		return nil, false
+	}
+	return nil, true
+}
+
+func goReceiverType(declaration, name string) string {
+	declaration = stripDeclarationComments(declaration)
+	nameAt := identifierStart(declaration, name)
+	if nameAt < 0 {
+		return ""
+	}
+	prefix := declaration[:nameAt]
+	funcAt := strings.Index(prefix, "func")
+	if funcAt < 0 {
+		return ""
+	}
+	open := strings.Index(prefix[funcAt+len("func"):], "(")
+	if open < 0 {
+		return ""
+	}
+	open += funcAt + len("func")
+	close := strings.Index(prefix[open+1:], ")")
+	if close < 0 {
+		return ""
+	}
+	receiver := strings.Fields(prefix[open+1 : open+1+close])
+	if len(receiver) == 0 {
+		return ""
+	}
+	receiverType := strings.Trim(receiver[len(receiver)-1], "*[]")
+	if dot := strings.LastIndex(receiverType, "."); dot >= 0 {
+		receiverType = receiverType[dot+1:]
+	}
+	return receiverType
+}
+
+func qualifiedMemberCandidates(
+	symbols []Symbol,
+	container *Symbol,
+	name, language string,
+	sourceLines []string,
+) []Symbol {
+	out := []Symbol{}
+	for _, symbol := range symbols {
+		if symbol.Name != name || (symbol.Kind != "method" && symbol.Kind != "function") {
+			continue
+		}
+		if container != nil {
+			if language == "go" {
+				declaration := sourceLinesForSymbol(sourceLines, symbol)
+				if goReceiverType(declaration, symbol.Name) != container.Name {
+					continue
+				}
+			} else if symbol.LineStart < container.LineStart || symbol.LineEnd > container.LineEnd {
+				continue
+			}
+		}
+		out = append(out, symbol)
+	}
+	return out
+}
+
+func reconcileMember(
+	assertion memberAssertion,
+	symbols []Symbol,
+	container *Symbol,
+	sourceLines []string,
+	language string,
+	path pathMatch,
+) PlannedMember {
+	qualified := path.File.RelPath + "::" + assertion.Name
+	if container != nil {
+		qualified = container.Name + "." + assertion.Name
+	}
+	member := PlannedMember{
+		Signature:        assertionSignature(assertion),
+		QualifiedSymbol:  qualified,
+		RealizationState: RealizationMissing,
+		RealizationEvidence: []RealizationEvidence{{
+			Kind: "symbol.missing", Detail: fmt.Sprintf("indexed symbol %s was not found", qualified),
+		}},
+	}
+	candidates := qualifiedMemberCandidates(symbols, container, assertion.Name, language, sourceLines)
+	if len(candidates) > 1 && assertion.Structured {
+		containerKind := ""
+		if container != nil {
+			containerKind = container.Kind
+		}
+		compatible := []Symbol{}
+		unresolved := false
+		for _, candidate := range candidates {
+			declaration := sourceLinesForSymbol(sourceLines, candidate)
+			actual, ok := parseActualContract(language, declaration, candidate.Name, containerKind)
+			if !ok {
+				unresolved = true
+				continue
+			}
+			state, _ := compareContract(assertion, actual)
+			if state == RealizationMatched {
+				compatible = append(compatible, candidate)
+			} else if state == RealizationUnknown {
+				unresolved = true
+			}
+		}
+		if len(compatible) == 1 {
+			candidates = compatible
+		} else if len(compatible) == 0 && !unresolved {
+			member.RealizationState = RealizationDrifted
+			member.RealizationEvidence = []RealizationEvidence{{
+				Kind:   "contract.overload",
+				Detail: fmt.Sprintf("%d indexed overloads exist for %s, but none implements the planned contract", len(candidates), qualified),
+			}}
+			return member
+		}
+	}
+	if len(candidates) > 1 {
+		member.RealizationState = RealizationUnknown
+		member.RealizationEvidence = []RealizationEvidence{{
+			Kind: "symbol.ambiguous", Detail: fmt.Sprintf("%d indexed symbols match %s", len(candidates), qualified),
+		}}
+		return member
+	}
+	if len(candidates) == 0 {
+		return member
+	}
+	member.RealizationEvidence = []RealizationEvidence{{
+		Kind:   "symbol.indexed",
+		Detail: fmt.Sprintf("%s at %s:%d", qualified, path.File.RelPath, candidates[0].LineStart),
+	}}
+	if assertion.Structured {
+		declaration := sourceLinesForSymbol(sourceLines, candidates[0])
+		containerKind := ""
+		if container != nil {
+			containerKind = container.Kind
+		}
+		actual, ok := parseActualContract(language, declaration, candidates[0].Name, containerKind)
+		if !ok {
+			member.RealizationState = RealizationUnknown
+			member.RealizationEvidence = append(member.RealizationEvidence, RealizationEvidence{
+				Kind: "contract.unknown", Detail: "indexed declaration could not be parsed",
+			})
+			return member
+		}
+		state, evidence := compareContract(assertion, actual)
+		member.RealizationState = state
+		member.RealizationEvidence = append(member.RealizationEvidence, evidence...)
+		if state == RealizationDrifted || state == RealizationUnknown {
+			return member
+		}
+	}
+	if path.Quality == "unique-suffix" {
+		member.RealizationState = RealizationFlexed
+		member.RealizationEvidence = append(member.RealizationEvidence, RealizationEvidence{
+			Kind: "path.relocated", Detail: path.Detail,
+		})
+	} else {
+		member.RealizationState = RealizationMatched
+	}
+	member.Realized = true
+	return member
+}
+
+func stateForMembers(members []PlannedMember, fallback RealizationState) RealizationState {
+	if len(members) == 0 {
+		return fallback
+	}
+	state := RealizationMatched
+	for _, member := range members {
+		switch member.RealizationState {
+		case RealizationDrifted:
+			return RealizationDrifted
+		case RealizationUnknown:
+			state = RealizationUnknown
+		case RealizationMissing:
+			if state != RealizationUnknown {
+				state = RealizationMissing
+			}
+		case RealizationFlexed:
+			if state == RealizationMatched {
+				state = RealizationFlexed
+			}
+		}
+	}
+	return state
+}
+
+func setMetadataRealization(raw json.RawMessage, realization plannedRealization) (json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(realization)
+	if err != nil {
+		return nil, err
+	}
+	object["realization"] = encoded
+	return json.Marshal(object)
+}
+
+// ReconcilePlanned treats indexed symbols as corroboration and source text at
+// those exact ranges as contract evidence. Agent-provided paths or mappings are
+// search hints only: without an indexed file and symbol the result cannot be
+// MATCHED. Returns nodes whose persisted realization projection changed.
+func ReconcilePlanned(sqlDB *sql.DB, workspaceID string) ([]PlannedNode, error) {
+	open, err := GetOpenPlannedNodes(sqlDB, workspaceID)
 	if err != nil || len(open) == 0 {
 		return nil, err
 	}
-	files, err := GetFiles(db, workspaceID)
+	files, err := GetFiles(sqlDB, workspaceID)
 	if err != nil {
 		return nil, err
 	}
 
 	var changed []PlannedNode
-	for _, n := range open {
-		if n.DeclaredPath == "" {
-			continue
+	for _, node := range open {
+		var metadata plannedMetadata
+		_ = json.Unmarshal(node.Metadata, &metadata)
+		declaredPath := node.DeclaredPath
+		if strings.TrimSpace(declaredPath) == "" {
+			declaredPath = metadata.Path
 		}
-		want := strings.ToLower(strings.ReplaceAll(n.DeclaredPath, "\\", "/"))
-		var match *File
-		for i := range files {
-			rel := strings.ToLower(files[i].RelPath)
-			if rel == want || strings.HasSuffix(rel, "/"+want) {
-				match = &files[i]
+		path := matchPlannedPath(files, declaredPath)
+
+		var existingMembers []PlannedMember
+		_ = json.Unmarshal(node.Members, &existingMembers)
+		assertions, structured := structuredAssertions(metadata)
+		if !structured {
+			assertions = legacyAssertions(existingMembers)
+		}
+		intents := map[string]string{}
+		for _, member := range existingMembers {
+			intents[memberName(member.Signature)] = member.Intent
+		}
+
+		nextMembers := make([]PlannedMember, 0, len(assertions))
+		nodeState := RealizationUnknown
+		nodeEvidence := []RealizationEvidence{{Kind: "path." + path.Quality, Detail: path.Detail}}
+		qualifiedNode := node.Name
+		var realizedFileID *string
+		if path.File == nil {
+			if path.Quality == "missing" {
+				nodeState = RealizationMissing
+			}
+			for _, assertion := range assertions {
+				nextMembers = append(nextMembers, PlannedMember{
+					Signature: assertionSignature(assertion), Intent: intents[assertion.Name],
+					QualifiedSymbol:  node.Name + "." + assertion.Name,
+					RealizationState: nodeState, RealizationEvidence: nodeEvidence,
+				})
+			}
+		} else {
+			realizedFileID = &path.File.ID
+			symbols, symbolsErr := GetSymbolsByFile(sqlDB, path.File.ID)
+			source, sourceErr := os.ReadFile(path.File.Path)
+			if symbolsErr != nil || sourceErr != nil {
+				nodeState = RealizationUnknown
+				detail := "indexed evidence could not be loaded"
+				if symbolsErr != nil {
+					detail = symbolsErr.Error()
+				} else if sourceErr != nil {
+					detail = sourceErr.Error()
+				}
+				nodeEvidence = append(nodeEvidence, RealizationEvidence{Kind: "evidence.unavailable", Detail: detail})
+				for _, assertion := range assertions {
+					nextMembers = append(nextMembers, PlannedMember{
+						Signature: assertionSignature(assertion), Intent: intents[assertion.Name],
+						QualifiedSymbol:  node.Name + "." + assertion.Name,
+						RealizationState: RealizationUnknown, RealizationEvidence: nodeEvidence,
+					})
+				}
+			} else {
+				sourceLines := strings.Split(string(source), "\n")
+				container, containerOK := enclosingContainer(symbols, node)
+				if !containerOK {
+					nodeState = RealizationMissing
+					nodeEvidence = append(nodeEvidence, RealizationEvidence{
+						Kind:   "symbol.missing",
+						Detail: fmt.Sprintf("indexed container %s was not found uniquely in %s", node.Name, path.File.RelPath),
+					})
+					for _, assertion := range assertions {
+						nextMembers = append(nextMembers, PlannedMember{
+							Signature: assertionSignature(assertion), Intent: intents[assertion.Name],
+							QualifiedSymbol:  node.Name + "." + assertion.Name,
+							RealizationState: RealizationMissing, RealizationEvidence: nodeEvidence,
+						})
+					}
+				} else {
+					if container != nil {
+						qualifiedNode = container.Name
+					}
+					for _, assertion := range assertions {
+						member := reconcileMember(assertion, symbols, container, sourceLines, path.File.Language, path)
+						member.Intent = intents[assertion.Name]
+						nextMembers = append(nextMembers, member)
+					}
+					fallback := RealizationMatched
+					if path.Quality == "unique-suffix" {
+						fallback = RealizationFlexed
+					}
+					nodeState = stateForMembers(nextMembers, fallback)
+				}
+			}
+		}
+
+		allRealized := true
+		for _, member := range nextMembers {
+			if !member.Realized {
+				allRealized = false
 				break
 			}
 		}
-		if match == nil {
+		newStatus := "planned"
+		if path.File != nil {
+			newStatus = "partial"
+			if allRealized && (nodeState == RealizationMatched || nodeState == RealizationFlexed) {
+				newStatus = "realized"
+			}
+		}
+		realization := plannedRealization{
+			State: nodeState, PathMatchQuality: path.Quality,
+			QualifiedSymbol: qualifiedNode, Evidence: nodeEvidence,
+		}
+		nextMetadata, metadataErr := setMetadataRealization(node.Metadata, realization)
+		if metadataErr != nil {
 			continue
 		}
-
-		syms, _ := GetSymbolsByFile(db, match.ID)
-		symNames := make(map[string]bool, len(syms))
-		for _, s := range syms {
-			symNames[strings.ToLower(s.Name)] = true
+		nextMembersJSON, _ := json.Marshal(nextMembers)
+		dirty := string(nextMembersJSON) != string(node.Members) ||
+			string(nextMetadata) != string(node.Metadata) ||
+			node.Status != newStatus ||
+			(node.RealizedFileID == nil) != (realizedFileID == nil) ||
+			(node.RealizedFileID != nil && realizedFileID != nil && *node.RealizedFileID != *realizedFileID)
+		if !dirty {
+			continue
 		}
-
-		var members []PlannedMember
-		_ = json.Unmarshal(n.Members, &members)
-		realized, dirty := 0, false
-		for i := range members {
-			is := symNames[strings.ToLower(memberName(members[i].Signature))]
-			if is != members[i].Realized {
-				members[i].Realized = is
-				dirty = true
-			}
-			if is {
-				realized++
-			}
+		node.Members = nextMembersJSON
+		node.Metadata = nextMetadata
+		node.Status = newStatus
+		node.RealizedFileID = realizedFileID
+		if err := UpsertPlannedNode(sqlDB, &node); err != nil {
+			return changed, err
 		}
-
-		newStatus := "partial"
-		if len(members) == 0 || realized == len(members) {
-			newStatus = "realized"
-		} else if realized == 0 {
-			newStatus = "partial" // file exists — that alone is partial progress
-		}
-		if n.RealizedFileID == nil || *n.RealizedFileID != match.ID || n.Status != newStatus || dirty {
-			mj, _ := json.Marshal(members)
-			n.Members = mj
-			n.Status = newStatus
-			n.RealizedFileID = &match.ID
-			if err := UpsertPlannedNode(db, &n); err == nil {
-				changed = append(changed, n)
-			}
-		}
+		changed = append(changed, node)
 	}
 	return changed, nil
 }

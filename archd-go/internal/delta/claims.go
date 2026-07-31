@@ -19,11 +19,11 @@ import (
 // files newly importing one module is one claim with twenty pieces of
 // evidence, never twenty claims.
 //
-// Claims are also where intent will eventually attach. Once the forward loop
-// exists (you draw what should be built, agents execute it), each claim can be
-// matched against a planned element and marked expected or unexpected. The
-// shape here is deliberately ready for that: a claim already asserts something
-// about the architecture, which is exactly what intent confirms or denies.
+// Claims are also where dispatched intent attaches. Once the forward loop
+// exists (you draw what should be built, agents execute it), each corroborated
+// claim can be classified as matched, flexed, drifted, or unknown. A claim
+// already asserts something about the architecture, which is exactly what
+// immutable intent can confirm or contradict.
 
 type ClaimKind string
 
@@ -95,13 +95,20 @@ type Claim struct {
 	// FocusFileIDs are framed when no system context applies.
 	FocusFileIDs []string   `json:"focusFileIds,omitempty"`
 	Evidence     []Evidence `json:"evidence"`
+	// Corroborated means the claim was derived from indexed structural facts.
+	// Agent narration and reported mappings are never enough on their own.
+	Corroborated bool `json:"corroborated"`
 	// SessionID ties this claim to the work an agent said it was doing. Empty
 	// means unexplained: the change is real but nobody narrated it.
 	SessionID string `json:"sessionId,omitempty"`
-	// IntentStatus compares agent-produced facts with immutable dispatched
-	// Sheet specs. Human changes are left unclassified.
-	IntentStatus string   `json:"intentStatus,omitempty"` // expected|unexpected
-	IntentIDs    []string `json:"intentIds,omitempty"`
+	// RealizationState compares corroborated agent-produced facts with an
+	// immutable Sheet spec. Human changes are left unclassified.
+	RealizationState    RealizationState `json:"realizationState,omitempty"`
+	RealizationEvidence []Evidence       `json:"realizationEvidence,omitempty"`
+	IntentIDs           []string         `json:"intentIds,omitempty"`
+	// IntentStatus is retained only for the command-deck aggregate while that
+	// read-only surface migrates. It is intentionally excluded from the API.
+	IntentStatus string `json:"-"`
 }
 
 // SystemTopology is the CURRENT system-level dependency graph, supplied by the
@@ -358,6 +365,9 @@ func buildClaims(
 	claims = append(claims, internalClaims(summary, internalEdges, internalNames)...)
 	if before != nil && after != nil {
 		claims = append(claims, architectureConsequences(summary, *before, *after)...)
+	}
+	for index := range claims {
+		claims[index].Corroborated = true
 	}
 
 	// Highest consequence first; ties break newest-first so a busy delta still

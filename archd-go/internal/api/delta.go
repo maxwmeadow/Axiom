@@ -89,7 +89,7 @@ func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 		}
 		summary.Claims = delta.BuildClaimsWithSnapshots(summary, before, after)
 	}
-	summary.Claims = delta.ClassifyIntentDrift(
+	summary.Claims = delta.ClassifyRealization(
 		summary.Claims,
 		dispatchedIntents(sqlDB, workspaceID),
 	)
@@ -125,6 +125,7 @@ func dispatchedIntents(sqlDB *sql.DB, workspaceID string) []delta.Intent {
 				Kind:         node.Type,
 				Name:         node.Name,
 				DeclaredPath: node.DeclaredPath,
+				Metadata:     node.Metadata,
 			})
 		}
 		for index, edge := range context.Edges {

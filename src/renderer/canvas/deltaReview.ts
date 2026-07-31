@@ -4,6 +4,7 @@ import type {
   DeltaFileChange,
   DeltaSummary,
   DeltaWorkSession,
+  RealizationState,
 } from '../../shared/types.ts'
 
 /**
@@ -45,6 +46,33 @@ export interface DeltaReview {
   sessionList: DeltaWorkSession[]
   until: number
   empty: boolean
+}
+
+const REALIZATION_PRESENTATION: Record<RealizationState, { label: string; title: string }> = {
+  MATCHED: {
+    label: 'MATCHED',
+    title: 'Indexed evidence exactly matches a build spec dispatched before this change',
+  },
+  FLEXED: {
+    label: 'FLEXED',
+    title: 'Indexed evidence satisfies the dispatched intent through a direct, documented variation',
+  },
+  DRIFTED: {
+    label: 'DRIFTED',
+    title: 'Indexed agent work does not match any build spec dispatched before this change',
+  },
+  MISSING: {
+    label: 'MISSING',
+    title: 'The dispatched contract has not been found in the indexed implementation',
+  },
+  UNKNOWN: {
+    label: 'UNKNOWN',
+    title: 'There is not enough corroborated evidence to judge this agent work',
+  },
+}
+
+export function realizationPresentation(state: RealizationState) {
+  return REALIZATION_PRESENTATION[state]
 }
 
 export function buildDeltaReview(
