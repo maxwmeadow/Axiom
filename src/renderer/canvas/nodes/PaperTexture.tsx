@@ -68,12 +68,15 @@ export function PaperTextureDefs() {
       style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}
     >
       <defs>
-        {/* Files: fine stock, the surface you read on. */}
-        <Stock id="axiom-paper-sheet" tint="#7a6ea8" tintOpacity={0.07} grain={0.3} />
-        {/* Systems: coarser board — a bigger tile is a bigger fibre. */}
-        <Stock id="axiom-card-sheet" tint="#7a6ea8" tintOpacity={0.09} grain={0.38} scale={1.9} />
-        {/* Infra: cooler, quieter — specified rather than written on. */}
-        <Stock id="axiom-blueprint-sheet" tint="#5f7f96" tintOpacity={0.08} grain={0.24} scale={1.3} />
+        {/* Files: legal pad. Warm yellow, the surface you write on, and the
+            thing that reads brightest against the blue board. */}
+        <Stock id="axiom-paper-sheet" tint="#f2e2a8" tintOpacity={0.5} grain={0.28} />
+        {/* Systems: manila folder. Warmer and browner, coarser stock — what you
+            keep the pads in. */}
+        <Stock id="axiom-card-sheet" tint="#e8cf9a" tintOpacity={0.44} grain={0.36} scale={1.9} />
+        {/* Infra: white spec sheet. Cool and plain, so equipment reads as
+            issued rather than hand-written. */}
+        <Stock id="axiom-blueprint-sheet" tint="#f6f4ec" tintOpacity={0.5} grain={0.2} scale={1.3} />
       </defs>
     </svg>
   )
