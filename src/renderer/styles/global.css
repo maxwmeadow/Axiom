@@ -1294,9 +1294,10 @@ a { color: var(--accent); text-decoration: none; }
   --bg-raised:  #e6e3d9;   /* chips, hovers, count badges */
   --bg-overlay: #eeece2;   /* in-canvas tooltips */
   /* FLOOR STOCK — see "SHEET STOCK" for the other half of this pair.
-     Neutral by design: the Floor is the live map, so its cards are plain.
+     Sage: the theme's own --color-service (#7A9E7E) tinted toward the cream
+     body, so the shelf belongs to the palette rather than sitting beside it.
      The pad yellow belongs to sheets, where it means "proposal". */
-  --card-head:  #e2ded1;
+  --card-head:  #c7d2bd;
   --infra-surface: #e5dcc5; /* infrastructure body — warm tan, distinct from code */
   --infra-border:  #9a7c5f; /* infrastructure hairline — amber-gray */
 
@@ -6320,7 +6321,7 @@ select.axiom-inspector-input {
    the board instead of snapping. Must stay equal to the Floor value above. */
 .axiom-sheet-mode[data-sheet-phase='entering'] .react-flow,
 .axiom-sheet-mode[data-sheet-phase='leaving'] .react-flow {
-  --card-head: #e2ded1;
+  --card-head: #c7d2bd;
 }
 
 /* The board. A photograph of blueprint paper, tiled — not a blue fill. */
