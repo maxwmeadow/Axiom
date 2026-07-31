@@ -213,6 +213,46 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 
 - The Floor remains the live base model.
 - Sheets are overlays over the Floor, not independent truth copies.
+
+### What a sheet is (revised 2026-07-30)
+
+- A sheet is a set of POSITION OPINIONS about live nodes plus a set of
+  ADDITIONS that exist only on that sheet. It is not a subset of the map and
+  never a copy of it. This is what makes a sheet an *alternative architecture*
+  you can propose and hand to an agent.
+- **Live nodes are anchored.** A sheet may move a live node anywhere, including
+  into a different system, but it can never delete one. Removing a live node
+  from a sheet discards only the sheet's opinion about where it sits, returning
+  it to its Floor position. Deleting live code happens on the Floor.
+- A sheet may freely delete its own content — planned elements and annotations
+  belong to the sheet.
+- **Nothing is scenery.** Every live node renders exactly once, at whichever
+  position applies, fully interactive. The Floor is never drawn a second time
+  as a dimmed, non-interactive base layer beneath a sheet: that duplication is
+  what forced the base layer to be inert, and made working on a sheet feel like
+  drawing on glass over the architecture instead of in it.
+- A node the sheet has no opinion about is not re-created by the projection at
+  all, so the Floor's own layout continues to work underneath unchanged.
+- A node the sheet moves detaches from Floor containment, because a proposed
+  arrangement is not bound by the current one.
+
+### Sheet transitions
+
+- Switching between the Floor and a sheet animates, because a cut between two
+  static layouts hides what moved and whether it is even the same map.
+- Two signals, never confused: live nodes the sheet repositions **glide**
+  between their Floor and sheet positions and never fade, because they exist in
+  both worlds; sheet-only additions **fade** in and out, because they do not.
+- Live nodes the sheet says nothing about neither move nor fade.
+- Additions resolve faster than movement and, on entry, start slightly later,
+  so the rearrangement reads as the primary event.
+- Transition state is a projection, never canvas state, so a layout, zoom or
+  selection pass cannot strand a node mid-flight.
+- Fading is driven by explicit progress rather than a CSS keyframe, so an
+  interrupted transition resolves to a real opacity instead of snapping.
+- Switching sheets mid-flight still takes out the previous sheet's additions;
+  content is never stranded half-visible. A node the new plan moves is never
+  also faded.
 - Activating a sheet preserves live identity and displays planned/floating
   content through an interaction snapshot.
 - Floor geometry persists as canonical layout geometry, independent of the
