@@ -17,6 +17,7 @@ import {
 import { join } from 'path'
 import { homedir } from 'os'
 import { actionKind, actionSummary, actionTargets } from './agentAction.ts'
+import { routeTool } from './toolRouting.ts'
 import fs from 'fs'
 
 // Helper: UUID generator for system nodes
@@ -40,8 +41,21 @@ interface ActiveProject {
   rootPath: string
 }
 
+/**
+ * archd's HTTP API. Overridable so the server can be driven against an
+ * isolated daemon in tests without touching a developer's real workspace.
+ */
+const API_BASE = process.env.AXIOM_API_URL ?? 'http://127.0.0.1:7743'
+
+/**
+ * Which project the agent is acting on. The desktop app writes this; an
+ * override lets a harness point at a throwaway workspace.
+ */
+const ACTIVE_PROJECT_PATH =
+  process.env.AXIOM_ACTIVE_PROJECT ?? join(homedir(), '.axiom', 'data', 'active_project.json')
+
 function getActiveProject(): ActiveProject {
-  const activeProjectPath = join(homedir(), '.axiom', 'data', 'active_project.json')
+  const activeProjectPath = ACTIVE_PROJECT_PATH
   if (!fs.existsSync(activeProjectPath)) {
     throw new Error('No active project found. Please open a project in the Axiom desktop application.')
   }
@@ -50,7 +64,7 @@ function getActiveProject(): ActiveProject {
 
 // Helper: Secure read-only SQL execution via Go daemon query gateway
 async function queryDb(workspaceId: string, sql: string, params: any[] = []): Promise<any[]> {
-  const res = await fetch('http://localhost:7743/api/query', {
+  const res = await fetch(`${API_BASE}/api/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workspaceId, sql, params }),
@@ -64,7 +78,7 @@ async function queryDb(workspaceId: string, sql: string, params: any[] = []): Pr
 // Helper: Post agent activity log to Go backend which broadcasts to WS client UI
 async function postAgentActivity(workspaceId: string, message: string, level: 'info' | 'warn' | 'success' | 'error') {
   try {
-    await fetch('http://localhost:7743/api/agent/activity', {
+    await fetch(`${API_BASE}/api/agent/activity`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workspaceId, message, level }),
@@ -88,7 +102,7 @@ async function postAgentAction(
   error?: string,
 ) {
   try {
-    await fetch('http://localhost:7743/api/agent/action', {
+    await fetch(`${API_BASE}/api/agent/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -110,7 +124,7 @@ async function postAgentAction(
 // Helper: resolve a sheet by ID or exact name.
 async function resolveSheetId(workspaceId: string, ref: string): Promise<string> {
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(ref)) return ref
-  const res = await fetch(`http://localhost:7743/api/sheets?workspace=${encodeURIComponent(workspaceId)}`)
+  const res = await fetch(`${API_BASE}/api/sheets?workspace=${encodeURIComponent(workspaceId)}`)
   if (!res.ok) throw new Error(`sheets list failed: ${await res.text()}`)
   const sheets = await res.json() as { id: string; name: string }[]
   const hit = (sheets ?? []).find(s => s.name === ref) ?? (sheets ?? []).find(s => s.name.toLowerCase() === ref.toLowerCase())
@@ -157,7 +171,7 @@ async function canvasTrailer(workspaceId: string, toolName: string): Promise<str
   if (CANVAS_TOOLS.has(toolName)) return ''
   try {
     const res = await fetch(
-      `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(workspaceId)}&peek=1`
+      `${API_BASE}/api/canvas/outbox?workspace=${encodeURIComponent(workspaceId)}&peek=1`
     )
     if (!res.ok) return ''
     const { queued } = await res.json() as { queued: number }
@@ -191,7 +205,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
   }
   const project = getActiveProject()
   const res = await fetch(
-    `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=prompt`
+    `${API_BASE}/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=prompt`
   )
   const msgs = res.ok ? (await res.json() as any[]) ?? [] : []
   const text = msgs.length === 0
@@ -207,656 +221,275 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 
 // ─── Tool list ─────────────────────────────────────────────────────────────
 
+// ─── Tool surface ───────────────────────────────────────────────────────────
+//
+// Fifteen tools, not fifty-nine. Every legacy tool still executes — see
+// toolRouting.ts — but only the consolidated set is advertised, because the
+// listing is paid for on every single request an agent makes.
+//
+// Descriptions are deliberately short. They are the other half of the token
+// cost, and a tool whose purpose needs a paragraph is usually two tools.
+
+const CORE_TOOLS = [
+  {
+    name: 'get_architecture',
+    description: "Read any part of the architecture map. Use `scope` to say what you want: overview | systems | system_files | files | unclassified | node | neighbors | family | cross_dependencies | dependency_graph | infra | infra_for_files | infra_catalog | hotspots. Start here before editing anything.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string', description: 'What to describe. Defaults to overview.' },
+        id: { type: 'string', description: 'Single system/node/file id, for the scopes that take one' },
+        ids: { type: 'array', items: { type: 'string' }, description: 'Several ids, for systems / infra_for_files' },
+        depth: { type: 'number', description: 'How far to walk, for neighbors / family' },
+        limit: { type: 'number' },
+        minWeight: { type: 'number', description: 'cross_dependencies: ignore edges lighter than this' },
+        status: { type: 'string', description: 'infra: filter by confirmed/proposed' },
+      },
+    },
+  },
+  {
+    name: 'search_symbols',
+    description: 'Find symbols by name across the workspace. The fastest way to locate something when you know roughly what it is called.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        limit: { type: 'number' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'get_symbols',
+    description: 'List the symbols in one or more files, or fetch a single function body when you pass file + symbol.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileIds: { type: 'array', items: { type: 'string' }, description: 'File IDs or relative paths' },
+        file: { type: 'string', description: 'With `symbol`, returns that function body' },
+        symbol: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'trace_calls',
+    description: "Follow calls through the code: from → to for a path between two files, or fileIds for the call graph around a set of files. Traces animate live on the human's canvas as you run them.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string' },
+        to: { type: 'string' },
+        fileIds: { type: 'array', items: { type: 'string' } },
+        direction: { type: 'string', description: 'in | out | both' },
+        depth: { type: 'number' },
+      },
+    },
+  },
+  {
+    name: 'get_data_flow',
+    description: 'Trace where a variable is defined, written and read across files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        variable: { type: 'string' },
+        file: { type: 'string' },
+        maxFiles: { type: 'number' },
+      },
+      required: ['variable'],
+    },
+  },
+  {
+    name: 'edit_systems',
+    description: "Curate the architecture map itself. The indexer infers systems from code topology and gets you most of the way; it cannot know the architecture in the human's head. When you see boundaries that are wrong — a system that should be split, files in the wrong place, two systems that are really one — fix them here. Do this after building, and during first-run review. ops: create | update | delete | assign | merge | bulk.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', description: 'create | update | delete | assign | merge | bulk' },
+        systemId: { type: 'string' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        parentId: { type: 'string' },
+        fileIds: { type: 'array', items: { type: 'string' }, description: 'assign: files to move into systemId' },
+        filePaths: { type: 'array', items: { type: 'string' } },
+        sourceSystemId: { type: 'string', description: 'merge: system to absorb' },
+        targetSystemId: { type: 'string', description: 'merge: system to keep' },
+        updates: { type: 'array', items: { type: 'object' }, description: 'bulk: several system updates at once' },
+      },
+      required: ['op'],
+    },
+  },
+  {
+    name: 'edit_infra',
+    description: 'Record the infrastructure the code actually talks to — databases, queues, caches, external APIs — and connect it to the files that use it. ops: create | update | delete | connect.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', description: 'create | update | delete | connect' },
+        id: { type: 'string' },
+        name: { type: 'string' },
+        service: { type: 'string' },
+        category: { type: 'string' },
+        subtype: { type: 'string' },
+        status: { type: 'string' },
+        config: { type: 'object' },
+        src: { type: 'string', description: 'connect: file or system id' },
+        srcType: { type: 'string' },
+        infraId: { type: 'string' },
+        kind: { type: 'string', description: 'connect: READS | WRITES | PUBLISHES | ...' },
+        evidence: { type: 'string', description: 'connect: file:line justifying the edge' },
+      },
+      required: ['op'],
+    },
+  },
+  {
+    name: 'edit_sheet',
+    description: 'Work with sheets — named diagrams layered over the live map. ops: list | get | create | add | annotate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', description: 'list | get | create | add | annotate' },
+        sheet: { type: 'string', description: 'Sheet id or exact name' },
+        name: { type: 'string' },
+        purpose: { type: 'string' },
+        members: { type: 'array', items: { type: 'object' } },
+        target: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['op'],
+    },
+  },
+  {
+    name: 'get_inbox',
+    description: 'Pending work from the human: messages, dispatched build plans, and staged UML changes. Call this first in a session. Pass waitSeconds to block until something arrives instead of polling.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        waitSeconds: { type: 'number', description: 'Block up to this long waiting for new work' },
+      },
+    },
+  },
+  {
+    name: 'get_build_plan',
+    description: 'Fetch a dispatched build plan: the boxes, paths, relationships and constraints the human drew for you to implement. By sheet, or by plan id.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheet: { type: 'string' },
+        id: { type: 'string' },
+      },
+    },
+  },
+  {
+    name: 'plan_element',
+    description: 'Draw a planned element onto a sheet — a class, service or data store you intend to build. The human sees it appear and can confirm or reject before you write code.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sheet: { type: 'string' },
+        name: { type: 'string' },
+        kind: { type: 'string' },
+        declaredPath: { type: 'string', description: 'Where it will live' },
+        members: { type: 'array', items: { type: 'object' } },
+        notes: { type: 'string' },
+        shape: { type: 'string' },
+        color: { type: 'string' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'reply_to_canvas',
+    description: 'Answer a message the human left on the canvas. Your reply is anchored to whatever they were pointing at.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        msgId: { type: 'string' },
+        body: { type: 'string' },
+      },
+      required: ['msgId', 'body'],
+    },
+  },
+  {
+    name: 'start_work',
+    description: "Declare what you are about to build, BEFORE editing files. Every structural change you then make is recorded under this goal, so the human's Morning Delta shows your intent next to its architectural effect instead of bare topology. Call this at the start of any multi-file task.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'What you are setting out to do, in one plain sentence' },
+        agent: { type: 'string', description: 'Your name/model, so the human knows who did the work' },
+        focus: { type: 'array', items: { type: 'string' }, description: 'System or file ids you expect to touch' },
+      },
+      required: ['goal'],
+    },
+  },
+  {
+    name: 'update_work',
+    description: "Record a decision or caveat while you work — especially anything the human would otherwise reverse-engineer from the diff: why you crossed a boundary, what you deliberately skipped, a tradeoff you took. Pass done:true with a summary to close the session.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        note: { type: 'string', description: 'The decision, reason or caveat' },
+        summary: { type: 'string', description: 'With done:true — what changed architecturally' },
+        done: { type: 'boolean', description: 'Close this work session' },
+      },
+    },
+  },
+]
+
+const DEBUG_PROFILE_TOOLS = [
+  {
+    name: 'debug_runtime',
+    description: 'Live runtime debugging: watch symbols, inject test values, launch and inspect a target. ops: watch | unwatch | inject | cancel_inject | snapshot | launch | stop | log.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string' },
+        file: { type: 'string' },
+        symbol: { type: 'string' },
+        param_name: { type: 'string' },
+        value: {},
+        once: { type: 'boolean' },
+        injectId: { type: 'string' },
+        command: { type: 'string' },
+        cwd: { type: 'string' },
+        language: { type: 'string' },
+        targetId: { type: 'string' },
+      },
+      required: ['op'],
+    },
+  },
+  {
+    name: 'investigation',
+    description: 'Record a debugging session as a replayable timeline. ops: start | note | stop | list | get.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string' },
+        name: { type: 'string' },
+        text: { type: 'string' },
+        id: { type: 'string' },
+      },
+      required: ['op'],
+    },
+  },
+]
+
+// Runtime/investigation tooling is real capability but wrong as a default: a
+// coding agent does not need value injection in its context to write a class.
+// Opt in with AXIOM_MCP_PROFILE=debug.
+const DEBUG_PROFILE_ENABLED = (process.env.AXIOM_MCP_PROFILE ?? '').toLowerCase() === 'debug'
+
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'get_systems_overview',
-      description: 'Get a high-level overview of all systems, subsystems, descriptions, and file counts in the current workspace.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'get_unclassified_files',
-      description: 'Get a list of files that have not yet been grouped or assigned into any system.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'get_system_files',
-      description: 'Get a list of files assigned to a specific system ID.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          systemId: { type: 'string', description: 'System Node ID (UUID)' },
-        },
-        required: ['systemId'],
-      },
-    },
-    {
-      name: 'get_raw_files',
-      description: 'Get a list of all indexed files, their relative paths, languages, and assigned systems.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'get_call_graph',
-      description: 'Get the file-level import and call graph for dependency analysis.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'search_symbols',
-      description: 'Search across all code symbol definitions (functions, classes, interfaces, etc.).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Fuzzy symbol name' },
-          limit: { type: 'number', description: 'Max results', default: 20 },
-        },
-        required: ['query'],
-      },
-    },
-    {
-      name: 'get_node',
-      description: 'Retrieve full metadata for any node (system, file, or infra) by its ID.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Node ID (UUID)' },
-        },
-        required: ['id'],
-      },
-    },
-    {
-      name: 'get_neighbors',
-      description: 'Retrieve nodes and dependencies within N hops of a focused node ID.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Focus Node ID (UUID)' },
-          depth: { type: 'number', description: 'Hop depth', default: 2 },
-        },
-        required: ['id'],
-      },
-    },
-    {
-      name: 'create_system',
-      description: 'Create a named system on the Axiom canvas. Systems contain related files or other subsystems.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'System name (e.g. "Auth System", "Routing Engine")' },
-          description: { type: 'string', description: 'Description of what this system handles' },
-          parentId: { type: 'string', description: 'Optional ID of a parent system to nest under' },
-        },
-        required: ['name'],
-      },
-    },
-    {
-      name: 'update_system',
-      description: 'Update the properties of a system node: name, parentId (nesting), or description.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          systemId: { type: 'string', description: 'System ID (UUID) to modify' },
-          name: { type: 'string', description: 'New system name' },
-          description: { type: 'string', description: 'New system description' },
-          parentId: { type: 'string', description: 'New parent system ID (pass null or empty string to un-nest)' },
-        },
-        required: ['systemId'],
-      },
-    },
-    {
-      name: 'delete_system',
-      description: 'Delete a system node from the workspace canvas. Child subsystems and files will be unclassified (parent set to NULL).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          systemId: { type: 'string', description: 'System ID (UUID) to delete' },
-        },
-        required: ['systemId'],
-      },
-    },
-    {
-      name: 'assign_files_to_system',
-      description: 'Assign or move files into a system. Sets the parent system grouping for the files. Reassigns files regardless of current assignment - use this to move misclassified files between existing systems.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          systemId: { type: 'string', description: 'Target system ID (UUID)' },
-          fileIds: { type: 'array', items: { type: 'string' }, description: 'Array of file IDs (UUIDs) to assign' },
-          filePaths: { type: 'array', items: { type: 'string' }, description: 'Alternative: Array of file relative or absolute paths' },
-        },
-        required: ['systemId'],
-      },
-    },
-    {
-      name: 'merge_systems',
-      description: 'Merge all contents of a source system (files + subsystems) into a target system and delete the source system.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sourceSystemId: { type: 'string', description: 'System ID (UUID) to merge FROM' },
-          targetSystemId: { type: 'string', description: 'System ID (UUID) to merge INTO' },
-        },
-        required: ['sourceSystemId', 'targetSystemId'],
-      },
-    },
-    {
-      name: 'get_systems_with_files',
-      description: 'Get metadata and assigned files for multiple system IDs at once. Very efficient for bulk auditing.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          systemIds: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Array of system IDs (UUIDs)'
-          }
-        },
-        required: ['systemIds'],
-      },
-    },
-    {
-      name: 'update_systems_bulk',
-      description: 'Batch update metadata (name, description, parentId) for multiple systems at once.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          updates: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                systemId: { type: 'string', description: 'System ID (UUID) to modify' },
-                name: { type: 'string', description: 'New system name' },
-                description: { type: 'string', description: 'New system description' },
-                parentId: { type: 'string', description: 'New parent system ID (pass null or empty string to un-nest)' }
-              },
-              required: ['systemId']
-            }
-          }
-        },
-        required: ['updates'],
-      },
-    },
-    {
-      name: 'get_cross_system_dependencies',
-      description: 'Retrieve a list of file-to-file dependencies that cross system boundaries (source and target belong to different systems), formatted as a compact markdown table.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          systemId: { type: 'string', description: 'Optional: Filter dependencies where either the source or target file belongs to this system ID' },
-          minWeight: { type: 'number', description: 'Optional: Minimum dependency weight/call-count (default: 1)' },
-          limit: { type: 'number', description: 'Optional: Maximum number of dependencies to return to prevent context overflow (default: 100)' }
-        }
-      },
-    },
-    {
-      name: 'get_family',
-      description: 'Retrieve a system, all its ancestors, and descendants with their files in one tree. Scoped by depth.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          systemId: { type: 'string', description: 'System ID (UUID)' },
-          descendantDepth: { type: 'number', description: 'Optional: Max depth limit for descendant systems (default: unlimited)' }
-        },
-        required: ['systemId'],
-      },
-    },
-    {
-      name: 'get_call_graph_for_files',
-      description: 'Scoped call graph to trace imports and calls only for specific file IDs, with depth and direction filters.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          fileIds: { type: 'array', items: { type: 'string' }, description: 'Array of file IDs (UUIDs)' },
-          direction: { type: 'string', enum: ['inbound', 'outbound', 'both'], description: 'Direction of dependencies to traverse (default: both)' },
-          depth: { type: 'number', description: 'Graph traversal depth limit (default: 1)' }
-        },
-        required: ['fileIds'],
-      },
-    },
-    {
-      name: 'get_symbols_for_files',
-      description: 'Retrieve lists of symbol definitions (classes, functions, etc.) for a set of files to inspect their contents without viewing the full source code.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          fileIds: { type: 'array', items: { type: 'string' }, description: 'Array of file IDs (UUIDs)' }
-        },
-        required: ['fileIds'],
-      },
-    },
-    {
-      name: 'start_review',
-      description: 'Start the architecture baseline review process. Returns the initial review instructions, rules, and steps for the agent.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'watch_function',
-      description: 'Place a live watch on a function. Every future call streams to the Axiom canvas in real-time (node pulses, call count badge, last args/return values). Requires a running target process with the Axiom adapter — use launch_target to start one. Auto-disables above 100 calls/sec.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          file: { type: 'string', description: 'File ID (UUID), relative path, or path suffix' },
-          symbol: { type: 'string', description: 'Function or method name to watch' },
-        },
-        required: ['file', 'symbol'],
-      },
-    },
-    {
-      name: 'unwatch_function',
-      description: 'Remove a live function watch and stop streaming its calls.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          file: { type: 'string', description: 'File ID (UUID), relative path, or path suffix' },
-          symbol: { type: 'string', description: 'Function or method name to unwatch' },
-        },
-        required: ['file', 'symbol'],
-      },
-    },
-    {
-      name: 'inject_value',
-      description: 'Perturbation: override one parameter of a function on its NEXT call (one-shot by default), then observe whether downstream behavior changes — the canvas colors the perturbed path green (clean return) or red (exception). SAFETY: requires user confirmation on the canvas before arming; only primitives or flat lists/dicts can be injected; the target process must be running with the Axiom adapter. Returns pending_confirm — poll get_runtime_snapshot for armed → fired status and the observed original/injected values.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          file: { type: 'string', description: 'File ID (UUID), relative path, or path suffix' },
-          symbol: { type: 'string', description: 'Function or method name to perturb' },
-          param_name: { type: 'string', description: 'Name of the parameter to override' },
-          value: { description: 'Value to inject: number, string, boolean, null, or a flat array/object of those' },
-          once: { type: 'boolean', description: 'Fire once then auto-remove (default true). Persistent injection requires explicit false.', default: true },
-        },
-        required: ['file', 'symbol', 'param_name', 'value'],
-      },
-    },
-    {
-      name: 'cancel_injection',
-      description: 'Cancel an armed or pending value injection before it fires.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          injectId: { type: 'string', description: 'Injection ID returned by inject_value' },
-        },
-        required: ['injectId'],
-      },
-    },
-    {
-      name: 'get_runtime_snapshot',
-      description: 'Get the current runtime debugging state: connected target processes, active function watches (with call counts and last seen argument/return values), launched targets, and the most recent runtime events.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'launch_target',
-      description: 'Launch the user\'s application under Axiom with runtime tracing attached (zero code changes). Python 3.12+ streams calls with near-zero overhead via sys.monitoring. Node.js (auto-detected from `node`/`.js`/`.mjs`/`.cjs`) is AST-instrumented at module load — exact call/return/exception events with args, works for CJS and ESM including non-exported functions, and supports inject_value. Go (delve) and C#/.NET (netcoredbg) are traced via DAP — NOTE: the debugger stops the whole process on every breakpoint hit, so these are inspection-mode only (call events with args, no return events); Go auto-detected from `go run`/`.go`, C# from a `.dll` or `dotnet app.dll` (keep watches to low-frequency synchronous methods; requires a prebuilt .dll with .pdb). Pass language ("go"/"csharp") for prebuilt binaries. stdout/stderr stream to the canvas (Python/Node; retrievable via get_target_log).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          command: { type: 'array', items: { type: 'string' }, description: 'Command as argv array, e.g. ["python", "app.py"], ["node", "app.js"], ["go", "run", "."], or ["dotnet", "app.dll"]' },
-          cwd: { type: 'string', description: 'Working directory (defaults to the workspace root)' },
-          language: { type: 'string', enum: ['python', 'javascript', 'go', 'csharp', 'cpp', 'ruby', 'java'], description: 'Optional language hint. Needed to trace a prebuilt Go/C# binary, a C++ executable (gdb — build with -g, static-link on MinGW), Ruby (rdbg), or Java (java-debug). C++/Ruby/Java use blocking DAP: keep watches to low-frequency functions.' },
-        },
-        required: ['command'],
-      },
-    },
-    {
-      name: 'stop_target',
-      description: 'Stop a target process previously started with launch_target.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          targetId: { type: 'string', description: 'Target ID returned by launch_target' },
-        },
-        required: ['targetId'],
-      },
-    },
-    {
-      name: 'get_target_log',
-      description: 'Get the recent stdout/stderr output of a target process started with launch_target.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          targetId: { type: 'string', description: 'Target ID returned by launch_target' },
-        },
-        required: ['targetId'],
-      },
-    },
-    {
-      name: 'get_data_flow',
-      description: 'Variable references / data-flow slice: every file and line where a variable is defined, passed as a parameter, written (reassigned/mutated), or read. Highlights the affected files on the Axiom canvas in purple. Static analysis (tree-sitter) — cross-file matches are NAME-BASED (no type resolution), so same-named variables in unrelated files may appear; pass `file` to scope to one file, and use each ref\'s enclosingSymbol to disambiguate. Supports TS/JS/Python/Go.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          variable: { type: 'string', description: 'Variable name to slice on' },
-          file: { type: 'string', description: 'Optional: scope to a single file (ID, relative path, or path suffix) — strongly recommended for common names' },
-          maxFiles: { type: 'number', description: 'Max files to return (default 50)' },
-        },
-        required: ['variable'],
-      },
-    },
-    {
-      name: 'start_work',
-      description: "Declare what you are about to build or change, BEFORE you start editing files. Include the files or system boundaries you expect to touch: Axiom shows that scope live on the canvas and uses it to keep parallel agents' changes honestly attributed. Starting new work closes only this MCP client's previous session.",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          goal: { type: 'string', description: 'What you are setting out to do, in one plain sentence the human would recognise. e.g. "Add write-through caching to the storage layer"' },
-          agent: { type: 'string', description: 'Your name/model, so the human knows who did the work (e.g. "claude", "antigravity")' },
-          focus: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Existing file paths/IDs or system names/IDs whose boundaries this work will touch. Prefer the smallest honest scope.',
-          },
-        },
-        required: ['goal'],
-      },
-    },
-    {
-      name: 'note_work',
-      description: "Record a decision or a caveat while you work — especially anything the human would otherwise have to reverse-engineer from the diff: why you crossed a system boundary, what you deliberately did not do, a tradeoff you took. These notes appear inline in the human's Morning Delta review. Requires an active session (start_work).",
-      inputSchema: {
-        type: 'object',
-        properties: {
-          text: { type: 'string', description: 'The decision, reason, or caveat to record' },
-        },
-        required: ['text'],
-      },
-    },
-    {
-      name: 'finish_work',
-      description: 'Close the current work session with a short account of what actually changed architecturally. Write it for someone reviewing the map, not reading the diff: name the boundaries you crossed and the pieces you added or removed. Call this when your task is complete.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          summary: { type: 'string', description: 'What changed, architecturally, in one or two sentences' },
-        },
-        required: ['summary'],
-      },
-    },
-    {
-      name: 'start_investigation',
-      description: 'Begin capturing an Investigation: from now on every call path traced, function watched, runtime call/return/exception observed, value injected, data-flow slice, and note is recorded into an ordered, replayable timeline linked to the current git commit. Use this at the start of a debugging session so the whole investigation can be saved and shared. Call stop_investigation to save it.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'Human-readable name, e.g. "negative amount bypasses validation"' },
-        },
-      },
-    },
-    {
-      name: 'annotate_investigation',
-      description: 'Add a note to the active investigation timeline — your hypothesis, a finding, or a conclusion. Notes appear inline in the replay so a teammate follows your reasoning. Requires an active investigation (start_investigation).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          text: { type: 'string', description: 'The note / finding / hypothesis to record at this point in the timeline' },
-        },
-        required: ['text'],
-      },
-    },
-    {
-      name: 'stop_investigation',
-      description: 'Finalize and save the active investigation. Returns a short shareable id; opening it on the Axiom canvas replays the entire investigation step by step (traces, values, perturbations, notes) against the captured git commit.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'list_investigations',
-      description: 'List saved investigations for the current workspace (id, name, commit, event count, duration), plus the one currently recording if any.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'get_investigation',
-      description: 'Get the full recorded timeline of a saved investigation by id (all captured events with their relative timestamps, the git commit, and the canvas snapshot). Use to inspect or replay a past investigation.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Investigation id from stop_investigation / list_investigations' },
-        },
-        required: ['id'],
-      },
-    },
-    {
-      name: 'get_function_body',
-      description: 'Read the actual source code of a specific function, class, or method from the indexed symbol table. Use this after tracing a call path to inspect what each hop really does — no runtime required.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          file: { type: 'string', description: 'File ID (UUID), relative path, or path suffix (e.g. "services/payment.py")' },
-          symbol: { type: 'string', description: 'Function/class/method name as it appears in the symbol table' },
-        },
-        required: ['file', 'symbol'],
-      },
-    },
-    {
-      name: 'get_call_path',
-      description: 'Trace the function call path between two files (by file ID or relative path). Returns each hop (caller symbol → callee symbol) and automatically animates the path on the Axiom canvas so the user can follow the agent\'s debugging path in real-time.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          from: { type: 'string', description: 'Starting file ID (UUID) or relative path' },
-          to:   { type: 'string', description: 'Target file ID (UUID) or relative path' },
-        },
-        required: ['from', 'to'],
-      },
-    },
-    {
-      name: 'list_infra_services',
-      description: 'List the infra service registry: every external-infrastructure service Axiom can render (aws/rds, openai/api, stripe/api, generic/database, ...), grouped with its category and the edge kinds legal for that category. Call this before create_infra_node to pick a valid service id.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'list_infra',
-      description: 'List all infra nodes (databases, queues, external APIs, platforms) in the workspace with their categories, providers, statuses, and connection edges.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          status: { type: 'string', enum: ['proposed', 'confirmed', 'dismissed'], description: 'Optional: filter by proposal status' },
-        },
-      },
-    },
-    {
-      name: 'create_infra_node',
-      description: 'Create an infra node on the canvas representing an external dependency (database, cache, queue, storage, LLM API, SaaS API, auth, platform, CDN, monitoring, email). Prefer passing a registry `service` id (see list_infra_services) so the node gets correct branding and edge semantics; pass only `category` for an unbranded generic node the user can assign later.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          service: { type: 'string', description: 'Registry service id, e.g. "postgresql/postgres", "aws/s3", "openai/api". Category/provider/branding derive from it.' },
-          name: { type: 'string', description: 'Display name, e.g. "Primary DB", "Payments API". Defaults to the service name.' },
-          category: { type: 'string', description: 'Only when no service is given: database|cache|queue|storage|search|llm|api|auth|platform|cdn|observability|email' },
-          subtype: { type: 'string', description: 'Optional category subtype, e.g. sql|document|kv|vector for databases' },
-          config: { type: 'object', description: 'Optional config values for the service\'s configFields (never put secrets here)' },
-        },
-      },
-    },
-    {
-      name: 'update_infra_node',
-      description: 'Update an infra node: rename, reskin to a different service (e.g. generic/database → aws/rds once the actual DB is known), change status (confirm/dismiss a proposal), or edit config.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Infra node ID (UUID)' },
-          name: { type: 'string' },
-          service: { type: 'string', description: 'New registry service id — re-derives category, provider, and branding' },
-          status: { type: 'string', enum: ['proposed', 'confirmed', 'dismissed'] },
-          config: { type: 'object' },
-        },
-        required: ['id'],
-      },
-    },
-    {
-      name: 'delete_infra_node',
-      description: 'Delete an infra node from the canvas. Its connection edges are removed automatically.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Infra node ID (UUID)' },
-        },
-        required: ['id'],
-      },
-    },
-    {
-      name: 'connect_infra',
-      description: 'Connect a file or system to an infra node with a semantically typed edge. The edge kind must be legal for the node\'s category: database READS|WRITES|MIGRATES, cache READS|WRITES, queue PUBLISHES|CONSUMES, storage READS|WRITES, search QUERIES|INDEXES, llm/api CALLS (api also HANDLES_WEBHOOK), auth AUTHENTICATES_VIA, platform DEPLOYS_TO, cdn SERVES_VIA, observability REPORTS_TO, email SENDS_VIA.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          src: { type: 'string', description: 'Source file ID/relative path, or system ID' },
-          srcType: { type: 'string', enum: ['file', 'system'], description: 'What src refers to', default: 'file' },
-          infraId: { type: 'string', description: 'Target infra node ID (UUID)' },
-          kind: { type: 'string', description: 'Edge kind (see description for legal kinds per category)' },
-          evidence: { type: 'string', description: 'Optional file:line justifying the connection, e.g. "src/db.ts:14"' },
-        },
-        required: ['src', 'infraId', 'kind'],
-      },
-    },
-    {
-      name: 'get_activity_hotspots',
-      description: 'List the files with the most recent live edit activity, ranked by a time-decayed score (24h half-life) weighted by structural change (symbols added/removed/moved). This is where the codebase is changing RIGHT NOW — the highest-value places to look for fresh bugs, regressions, or in-flight work. Tracks live saves (human and agent), not git commits.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          limit: { type: 'number', description: 'Max files to return', default: 20 },
-        },
-      },
-    },
-    {
-      name: 'list_sheets',
-      description: 'List all Sheets (named, curated UML-style diagrams over the live code model) with their names, purposes, kinds, and revisions.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'get_sheet',
-      description: 'Read a Sheet as ASM text (Axiom Sheet Markup) — the agent-facing rendering: members as durable URIs (file://relpath, sys://name, infra://service), containment by indentation, notes inline, tombstones/ghosts as bracket tags. This is how you SEE a diagram.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sheet: { type: 'string', description: 'Sheet ID or exact sheet name' },
-        },
-        required: ['sheet'],
-      },
-    },
-    {
-      name: 'create_sheet',
-      description: 'Create a Sheet — a curated diagram telling one story about the codebase (e.g. "Payment flow"). Pass member refs (file relative paths, system names, or infra node names/ids); elements are live references, never copies. Use this to ANSWER architecture questions visually: build the sheet, then direct the user to it.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: 'Sheet title, e.g. "Checkout flow"' },
-          purpose: { type: 'string', description: 'One line: what story this sheet tells' },
-          members: { type: 'array', items: { type: 'string' }, description: 'Refs: file relative paths, system names, infra names, or UUIDs' },
-        },
-        required: ['name'],
-      },
-    },
-    {
-      name: 'add_to_sheet',
-      description: 'Add elements to an existing sheet by ref (file relative path, system name, infra name, or UUID).',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sheet: { type: 'string', description: 'Sheet ID or name' },
-          members: { type: 'array', items: { type: 'string' } },
-        },
-        required: ['sheet', 'members'],
-      },
-    },
-    {
-      name: 'annotate_sheet',
-      description: 'Attach a note to a sheet, optionally pinned to a specific element (file/system/infra ref). Agent notes render amber on the canvas so the user sees who wrote what. Use for explanations, warnings ("this path bypasses validation"), and decisions.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sheet: { type: 'string', description: 'Sheet ID or name (omit for a workspace-global note)' },
-          target: { type: 'string', description: 'Optional element ref to pin to (file path / system name / infra name)' },
-          body: { type: 'string', description: 'Markdown note body' },
-        },
-        required: ['body'],
-      },
-    },
-    {
-      name: 'plan_element',
-      description: 'Propose a PLANNED element on a sheet before writing code. Agent-created elements enter pending approval on the canvas; do not implement them until get_plan_status reports approved. Once approved, Axiom reconciles automatically as code is built and the user watches members turn green.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sheet: { type: 'string', description: 'Sheet ID or name' },
-          name: { type: 'string', description: 'Element name, e.g. "AuthService"' },
-          kind: { type: 'string', enum: ['class', 'file', 'system'], default: 'class' },
-          declaredPath: { type: 'string', description: 'Relative path where this should be created, e.g. "src/services/auth.ts"' },
-          members: { type: 'array', items: { type: 'object', properties: { signature: { type: 'string' }, intent: { type: 'string' } }, required: ['signature'] }, description: 'Declared functions/methods' },
-          notes: { type: 'string', description: 'One-line intent for the element' },
-          shape: { type: 'string', enum: ['box', 'folder', 'cylinder', 'hexagon'], description: 'Semantic shape: box=class/file, folder=system/package, cylinder=data store, hexagon=service/API. Defaults by kind.' },
-          color: { type: 'string', description: 'Accent hex from the drafting palette, e.g. "#5B8A9A"' },
-        },
-        required: ['sheet', 'name'],
-      },
-    },
-    {
-      name: 'get_plan_status',
-      description: 'Check whether a planned element proposed by an agent is pending, approved, or rejected. Poll this after plan_element and do not write the proposed code until approvalStatus is approved.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Planned element ID returned by plan_element' },
-        },
-        required: ['id'],
-      },
-    },
-    {
-      name: 'get_build_spec',
-      description: 'Render a sheet\'s planned (not yet built) elements as a build specification: target paths, member signature checklists ([x] = already realized), structural intent edges. Use this as your work order when the user asks you to BUILD what they designed on the canvas.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          sheet: { type: 'string', description: 'Sheet ID or name' },
-        },
-        required: ['sheet'],
-      },
-    },
-    {
-      name: 'get_canvas_updates',
-      description: 'Drain unread canvas messages from the user: notes composed on the Axiom canvas, with their selection refs and a semantic summary of canvas changes the user staged (moves, groupings, drawn edges). CALL THIS whenever a tool response carries the ⚑ unread-canvas-message trailer, and reply with reply_to_canvas.',
-      inputSchema: { type: 'object', properties: {} },
-    },
-    {
-      name: 'await_canvas',
-      description: 'Canvas collaboration mode: block until the user sends a message from the canvas (or the window times out). Returns {messages} or {timedOut: true, keep_waiting: true} — when keep_waiting is true and you are still collaborating, call await_canvas again. Use when the user says they will drive from the canvas.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          timeoutSeconds: { type: 'number', description: 'Max wait, 5–45s', default: 40 },
-        },
-      },
-    },
-    {
-      name: 'reply_to_canvas',
-      description: 'Answer a canvas message. The reply renders on the canvas as an agent note threaded to the user\'s message (their note chip flips to "answered"). Always reply — the user is waiting on the canvas, not reading this chat.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          msgId: { type: 'string', description: 'Canvas message ID (from get_canvas_updates / await_canvas)' },
-          body: { type: 'string', description: 'Markdown reply' },
-        },
-        required: ['msgId', 'body'],
-      },
-    },
-    {
-      name: 'get_infra_for_files',
-      description: 'For a set of files, list which infra nodes they touch and via which edge kinds — e.g. "which files write to the production DB?" in reverse.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          fileIds: { type: 'array', items: { type: 'string' }, description: 'File IDs (UUIDs) or relative paths' },
-        },
-        required: ['fileIds'],
-      },
-    },
-  ],
+  tools: DEBUG_PROFILE_ENABLED ? [...CORE_TOOLS, ...DEBUG_PROFILE_TOOLS] : CORE_TOOLS,
 }))
 
 // ─── Tool execution ────────────────────────────────────────────────────────
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: rawArgs } = request.params
-  const args = rawArgs as Record<string, any> ?? {}
+  let args = rawArgs as Record<string, any> ?? {}
+  // Preserved for the log: what the AGENT actually called, before routing.
+  const callerArgs = args
 
   const startedAt = Date.now()
   let loggedWorkspaceId = ''
@@ -866,7 +499,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     loggedWorkspaceId = project.workspaceId
     let result: unknown
 
-    switch (name) {
+    // Consolidated tools are rewritten into the legacy call that already
+    // implements them. Legacy names still work when called directly — they are
+    // simply no longer advertised, so they cost no context.
+    const routed = routeTool(name, args)
+    const call = routed?.tool ?? name
+    if (routed) args = routed.args
+
+    switch (call) {
       // ── READS (Queried via Go REST API Query Gateway) ──────────────────────
       case 'get_systems_overview': {
         await postAgentActivity(project.workspaceId, 'Agent queried systems overview', 'info')
@@ -1037,7 +677,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           source: 'agent',
         }
         await postAgentActivity(project.workspaceId, `Creating system "${args.name}"`, 'info')
-        const res = await fetch('http://localhost:7743/api/systems', {
+        const res = await fetch(`${API_BASE}/api/systems`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1077,7 +717,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         await postAgentActivity(project.workspaceId, `Updating system "${payload.name}"`, 'info')
-        const res = await fetch(`http://localhost:7743/api/systems/${sysId}`, {
+        const res = await fetch(`${API_BASE}/api/systems/${sysId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -1098,7 +738,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const sysLabel = existing.length > 0 ? existing[0].name : sysId
 
         await postAgentActivity(project.workspaceId, `Deleting system "${sysLabel}"`, 'info')
-        const res = await fetch(`http://localhost:7743/api/systems/${sysId}?workspace=${project.workspaceId}`, {
+        const res = await fetch(`${API_BASE}/api/systems/${sysId}?workspace=${project.workspaceId}`, {
           method: 'DELETE',
         })
         if (!res.ok) {
@@ -1142,7 +782,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await postAgentActivity(project.workspaceId, `Assigning ${idsToAssign.length} files to system "${sysLabel}"`, 'info')
 
         for (const fileId of idsToAssign) {
-          const res = await fetch(`http://localhost:7743/api/files/${fileId}/assign`, {
+          const res = await fetch(`${API_BASE}/api/files/${fileId}/assign`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ systemId, workspaceId: project.workspaceId }),
@@ -1177,7 +817,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // 1. Reassign files in source system
         const filesToMove = await queryDb(project.workspaceId, 'SELECT id FROM files WHERE system_id = ?', [sourceId])
         for (const file of filesToMove) {
-          const res = await fetch(`http://localhost:7743/api/files/${file.id}/assign`, {
+          const res = await fetch(`${API_BASE}/api/files/${file.id}/assign`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ systemId: targetId, workspaceId: project.workspaceId }),
@@ -1207,7 +847,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             width: sys.width,
             height: sys.height,
           }
-          const res = await fetch(`http://localhost:7743/api/systems/${sys.id}`, {
+          const res = await fetch(`${API_BASE}/api/systems/${sys.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -1216,7 +856,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         
         // 3. Delete the source system
-        const res = await fetch(`http://localhost:7743/api/systems/${sourceId}?workspace=${project.workspaceId}`, {
+        const res = await fetch(`${API_BASE}/api/systems/${sourceId}?workspace=${project.workspaceId}`, {
           method: 'DELETE',
         })
         if (!res.ok) throw new Error(`Failed to delete source system ${sourceId}: ${await res.text()}`)
@@ -1317,7 +957,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               height: existing.height,
             }
             
-            const res = await fetch(`http://localhost:7743/api/systems/${u.systemId}`, {
+            const res = await fetch(`${API_BASE}/api/systems/${u.systemId}`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload),
@@ -1640,7 +1280,7 @@ Steps to execute:
         const file = args.file as string
         const symbol = args.symbol as string
         await postAgentActivity(project.workspaceId, `Agent watching function: ${symbol} in ${file}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/watch', {
+        const res = await fetch(`${API_BASE}/api/runtime/watch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol }),
@@ -1654,7 +1294,7 @@ Steps to execute:
         const file = args.file as string
         const symbol = args.symbol as string
         await postAgentActivity(project.workspaceId, `Agent removed watch: ${symbol} in ${file}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/unwatch', {
+        const res = await fetch(`${API_BASE}/api/runtime/unwatch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol }),
@@ -1675,7 +1315,7 @@ Steps to execute:
           `Agent requests injection: ${symbol}(${paramName}=${JSON.stringify(value)}) in ${file} — awaiting user confirmation`,
           'warn',
         )
-        const res = await fetch('http://localhost:7743/api/runtime/inject', {
+        const res = await fetch(`${API_BASE}/api/runtime/inject`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, file, symbol, paramName, value, once }),
@@ -1688,7 +1328,7 @@ Steps to execute:
       case 'cancel_injection': {
         const injectId = args.injectId as string
         await postAgentActivity(project.workspaceId, `Agent cancelled injection ${injectId}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/inject/cancel', {
+        const res = await fetch(`${API_BASE}/api/runtime/inject/cancel`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, injectId }),
@@ -1700,7 +1340,7 @@ Steps to execute:
 
       case 'get_runtime_snapshot': {
         const res = await fetch(
-          `http://localhost:7743/api/runtime/snapshot?workspace=${encodeURIComponent(project.workspaceId)}`
+          `${API_BASE}/api/runtime/snapshot?workspace=${encodeURIComponent(project.workspaceId)}`
         )
         if (!res.ok) throw new Error(`snapshot failed: ${await res.text()}`)
         result = await res.json()
@@ -1712,7 +1352,7 @@ Steps to execute:
         const cwd = args.cwd as string | undefined
         const language = args.language as string | undefined
         await postAgentActivity(project.workspaceId, `Agent launching target: ${command.join(' ')}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/launch', {
+        const res = await fetch(`${API_BASE}/api/runtime/launch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, command, cwd, language }),
@@ -1725,7 +1365,7 @@ Steps to execute:
       case 'stop_target': {
         const targetId = args.targetId as string
         await postAgentActivity(project.workspaceId, `Agent stopping target ${targetId}`, 'info')
-        const res = await fetch('http://localhost:7743/api/runtime/stop', {
+        const res = await fetch(`${API_BASE}/api/runtime/stop`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ targetId }),
@@ -1738,7 +1378,7 @@ Steps to execute:
       case 'get_target_log': {
         const targetId = args.targetId as string
         const res = await fetch(
-          `http://localhost:7743/api/runtime/target-log?target=${encodeURIComponent(targetId)}`
+          `${API_BASE}/api/runtime/target-log?target=${encodeURIComponent(targetId)}`
         )
         if (!res.ok) throw new Error(`target-log failed: ${await res.text()}`)
         result = await res.json()
@@ -1757,7 +1397,7 @@ Steps to execute:
           else if (resolved.fileId) focusFileIds.push(resolved.fileId)
           else throw new Error(`Work focus "${ref}" is infrastructure; use a file or system boundary`)
         }
-        const res = await fetch('http://localhost:7743/api/work/start', {
+        const res = await fetch(`${API_BASE}/api/work/start`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             workspaceId: project.workspaceId,
@@ -1779,7 +1419,7 @@ Steps to execute:
         const text = args.text as string
         const sessionId = activeWorkSessionIds.get(project.workspaceId)
         if (!sessionId) throw new Error('No active work session in this MCP client — call start_work first')
-        const res = await fetch('http://localhost:7743/api/work/note', {
+        const res = await fetch(`${API_BASE}/api/work/note`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, sessionId, text }),
         })
@@ -1793,7 +1433,7 @@ Steps to execute:
         const summary = args.summary as string
         const sessionId = activeWorkSessionIds.get(project.workspaceId)
         if (!sessionId) throw new Error('No active work session in this MCP client — call start_work first')
-        const res = await fetch('http://localhost:7743/api/work/finish', {
+        const res = await fetch(`${API_BASE}/api/work/finish`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, sessionId, summary }),
         })
@@ -1806,7 +1446,7 @@ Steps to execute:
 
       case 'start_investigation': {
         const name = (args.name as string) ?? ''
-        const res = await fetch('http://localhost:7743/api/investigation/start', {
+        const res = await fetch(`${API_BASE}/api/investigation/start`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, name }),
         })
@@ -1818,7 +1458,7 @@ Steps to execute:
 
       case 'annotate_investigation': {
         const text = args.text as string
-        const res = await fetch('http://localhost:7743/api/investigation/note', {
+        const res = await fetch(`${API_BASE}/api/investigation/note`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, text }),
         })
@@ -1829,7 +1469,7 @@ Steps to execute:
       }
 
       case 'stop_investigation': {
-        const res = await fetch('http://localhost:7743/api/investigation/stop', {
+        const res = await fetch(`${API_BASE}/api/investigation/stop`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId }),
         })
@@ -1840,7 +1480,7 @@ Steps to execute:
       }
 
       case 'list_investigations': {
-        const res = await fetch(`http://localhost:7743/api/investigation/list?workspace=${encodeURIComponent(project.workspaceId)}`)
+        const res = await fetch(`${API_BASE}/api/investigation/list?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`list_investigations failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1848,7 +1488,7 @@ Steps to execute:
 
       case 'get_investigation': {
         const id = args.id as string
-        const res = await fetch(`http://localhost:7743/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(project.workspaceId)}`)
+        const res = await fetch(`${API_BASE}/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`get_investigation failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1862,7 +1502,7 @@ Steps to execute:
         const params = new URLSearchParams({ workspace: project.workspaceId, variable })
         if (file) params.set('file', file)
         if (maxFiles) params.set('maxFiles', String(maxFiles))
-        const res = await fetch(`http://localhost:7743/api/data-flow?${params.toString()}`)
+        const res = await fetch(`${API_BASE}/api/data-flow?${params.toString()}`)
         if (!res.ok) throw new Error(`data-flow failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1873,7 +1513,7 @@ Steps to execute:
         const symbol = args.symbol as string
         await postAgentActivity(project.workspaceId, `Agent reading function body: ${symbol} in ${file}`, 'info')
         const res = await fetch(
-          `http://localhost:7743/api/function-body?workspace=${encodeURIComponent(project.workspaceId)}&file=${encodeURIComponent(file)}&symbol=${encodeURIComponent(symbol)}`
+          `${API_BASE}/api/function-body?workspace=${encodeURIComponent(project.workspaceId)}&file=${encodeURIComponent(file)}&symbol=${encodeURIComponent(symbol)}`
         )
         if (!res.ok) {
           const errMsg = await res.text()
@@ -1907,7 +1547,7 @@ Steps to execute:
         await postAgentActivity(project.workspaceId, `Agent tracing call path: ${from} → ${to}`, 'info')
 
         const res = await fetch(
-          `http://localhost:7743/api/call-path?workspace=${encodeURIComponent(project.workspaceId)}&from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`
+          `${API_BASE}/api/call-path?workspace=${encodeURIComponent(project.workspaceId)}&from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`
         )
         if (!res.ok) {
           const errMsg = await res.text()
@@ -1927,7 +1567,7 @@ Steps to execute:
 
       // ── Infra layer (INFRA_LAYER_PLAN.md Phase I1) ─────────────────────────
       case 'list_infra_services': {
-        const res = await fetch('http://localhost:7743/api/registry/services')
+        const res = await fetch(`${API_BASE}/api/registry/services`)
         if (!res.ok) throw new Error(`registry fetch failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -1935,7 +1575,7 @@ Steps to execute:
 
       case 'list_infra': {
         await postAgentActivity(project.workspaceId, 'Agent listed infra nodes', 'info')
-        const res = await fetch(`http://localhost:7743/api/infra?workspace=${encodeURIComponent(project.workspaceId)}`)
+        const res = await fetch(`${API_BASE}/api/infra?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`infra list failed: ${await res.text()}`)
         const data = await res.json() as { nodes: any[]; edges: any[] }
         if (args.status) {
@@ -1948,7 +1588,7 @@ Steps to execute:
       case 'create_infra_node': {
         const label = (args.name as string) || (args.service as string) || (args.category as string) || 'infra node'
         await postAgentActivity(project.workspaceId, `Agent creating infra node "${label}"`, 'info')
-        const res = await fetch('http://localhost:7743/api/infra', {
+        const res = await fetch(`${API_BASE}/api/infra`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1972,7 +1612,7 @@ Steps to execute:
       }
 
       case 'update_infra_node': {
-        const res = await fetch(`http://localhost:7743/api/infra/${encodeURIComponent(args.id as string)}`, {
+        const res = await fetch(`${API_BASE}/api/infra/${encodeURIComponent(args.id as string)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1991,7 +1631,7 @@ Steps to execute:
 
       case 'delete_infra_node': {
         const res = await fetch(
-          `http://localhost:7743/api/infra/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`,
+          `${API_BASE}/api/infra/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`,
           { method: 'DELETE' }
         )
         if (!res.ok) throw new Error(`delete infra failed: ${await res.text()}`)
@@ -2015,7 +1655,7 @@ Steps to execute:
           srcId = rows[0].id
         }
         await postAgentActivity(project.workspaceId, `Agent connecting ${args.src} → infra (${args.kind})`, 'info')
-        const res = await fetch('http://localhost:7743/api/infra/connect', {
+        const res = await fetch(`${API_BASE}/api/infra/connect`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2036,7 +1676,7 @@ Steps to execute:
       case 'get_activity_hotspots': {
         const limit = args.limit ?? 20
         const res = await fetch(
-          `http://localhost:7743/api/activity/hotspots?workspace=${encodeURIComponent(project.workspaceId)}&limit=${limit}`
+          `${API_BASE}/api/activity/hotspots?workspace=${encodeURIComponent(project.workspaceId)}&limit=${limit}`
         )
         if (!res.ok) throw new Error(`hotspots failed: ${await res.text()}`)
         const hots = await res.json() as any[]
@@ -2081,7 +1721,7 @@ Steps to execute:
 
       // ── Sheets (UML experience layer — UML_UX_PLAN.md U1) ─────────────────
       case 'list_sheets': {
-        const res = await fetch(`http://localhost:7743/api/sheets?workspace=${encodeURIComponent(project.workspaceId)}`)
+        const res = await fetch(`${API_BASE}/api/sheets?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`sheets list failed: ${await res.text()}`)
         result = await res.json()
         break
@@ -2090,7 +1730,7 @@ Steps to execute:
       case 'get_sheet': {
         const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
         const res = await fetch(
-          `http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/asm?workspace=${encodeURIComponent(project.workspaceId)}`
+          `${API_BASE}/api/sheets/${encodeURIComponent(sheetId)}/asm?workspace=${encodeURIComponent(project.workspaceId)}`
         )
         if (!res.ok) throw new Error(`get sheet failed: ${await res.text()}`)
         const data = await res.json() as { asm: string }
@@ -2105,7 +1745,7 @@ Steps to execute:
           elements.push(await resolveModelRef(project.workspaceId, ref))
         }
         await postAgentActivity(project.workspaceId, `Agent creating sheet "${args.name}"`, 'info')
-        const res = await fetch('http://localhost:7743/api/sheets', {
+        const res = await fetch(`${API_BASE}/api/sheets`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2129,7 +1769,7 @@ Steps to execute:
         for (const ref of (args.members as string[]) ?? []) {
           elements.push(await resolveModelRef(project.workspaceId, ref))
         }
-        const res = await fetch(`http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/elements`, {
+        const res = await fetch(`${API_BASE}/api/sheets/${encodeURIComponent(sheetId)}/elements`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, elements: elements.map(e => ({ ...e, addedBy: 'agent' })) }),
@@ -2150,7 +1790,7 @@ Steps to execute:
           else if (ref.systemId) { targetType = 'system'; targetId = ref.systemId }
           else if (ref.infraId) { targetType = 'infra'; targetId = ref.infraId }
         }
-        const res = await fetch('http://localhost:7743/api/annotations', {
+        const res = await fetch(`${API_BASE}/api/annotations`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2168,7 +1808,7 @@ Steps to execute:
 
       case 'plan_element': {
         const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
-        const res = await fetch(`http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/planned`, {
+        const res = await fetch(`${API_BASE}/api/sheets/${encodeURIComponent(sheetId)}/planned`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2197,7 +1837,7 @@ Steps to execute:
 
       case 'get_plan_status': {
         const res = await fetch(
-          `http://localhost:7743/api/planned/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`
+          `${API_BASE}/api/planned/${encodeURIComponent(args.id as string)}?workspace=${encodeURIComponent(project.workspaceId)}`
         )
         if (!res.ok) throw new Error(`plan status failed: ${await res.text()}`)
         const planned = await res.json() as any
@@ -2218,7 +1858,7 @@ Steps to execute:
       case 'get_build_spec': {
         const sheetId = await resolveSheetId(project.workspaceId, args.sheet as string)
         const res = await fetch(
-          `http://localhost:7743/api/sheets/${encodeURIComponent(sheetId)}/buildspec?workspace=${encodeURIComponent(project.workspaceId)}`
+          `${API_BASE}/api/sheets/${encodeURIComponent(sheetId)}/buildspec?workspace=${encodeURIComponent(project.workspaceId)}`
         )
         if (!res.ok) throw new Error(`build spec failed: ${await res.text()}`)
         const data = await res.json() as { buildSpec: string }
@@ -2229,7 +1869,7 @@ Steps to execute:
       // ── Canvas → agent channel (UML_UX_PLAN.md U-C) ────────────────────────
       case 'get_canvas_updates': {
         const res = await fetch(
-          `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
+          `${API_BASE}/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
         )
         if (!res.ok) throw new Error(`canvas outbox failed: ${await res.text()}`)
         const msgs = await res.json() as any[]
@@ -2248,7 +1888,7 @@ Steps to execute:
         let messages: any[] = []
         while (Date.now() < deadline) {
           const res = await fetch(
-            `http://localhost:7743/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
+            `${API_BASE}/api/canvas/outbox?workspace=${encodeURIComponent(project.workspaceId)}&agent=mcp`
           )
           if (res.ok) {
             messages = await res.json() as any[] ?? []
@@ -2263,7 +1903,7 @@ Steps to execute:
       }
 
       case 'reply_to_canvas': {
-        const res = await fetch('http://localhost:7743/api/canvas/reply', {
+        const res = await fetch(`${API_BASE}/api/canvas/reply`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -2283,9 +1923,10 @@ Steps to execute:
 
     // Every tool lands here, so a tool added later is visible on the canvas
     // and in the log without anyone remembering to instrument it.
-    void postAgentAction(project.workspaceId, name, args, result, startedAt)
+    // Logged under the name the AGENT used, not the legacy name it routed to.
+    void postAgentAction(project.workspaceId, name, callerArgs, result, startedAt)
 
-    const trailer = await canvasTrailer(project.workspaceId, name)
+    const trailer = await canvasTrailer(project.workspaceId, call)
     return {
       content: [{
         type: 'text',
@@ -2297,7 +1938,7 @@ Steps to execute:
     // A failed attempt is still something the agent did, and seeing it fail is
     // often the most useful entry in the log.
     if (loggedWorkspaceId) {
-      void postAgentAction(loggedWorkspaceId, name, args, undefined, startedAt, msg)
+      void postAgentAction(loggedWorkspaceId, name, callerArgs, undefined, startedAt, msg)
     }
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: msg }) }],

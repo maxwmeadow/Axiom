@@ -801,7 +801,9 @@ func (s *Server) handleActivityHotspots(w http.ResponseWriter, r *http.Request) 
 		entries[i] = activity.ScoreEntry{ID: f.ID, Score: f.ActivityScore, AtMs: f.ActivityAt}
 	}
 	norm := activity.Normalize(entries, now)
-	var hots []hotspot
+	// Empty must serialize as [] — a quiet workspace is a normal answer, and a
+	// null here crashes every client that iterates the result.
+	hots := []hotspot{}
 	for _, f := range files {
 		d := activity.Decayed(f.ActivityScore, f.ActivityAt, now)
 		if d <= 0 {

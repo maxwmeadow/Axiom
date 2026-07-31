@@ -55,6 +55,9 @@ export function actionKind(tool: string): ActionKind {
 
 /** Argument keys that carry a canvas node identity, in priority order. */
 const ID_KEYS = [
+  // Consolidated surface: get_architecture and friends take a generic id/ids.
+  // Missing these is why a read once lit nothing on the canvas.
+  'id', 'ids',
   'fileId', 'fileIds', 'systemId', 'systemIds', 'nodeId', 'nodeIds',
   'infraId', 'targetId', 'sourceId', 'from', 'to', 'src', 'dst',
   'focusSystemIds', 'focusFileIds',
