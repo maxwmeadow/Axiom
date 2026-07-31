@@ -11,7 +11,10 @@ import { readFileSync } from 'node:fs'
  * cannot creep back without someone deciding to raise the limit on purpose.
  */
 
+// Normalized on read: git checks this file out with CRLF on Windows, and a
+// regex anchored to "\n" silently matches nothing rather than failing loudly.
 const source = readFileSync(new URL('./axiom-mcp.ts', import.meta.url), 'utf8')
+  .replace(/\r\n/g, '\n')
 
 function sliceBetween(start, end) {
   const from = source.indexOf(start)
