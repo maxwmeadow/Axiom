@@ -6354,3 +6354,13 @@ select.axiom-inspector-input {
     animation-duration: 1ms;
   }
 }
+
+/* Node paper stock. Defined as a variable so sheet mode can change the light
+   without any node component knowing that sheets exist. */
+.axiom-shape-texture {
+  fill: var(--node-paper, url(#axiom-paper));
+}
+
+.axiom-sheet-mode {
+  --node-paper: url(#axiom-paper-sheet);
+}

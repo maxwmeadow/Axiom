@@ -102,6 +102,7 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
   const pathRef = useRef<SVGPathElement>(null)
   const rimRef = useRef<SVGPathElement>(null)
   const clipRef = useRef<SVGPathElement>(null)
+  const textureRef = useRef<SVGPathElement>(null)
   useLayoutEffect(() => {
     const svg = ref.current
     const el = svg?.parentElement
@@ -113,6 +114,7 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
       svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
       pathRef.current?.setAttribute('d', shellPath(shape, w, h))
       clipRef.current?.setAttribute('d', shellPath(shape, w, h))
+      textureRef.current?.setAttribute('d', shellPath(shape, w, h))
       rimRef.current?.setAttribute('d', cylinderRimPath(w))
     }
     const computed = getComputedStyle(el)
@@ -152,6 +154,16 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
         strokeWidth={strokeWidth}
         strokeDasharray={dashed ? '6 4' : undefined}
         style={{ filter: CARD_SHADOW, transition: 'stroke 0.2s ease' }}
+      />
+      {/* Paper stock, clipped to the silhouette by sharing the shell path, so a
+          hexagon or cylinder is textured to its own edge rather than to a box.
+          Sits above the fill and below the head band and content. */}
+      <path
+        ref={textureRef}
+        className="axiom-shape-texture"
+        d={shellPath(shape, 180, 72)}
+        stroke="none"
+        pointerEvents="none"
       />
       {headBand ? (
         <>

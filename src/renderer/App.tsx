@@ -10,6 +10,7 @@ import { SearchBar } from './components/SearchBar'
 import { AgentConnectBanner } from './components/AgentConnectBanner'
 import { InjectConfirmBanner } from './components/InjectConfirmBanner'
 import { AgentLogPanel } from './components/AgentLogPanel'
+import { PaperTextureDefs } from './canvas/nodes/PaperTexture'
 import { DeltaPanel } from './components/DeltaPanel'
 import { ReplayBar } from './components/ReplayBar'
 import { OnboardingGuide } from './components/OnboardingGuide'
@@ -300,6 +301,9 @@ export default function App() {
           <ErrorBoundary>
             <AxiomCanvas />
           </ErrorBoundary>
+
+          {/* Paint servers every node references. Defined once; renders nothing. */}
+          <PaperTextureDefs />
 
           {/* Morning Delta — what changed while you weren't watching */}
           <DeltaPanel />
