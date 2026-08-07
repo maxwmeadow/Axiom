@@ -188,3 +188,14 @@
   from { opacity: 0; transform: translate(-50%, -6px); }
   to   { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* ─── Entry ─────────────────────────────────────────────────────────────────
+   Held frame while the resume decision is made. Deliberately empty and the
+   same colour as the board: a spinner here would advertise a wait that is
+   normally a single frame, and painting the launcher first only to yank it
+   away reads as a glitch. */
+.axiom-resume-hold {
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg-deep);
+}

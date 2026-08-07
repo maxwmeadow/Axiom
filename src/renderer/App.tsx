@@ -23,6 +23,7 @@ import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
 import { useGraphStore, connectToArchd } from './store/graphStore'
 import { useOnboardingStore } from './store/onboardingStore'
 import { raiseFailure, useInterruptionStore } from './store/interruptionStore'
+import { resumeDecision } from '../shared/sessionResume'
 import { useRegistryStore } from './store/registryStore'
 import { SheetRail } from './components/SheetRail'
 import type { ProjectConfig } from '../shared/types'
@@ -51,6 +52,31 @@ const E2E_PROJECT: ProjectConfig = {
   openedAt: 0,
 }
 
+// Which project was open when we last closed. Absent means the user backed out
+// to the launcher on purpose, which the next launch has to respect.
+const RESUME_KEY = 'axiom_resume_project'
+
+function rememberOpenProject(projectId: string) {
+  try {
+    localStorage.setItem(RESUME_KEY, projectId)
+  } catch {
+    // Storage refused; resume degrades to the launcher, which is the old
+    // behavior and never wrong, only slower.
+  }
+}
+
+function forgetOpenProject() {
+  try {
+    localStorage.removeItem(RESUME_KEY)
+  } catch { /* see rememberOpenProject */ }
+}
+
+/** Setup finished: boundaries chosen AND the baseline review closed. */
+function projectIsReady(config: ProjectConfig): boolean {
+  return sourceBoundariesAreComplete(config) &&
+    localStorage.getItem(`review_completed_${config.id}`) === 'true'
+}
+
 export default function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [agentLogOpen, setAgentLogOpen] = useState(false)
@@ -62,6 +88,9 @@ export default function App() {
     E2E_SETUP ? { ...E2E_PROJECT, rootPath: '.' } : null
   )
   const [reviewActive, setReviewActive] = useState(E2E_REVIEW)
+  // Gates the launcher until the resume decision is known, so a resuming
+  // launch never flashes the project list on its way into the workbench.
+  const [resumeChecked, setResumeChecked] = useState(E2E_MODE)
   const enterOnboardingProject = useOnboardingStore(s => s.enterProject)
 
   const { applySnapshot, setConnectionStatus, setCurrentProject: setStoreProject } = useGraphStore(
@@ -127,6 +156,7 @@ export default function App() {
     // Questions and failures belong to the project that raised them. A new
     // workspace starts with an empty lane.
     useInterruptionStore.getState().clear()
+    rememberOpenProject(config.id)
 
     const isCompleted = localStorage.getItem(`review_completed_${config.id}`) === 'true'
     setReviewActive(!isCompleted)
@@ -248,6 +278,37 @@ export default function App() {
     setPendingSetup(config)
   }, [openProject])
 
+  // Resume where you were. Axiom opened on the launcher every single time, so
+  // reaching your own codebase cost a click through a list you had already
+  // chosen from yesterday — the wrong first impression for a tool meant to be
+  // opened every morning. Runs once per launch, before anything is open.
+  useEffect(() => {
+    if (resumeChecked) return
+    if (!window.axiom) { setResumeChecked(true); return }
+    let active = true
+    void (async () => {
+      try {
+        const recent = await window.axiom!.listRecentProjects()
+        if (!active) return
+        const decision = resumeDecision({
+          resumeProjectId: localStorage.getItem(RESUME_KEY),
+          recentIds: recent.map(project => project.id),
+          readyIds: new Set(recent.filter(projectIsReady).map(project => project.id)),
+        })
+        if (decision.kind === 'resume') {
+          const target = recent.find(project => project.id === decision.projectId)
+          if (target) await openProject(target)
+        }
+      } catch {
+        // A failed resume must never trap the user on a blank screen: fall
+        // through to the launcher, which always works.
+      } finally {
+        if (active) setResumeChecked(true)
+      }
+    })()
+    return () => { active = false }
+  }, [resumeChecked, openProject])
+
   const openProjectDialog = useCallback(async () => {
     if (window.axiom) {
       const config = await window.axiom.openProjectDialog()
@@ -275,6 +336,12 @@ export default function App() {
         onCancel={cancelSetup}
       />
     )
+  }
+
+  // Hold the frame while we decide whether to resume. Without this the
+  // launcher paints for a beat and is yanked away, which reads as a glitch.
+  if (!currentProject && !resumeChecked) {
+    return <div className="axiom-resume-hold" aria-busy="true" aria-label="Opening your last project" />
   }
 
   // Home screen when no project is open
@@ -306,6 +373,10 @@ export default function App() {
           setReviewActive(false)
         }}
         onBack={() => {
+          // Leaving for the launcher is a choice, so the next launch honours
+          // it instead of dragging you back into what you just left.
+          forgetOpenProject()
+          useInterruptionStore.getState().clear()
           setCurrentProject(null)
           setStoreProject(null)
           setReviewActive(false)
