@@ -1,80 +1,74 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useGraphStore } from '../store/graphStore'
+import {
+  raiseInvitation,
+  raiseNotice,
+  resolveInterruption,
+} from '../store/interruptionStore'
 
+/**
+ * "Files are indexed but unclassified — connect an agent to give them
+ * boundaries."
+ *
+ * Renders nothing of its own. This was a bottom-centre banner with its own
+ * dismiss state; it is now an `invitation` in the interruption lane, which
+ * ranks it below anything actually blocked or broken and gives it the same
+ * dismissal behaviour as every other offer in the app.
+ */
+
+const ID = 'agent-connect'
 const MCP_ENDPOINT = 'http://127.0.0.1:7743/mcp'
 
-type CopyState = 'idle' | 'copied' | 'failed'
-
 export function AgentConnectBanner() {
-  const [dismissed, setDismissed] = useState(false)
-  const { files, isIndexing, workspaceId } = useGraphStore(useShallow(state => ({
-    files: state.files,
+  const { unclassified, isIndexing, workspaceId } = useGraphStore(useShallow(state => ({
+    unclassified: state.files.filter(file => !file.systemId).length,
     isIndexing: state.isIndexing,
     workspaceId: state.currentProject?.id ?? '',
   })))
 
+  // Re-invite once per project. Dismissing is a judgement about this codebase,
+  // not a global preference, so opening a different one asks again.
+  const invitedFor = useRef<string | null>(null)
   useEffect(() => {
-    setDismissed(false)
+    invitedFor.current = null
   }, [workspaceId])
 
-  const unclassified = files.filter(file => !file.systemId).length
-  if (isIndexing || dismissed || unclassified === 0) return null
-
-  return (
-    <aside className="axiom-agent-connect" aria-label="Agent connection required">
-      <span className="axiom-agent-connect__signal" aria-hidden="true" />
-      <div className="axiom-agent-connect__copy">
-        <strong>{unclassified} {unclassified === 1 ? 'file' : 'files'} awaiting architectural classification</strong>
-        <span>Connect an AI agent through MCP to create systems and assign the remaining source files.</span>
-      </div>
-      <CopyEndpointButton endpoint={MCP_ENDPOINT} />
-      <button
-        type="button"
-        className="axiom-agent-connect__dismiss"
-        onClick={() => setDismissed(true)}
-        aria-label="Dismiss agent connection notice"
-      >
-        ×
-      </button>
-    </aside>
-  )
-}
-
-function CopyEndpointButton({ endpoint }: { endpoint: string }) {
-  const [state, setState] = useState<CopyState>('idle')
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  useEffect(() => () => {
-    if (resetTimer.current) clearTimeout(resetTimer.current)
-  }, [])
-
-  const copy = async () => {
-    if (resetTimer.current) clearTimeout(resetTimer.current)
-    try {
-      await navigator.clipboard.writeText(endpoint)
-      setState('copied')
-    } catch {
-      setState('failed')
+  useEffect(() => {
+    if (isIndexing || unclassified === 0 || !workspaceId) {
+      // The condition resolved — an agent classified the files, or indexing
+      // restarted. Retire the invitation rather than leaving it stale.
+      if (invitedFor.current !== null) {
+        resolveInterruption(ID)
+        invitedFor.current = null
+      }
+      return
     }
-    resetTimer.current = setTimeout(() => setState('idle'), 2000)
-  }
+    // Raising again on every file change would resurrect a dismissed
+    // invitation on the next keystroke an agent makes.
+    if (invitedFor.current === workspaceId) return
+    invitedFor.current = workspaceId
 
-  const label = state === 'copied'
-    ? 'Endpoint copied'
-    : state === 'failed'
-      ? 'Copy failed'
-      : endpoint
+    raiseInvitation(
+      ID,
+      `${unclassified} ${unclassified === 1 ? 'file has' : 'files have'} no architectural home`,
+      'Connect an agent over MCP to group them into systems.',
+      [{
+        label: 'Copy MCP endpoint',
+        primary: true,
+        run: async () => {
+          try {
+            await navigator.clipboard.writeText(MCP_ENDPOINT)
+            raiseNotice('agent-connect-copied', 'MCP endpoint copied', MCP_ENDPOINT)
+          } catch {
+            // Clipboard access can be refused; the endpoint is still useful
+            // if we simply show it.
+            raiseNotice('agent-connect-copied', 'Copy the MCP endpoint', MCP_ENDPOINT)
+          }
+        },
+      }],
+    )
+  }, [unclassified, isIndexing, workspaceId])
 
-  return (
-    <button
-      type="button"
-      className="axiom-agent-connect__endpoint"
-      data-copy-state={state}
-      onClick={() => void copy()}
-      aria-label={`Copy MCP endpoint ${endpoint}`}
-    >
-      {label}
-    </button>
-  )
+  return null
 }

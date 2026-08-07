@@ -15,12 +15,14 @@ import { DeltaPanel } from './components/DeltaPanel'
 import { ReplayBar } from './components/ReplayBar'
 import { OnboardingGuide } from './components/OnboardingGuide'
 import { AgentLane } from './components/AgentLane'
+import { InterruptionLane } from './components/InterruptionLane'
 import { HomeScreen } from './screens/HomeScreen'
 import { ProjectSetupScreen } from './screens/ProjectSetupScreen'
 import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
 
 import { useGraphStore, connectToArchd } from './store/graphStore'
 import { useOnboardingStore } from './store/onboardingStore'
+import { raiseFailure, useInterruptionStore } from './store/interruptionStore'
 import { useRegistryStore } from './store/registryStore'
 import { SheetRail } from './components/SheetRail'
 import type { ProjectConfig } from '../shared/types'
@@ -122,6 +124,9 @@ export default function App() {
   const openProject = useCallback(async (config: ProjectConfig) => {
     setCurrentProject(config)
     setStoreProject(config)
+    // Questions and failures belong to the project that raised them. A new
+    // workspace starts with an empty lane.
+    useInterruptionStore.getState().clear()
 
     const isCompleted = localStorage.getItem(`review_completed_${config.id}`) === 'true'
     setReviewActive(!isCompleted)
@@ -173,7 +178,27 @@ export default function App() {
               }
             }
           } catch { /* archd still starting */ }
-          if (tries < 10) setTimeout(pull, 1500)
+          if (tries < 10) {
+            setTimeout(pull, 1500)
+            return
+          }
+          // Giving up silently left the user staring at a blank canvas with
+          // nothing to read and nothing to click. Say what happened, and make
+          // retrying one button rather than a restart.
+          raiseFailure(
+            'snapshot-cold-load',
+            'Could not load this project from archd',
+            'The daemon did not answer after 15 seconds. Your code is untouched — this is the map, not the repository.',
+            [{
+              label: 'Retry',
+              primary: true,
+              run: () => {
+                useInterruptionStore.getState().resolve('snapshot-cold-load')
+                tries = 0
+                void pull()
+              },
+            }],
+          )
         }
         void pull()
       }).catch(err => console.error('[openProject] archd workspace error:', err))
@@ -323,10 +348,14 @@ export default function App() {
           {/* Search overlay */}
           {searchOpen && <SearchBar onClose={() => setSearchOpen(false)} />}
 
-          {/* Agent connect banner — shown after raw indexing completes */}
+          {/* The one surface anything is allowed to interrupt you through.
+              Everything below raises into it and renders nothing itself. */}
+          <InterruptionLane />
+
+          {/* Raises an invitation when indexed files have no system */}
           <AgentConnectBanner />
 
-          {/* Perturbation warn-and-confirm gate */}
+          {/* Raises a decision when an agent asks to override a runtime value */}
           <InjectConfirmBanner />
 
           {/* Agent activity log — everything the agent is doing, live */}
