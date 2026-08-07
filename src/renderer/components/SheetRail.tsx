@@ -2,6 +2,7 @@
 // sheets beneath (UML_UX_PLAN.md "Navigation: the sheet rail").
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useShallow } from 'zustand/react/shallow'
+import { untakenSheetName } from '../../shared/sheetNames'
 import { useGraphStore } from '../store/graphStore'
 import { useSheetStore, type Sheet } from '../store/sheetStore'
 
@@ -46,6 +47,7 @@ export function SheetRail() {
   const [creating, setCreating] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [newName, setNewName] = useState('New Sheet')
+  const [createError, setCreateError] = useState<string | null>(null)
   const newNameInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -59,13 +61,14 @@ export function SheetRail() {
   }, [creating])
 
   const beginCreating = () => {
-    setNewName('New Sheet')
+    setNewName(untakenSheetName(sheets, 'New Sheet'))
+    setCreateError(null)
     setCreating(true)
   }
 
   const cancelCreating = () => {
     if (submitting) return
-    setNewName('New Sheet')
+    setCreateError(null)
     setCreating(false)
   }
 
@@ -75,17 +78,20 @@ export function SheetRail() {
     if (!name || submitting) return
 
     setSubmitting(true)
-    const sheet = await createSheet(workspaceId, name, '', [])
-    setSubmitting(false)
-    if (!sheet) {
+    setCreateError(null)
+    try {
+      const sheet = await createSheet(workspaceId, name, '', [])
+      setCreating(false)
+      void openSheet(workspaceId, sheet.id)
+    } catch (err) {
+      // Stay in the row with the name still typed: the fix is almost always a
+      // one-word edit, not starting over.
+      setCreateError(err instanceof Error ? err.message : 'Could not create the sheet.')
       newNameInput.current?.focus()
       newNameInput.current?.select()
-      return
+    } finally {
+      setSubmitting(false)
     }
-
-    setNewName('New Sheet')
-    setCreating(false)
-    void openSheet(workspaceId, sheet.id)
   }
 
   const railButtonClass = (active: boolean) => [
@@ -145,7 +151,11 @@ export function SheetRail() {
               value={newName}
               disabled={submitting}
               spellCheck={false}
-              onChange={event => setNewName(event.target.value)}
+              aria-invalid={createError ? true : undefined}
+              onChange={event => {
+                setNewName(event.target.value)
+                setCreateError(null)
+              }}
               onKeyDown={event => {
                 event.stopPropagation()
                 if (event.key === 'Escape') cancelCreating()
@@ -155,6 +165,10 @@ export function SheetRail() {
               {submitting ? '…' : '↵'}
             </span>
           </form>
+        )}
+
+        {creating && createError && (
+          <p className="axiom-sheet-rail__create-error" role="alert">{createError}</p>
         )}
 
         {sheets.map(sheet => {

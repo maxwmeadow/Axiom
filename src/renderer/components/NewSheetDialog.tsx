@@ -34,7 +34,6 @@ export function NewSheetDialog({ isOpen, onClose, selectedFileIds, onSuccess }: 
     setError(null)
     try {
       const sheet = await createSheet(workspaceId, name.trim(), purpose.trim(), selectedFileIds)
-      if (!sheet) throw new Error('Create failed — is archd running?')
       setName('')
       setPurpose('')
       onSuccess()

@@ -28,8 +28,18 @@ import (
 func (s *Server) broadcastSheetLayoutState(sqlDB *sql.DB, sheetID string) ([]db.SheetElement, []db.PlannedNode, *db.Sheet) {
 	elements, _ := db.GetSheetElements(sqlDB, sheetID)
 	planned, _ := db.GetPlannedNodes(sqlDB, sheetID)
+	layouts, _ := db.GetSheetLayouts(sqlDB, sheetID)
 	sheet, _ := db.GetSheet(sqlDB, sheetID)
-	s.broadcastPatch("sheet:elements", map[string]any{"sheetId": sheetID, "added": elements})
+	revision := 0
+	if sheet != nil {
+		revision = sheet.Revision
+	}
+	s.broadcastPatch("sheet:elements", map[string]any{
+		"sheetId": sheetID, "added": elements, "replace": true,
+	})
+	s.broadcastPatch("sheet:layouts", map[string]any{
+		"sheetId": sheetID, "layouts": layouts, "revision": revision, "replace": true,
+	})
 	for _, node := range planned {
 		s.broadcastPatch("planned:upserted", node)
 	}
@@ -132,13 +142,23 @@ func (s *Server) handleSheets(w http.ResponseWriter, r *http.Request) {
 			CreatedBy   string              `json:"createdBy"`
 			Elements    []sheetElementInput `json:"elements"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Name) == "" {
 			jsonError(w, "bad request: name and workspaceId required", 400)
 			return
 		}
+		body.Name = strings.TrimSpace(body.Name)
 		sqlDB, err := s.dbFor(body.WorkspaceID)
 		if err != nil {
 			jsonError(w, err.Error(), 404)
+			return
+		}
+		taken, err := db.SheetNameTaken(sqlDB, body.WorkspaceID, body.Name, "")
+		if err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
+		if taken {
+			jsonError(w, "a sheet named \""+body.Name+"\" already exists", 409)
 			return
 		}
 		sheet := &db.Sheet{
@@ -158,6 +178,10 @@ func (s *Server) handleSheets(w http.ResponseWriter, r *http.Request) {
 				jsonError(w, "element: "+err.Error(), 400)
 				return
 			}
+		}
+		if err := db.BackfillSheetLayouts(sqlDB); err != nil {
+			jsonError(w, "layout: "+err.Error(), 500)
+			return
 		}
 		s.broadcastPatch("sheet:upserted", sheet)
 		jsonOK(w, sheet)
@@ -197,6 +221,10 @@ func (s *Server) handleSheetByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := db.UpsertPlannedNode(sqlDB, &n); err != nil {
 			jsonError(w, err.Error(), 500)
+			return
+		}
+		if err := db.BackfillSheetLayouts(sqlDB); err != nil {
+			jsonError(w, "layout: "+err.Error(), 500)
 			return
 		}
 		s.broadcastPatch("planned:upserted", n)
@@ -264,6 +292,34 @@ func (s *Server) handleSheetByID(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]any{"sheet": sheet, "elements": elements, "planned": planned})
 		return
 	}
+	if len(parts) == 3 && parts[1] == "layouts" && parts[2] == "batch" && r.Method == http.MethodPost {
+		var body struct {
+			WorkspaceID string           `json:"workspaceId"`
+			Layouts     []db.SheetLayout `json:"layouts"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "bad request", 400)
+			return
+		}
+		sqlDB, err := s.dbFor(body.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), 404)
+			return
+		}
+		result, err := db.ApplySheetLayoutBatch(sqlDB, id, body.WorkspaceID, body.Layouts)
+		if err != nil {
+			jsonError(w, err.Error(), 400)
+			return
+		}
+		s.broadcastPatch("sheet:layouts", map[string]any{
+			"sheetId": id, "layouts": result.Layouts, "revision": result.Revision,
+		})
+		if sheet, _ := db.GetSheet(sqlDB, id); sheet != nil {
+			s.broadcastPatch("sheet:upserted", sheet)
+		}
+		jsonOK(w, result)
+		return
+	}
 
 	switch {
 	case r.Method == http.MethodGet && len(parts) == 2 && parts[1] == "asm":
@@ -295,13 +351,18 @@ func (s *Server) handleSheetByID(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "sheet not found", 404)
 			return
 		}
+		if err := db.BackfillSheetLayouts(sqlDB); err != nil {
+			jsonError(w, err.Error(), 500)
+			return
+		}
 		elements, _ := db.GetSheetElements(sqlDB, id)
 		annotations, _ := db.GetAnnotations(sqlDB, sheet.WorkspaceID, &id)
 		planned, _ := db.GetPlannedNodes(sqlDB, id)
 		plannedEdges, _ := db.GetPlannedEdges(sqlDB, id)
+		layouts, _ := db.GetSheetLayouts(sqlDB, id)
 		jsonOK(w, map[string]any{
 			"sheet": sheet, "elements": elements, "annotations": annotations,
-			"planned": planned, "plannedEdges": plannedEdges,
+			"planned": planned, "plannedEdges": plannedEdges, "layouts": layouts,
 		})
 
 	case r.Method == http.MethodPut && len(parts) == 1:
@@ -320,6 +381,23 @@ func (s *Server) handleSheetByID(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			jsonError(w, err.Error(), 404)
 			return
+		}
+		if body.Name != nil {
+			trimmed := strings.TrimSpace(*body.Name)
+			if trimmed == "" {
+				jsonError(w, "bad request: name cannot be empty", 400)
+				return
+			}
+			taken, err := db.SheetNameTaken(sqlDB, body.WorkspaceID, trimmed, id)
+			if err != nil {
+				jsonError(w, err.Error(), 500)
+				return
+			}
+			if taken {
+				jsonError(w, "a sheet named \""+trimmed+"\" already exists", 409)
+				return
+			}
+			body.Name = &trimmed
 		}
 		if err := db.UpdateSheet(sqlDB, id, body.Name, body.Purpose, body.Folder, body.Viewport); err != nil {
 			jsonError(w, err.Error(), 500)
@@ -375,6 +453,10 @@ func (s *Server) handleSheetElements(w http.ResponseWriter, r *http.Request, she
 			}
 			added = append(added, *e)
 		}
+		if err := db.BackfillSheetLayouts(sqlDB); err != nil {
+			jsonError(w, "layout: "+err.Error(), 500)
+			return
+		}
 		s.broadcastPatch("sheet:elements", map[string]any{"sheetId": sheetID, "added": added})
 		jsonOK(w, added)
 
@@ -388,7 +470,7 @@ func (s *Server) handleSheetElements(w http.ResponseWriter, r *http.Request, she
 			jsonError(w, err.Error(), 500)
 			return
 		}
-		s.broadcastPatch("sheet:elements", map[string]any{"sheetId": sheetID, "removed": []string{rest[0]}})
+		s.broadcastSheetLayoutState(sqlDB, sheetID)
 		jsonOK(w, map[string]string{"deleted": rest[0]})
 
 	case r.Method == http.MethodPost && len(rest) == 2 && rest[1] == "position":
@@ -664,11 +746,17 @@ func (s *Server) handlePlannedByID(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, err.Error(), 404)
 			return
 		}
+		planned, err := db.GetPlannedNode(sqlDB, id)
+		if err != nil || planned == nil || planned.WorkspaceID != workspaceID {
+			jsonError(w, "planned node not found", 404)
+			return
+		}
 		if err := db.DeletePlannedNode(sqlDB, id); err != nil {
 			jsonError(w, err.Error(), 500)
 			return
 		}
 		s.broadcastPatch("planned:deleted", map[string]string{"id": id, "workspaceId": workspaceID})
+		s.broadcastSheetLayoutState(sqlDB, planned.SheetID)
 		jsonOK(w, map[string]string{"deleted": id})
 
 	default:

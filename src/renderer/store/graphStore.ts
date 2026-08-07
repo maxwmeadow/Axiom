@@ -239,9 +239,14 @@ interface GraphState {
   loadAgentActions: () => Promise<void>
   deltaReviewing: boolean
   deltaCursor: number
+  // "Later" set aside the delta without acknowledging it. It stays unreviewed
+  // in archd; only the invitation is hidden, and the status bar keeps a way
+  // back. Deferral is per delta window — a newer one re-invites on its own.
+  deltaDeferredUntil: number
   loadDelta: () => Promise<void>
   startDeltaReview: () => void
   setDeltaCursor: (cursor: number) => void
+  deferDelta: () => void
   endDeltaReview: (acknowledge: boolean) => void
   applyWorkSession: (session: DeltaWorkSession) => void
 
@@ -350,6 +355,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   },
   deltaReviewing: false,
   deltaCursor: -1,
+  deltaDeferredUntil: 0,
   loadDelta: () => {
     const state = get()
     const workspaceId = state.currentProject?.id
@@ -398,8 +404,13 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     deltaLoadInFlight = { workspaceId, token, promise }
     return promise
   },
-  startDeltaReview: () => set(state => (state.delta ? { deltaReviewing: true, deltaCursor: 0 } : {})),
+  startDeltaReview: () => set(state => (state.delta ? { deltaReviewing: true, deltaCursor: 0, deltaDeferredUntil: 0 } : {})),
   setDeltaCursor: (cursor) => set({ deltaCursor: cursor }),
+  // Set aside without acknowledging. Pinned to this window's `until`, so work
+  // that lands afterwards produces a new window that invites again.
+  deferDelta: () => set(state => (state.delta
+    ? { deltaDeferredUntil: state.delta.until, deltaReviewing: false, deltaCursor: -1 }
+    : {})),
   endDeltaReview: (acknowledge) => {
     const { currentProject, delta } = get()
     // Acknowledge the exact window that was shown — not "now" — so anything
@@ -599,6 +610,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       activeWorkSessions: [],
       deltaReviewing: false,
       deltaCursor: -1,
+      deltaDeferredUntil: 0,
     }
   }),
   setRecentProjects: (ps) => set({ recentProjects: ps }),

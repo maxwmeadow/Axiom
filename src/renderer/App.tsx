@@ -19,6 +19,7 @@ import { ProjectSetupScreen } from './screens/ProjectSetupScreen'
 import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
 
 import { useGraphStore, connectToArchd } from './store/graphStore'
+import { useOnboardingStore } from './store/onboardingStore'
 import { useRegistryStore } from './store/registryStore'
 import { SheetRail } from './components/SheetRail'
 import type { ProjectConfig } from '../shared/types'
@@ -58,6 +59,7 @@ export default function App() {
     E2E_SETUP ? { ...E2E_PROJECT, rootPath: '.' } : null
   )
   const [reviewActive, setReviewActive] = useState(E2E_REVIEW)
+  const enterOnboardingProject = useOnboardingStore(s => s.enterProject)
 
   const { applySnapshot, setConnectionStatus, setCurrentProject: setStoreProject } = useGraphStore(
     useShallow(s => ({
@@ -96,6 +98,12 @@ export default function App() {
     if (E2E_MODE) return
     return subscribeToDeltaRefresh(window, () => useGraphStore.getState().loadDelta())
   }, [])
+
+  // Load this project's onboarding progress before anything renders against it,
+  // so the guide and the status bar agree about where the user left off.
+  useEffect(() => {
+    if (currentProject) enterOnboardingProject(currentProject.id)
+  }, [currentProject, enterOnboardingProject])
 
   // Keyboard shortcuts
   useEffect(() => {

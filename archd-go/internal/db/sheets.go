@@ -88,6 +88,22 @@ type CanvasMessage struct {
 
 // ─── Sheets ───────────────────────────────────────────────────────────────────
 
+// SheetNameTaken reports whether another sheet in the workspace already carries
+// this name. Two sheets with the same name are indistinguishable in the rail,
+// in dispatch history, and in anything an agent reads back — so the name is an
+// identity, not a label. Comparison ignores case and surrounding space because
+// "First Increment" and "first increment " are the same sheet to a human.
+func SheetNameTaken(db *sql.DB, workspaceID, name, excludeID string) (bool, error) {
+	var count int
+	err := db.QueryRow(`
+		SELECT COUNT(*) FROM sheets
+		WHERE workspace_id = ?
+		  AND id != ?
+		  AND LOWER(TRIM(name)) = LOWER(TRIM(?))`,
+		workspaceID, excludeID, name).Scan(&count)
+	return count > 0, err
+}
+
 func CreateSheet(db *sql.DB, s *Sheet) error {
 	if s.ID == "" {
 		s.ID = uuid.New().String()
@@ -250,14 +266,38 @@ func GetSheetElements(db *sql.DB, sheetID string) ([]SheetElement, error) {
 }
 
 func RemoveSheetElement(db *sql.DB, id string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	var sheetID string
-	if err := db.QueryRow(`SELECT sheet_id FROM sheet_elements WHERE id=?`, id).Scan(&sheetID); err != nil {
+	var systemID, fileID, infraID sql.NullString
+	if err := tx.QueryRow(`
+		SELECT sheet_id,system_id,file_id,infra_id FROM sheet_elements WHERE id=?`,
+		id,
+	).Scan(&sheetID, &systemID, &fileID, &infraID); err != nil {
 		return err
 	}
-	if _, err := db.Exec(`DELETE FROM sheet_elements WHERE id=?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM sheet_elements WHERE id=?`, id); err != nil {
 		return err
 	}
-	return TouchSheet(db, sheetID)
+	nodeID := systemID.String
+	if nodeID == "" {
+		nodeID = fileID.String
+	}
+	if nodeID == "" {
+		nodeID = infraID.String
+	}
+	if nodeID != "" {
+		if _, err := tx.Exec(`DELETE FROM sheet_layouts WHERE sheet_id=? AND node_id=?`, sheetID, nodeID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE sheets SET revision=revision+1,updated_at=? WHERE id=?`, time.Now().UnixMilli(), sheetID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func UpdateSheetElementPosition(db *sql.DB, id string, x, y float64) error {

@@ -2,10 +2,30 @@
 // canvas→agent message channel (U-C). The Floor (live master canvas) is
 // activeSheetId === null.
 import { create } from 'zustand'
+import type { FloorLayout } from '../../shared/types'
 
 const API = 'http://127.0.0.1:7743'
 let openSheetRequest = 0
 let fetchSheetsRequest = 0
+let sheetLayoutWriteSequence = 0
+const pendingSheetLayoutWrites = new Map<string, number>()
+// Optimistic state can advance immediately, but persistence for one sheet must
+// reach the daemon in gesture order. Otherwise a slow older request can commit
+// after a newer drag and broadcast stale geometry at a higher revision.
+const sheetLayoutSaveQueues = new Map<string, Promise<void>>()
+
+// archd refuses with {"error": "..."}. Surface that sentence — it is written for
+// a person to read — and fall back to the status only when there isn't one.
+async function refusalReason(res: Response, fallback: string): Promise<string> {
+  const raw = (await res.text()).trim()
+  try {
+    const parsed = JSON.parse(raw) as { error?: string }
+    if (parsed?.error) return parsed.error
+  } catch {
+    // Not JSON — a proxy or crash page. The raw text is still the best clue.
+  }
+  return raw || `${fallback} (${res.status})`
+}
 
 export interface Sheet {
   id: string
@@ -164,16 +184,13 @@ export interface PlannedEdge {
   note: string
 }
 
-export interface SheetLayoutMutation {
-  kind: 'element' | 'planned'
-  id: string
-  x: number
-  y: number
-  parentSystemId: string | null
-  width?: number
-  height?: number
-  scale?: number
+/** Proposal-local geometry. Aside from sheetId, this is exactly FloorLayout. */
+export interface SheetLayout extends FloorLayout {
+  sheetId: string
 }
+
+/** A complete canonical row; identity/timestamps are supplied by the API. */
+export type SheetLayoutMutation = Omit<SheetLayout, 'sheetId' | 'workspaceId' | 'updatedAt'>
 
 export function plannedMembers(n: PlannedNode): PlannedMember[] {
   if (Array.isArray(n.members)) return n.members
@@ -229,6 +246,7 @@ export interface SheetLayerData {
   annotations: SheetAnnotation[]
   planned: PlannedNode[]
   plannedEdges: PlannedEdge[]
+  layouts: SheetLayout[]
 }
 
 function withValidScale<T extends { scale?: number }>(item: T): T {
@@ -247,6 +265,7 @@ async function fetchSheetLayer(workspaceId: string, sheetId: string): Promise<Sh
     annotations: data.annotations ?? [],
     planned: (data.planned ?? []).map(withValidScale),
     plannedEdges: data.plannedEdges ?? [],
+    layouts: data.layouts ?? [],
   }
 }
 
@@ -260,12 +279,13 @@ interface SheetState {
   annotations: SheetAnnotation[]         // active sheet's notes
   planned: PlannedNode[]                 // active sheet's planned elements
   plannedEdges: PlannedEdge[]
+  layouts: SheetLayout[]                 // active sheet's canonical geometry opinions
   messages: CanvasMessage[]              // recent canvas→agent messages (chips)
 
   fetchSheets: (workspaceId: string) => Promise<void>
   openSheet: (workspaceId: string, sheetId: string | null) => Promise<void>
   toggleSheetVisibility: (workspaceId: string, sheetId: string) => Promise<void>
-  createSheet: (workspaceId: string, name: string, purpose: string, fileIds: string[]) => Promise<Sheet | null>
+  createSheet: (workspaceId: string, name: string, purpose: string, fileIds: string[]) => Promise<Sheet>
   deleteSheet: (workspaceId: string, sheetId: string) => Promise<void>
   previewElementPosition: (elementId: string, x: number, y: number) => void
   updateElementLayout: (workspaceId: string, elementId: string, x: number, y: number, parentSystemId: string | null, width?: number, height?: number, scale?: number) => void
@@ -278,7 +298,13 @@ interface SheetState {
   setPlannedApproval: (workspaceId: string, id: string, decision: 'approved' | 'rejected') => Promise<void>
   previewPlannedPosition: (id: string, x: number, y: number) => void
   updatePlannedLayout: (workspaceId: string, id: string, x: number, y: number, parentSystemId: string | null, width?: number, height?: number, scale?: number) => void
-  updateLayoutsBatch: (workspaceId: string, sheetId: string, layouts: SheetLayoutMutation[]) => Promise<void>
+  previewLayoutsBatch: (workspaceId: string, sheetId: string, layouts: SheetLayoutMutation[]) => void
+  updateLayoutsBatch: (
+    workspaceId: string,
+    sheetId: string,
+    layouts: SheetLayoutMutation[],
+    rollbackLayouts?: SheetLayout[],
+  ) => Promise<void>
   deletePlanned: (workspaceId: string, id: string) => Promise<void>
   createPlannedEdge: (workspaceId: string, sheetId: string, e: Partial<PlannedEdge>) => Promise<void>
   createFloatingNote: (workspaceId: string, sheetId: string, body: string, x: number, y: number) => Promise<void>
@@ -291,6 +317,7 @@ function activeLayerProjection(activeSheetId: string | null, layersById: Record<
     annotations: active?.annotations ?? [],
     planned: active?.planned ?? [],
     plannedEdges: active?.plannedEdges ?? [],
+    layouts: active?.layouts ?? [],
   }
 }
 
@@ -312,6 +339,7 @@ export const useSheetStore = create<SheetState>((set, get) => ({
   annotations: [],
   planned: [],
   plannedEdges: [],
+  layouts: [],
   messages: [],
 
   fetchSheets: async (workspaceId) => {
@@ -325,7 +353,7 @@ export const useSheetStore = create<SheetState>((set, get) => ({
         ? { sheets }
         : {
             workspaceId, sheets, activeSheetId: null, visibleSheetIds: [], layersById: {},
-            elements: [], annotations: [], planned: [], plannedEdges: [],
+            elements: [], annotations: [], planned: [], plannedEdges: [], layouts: [],
           })
     } catch (err) {
       console.error('[sheets] fetch failed:', err)
@@ -335,7 +363,7 @@ export const useSheetStore = create<SheetState>((set, get) => ({
   openSheet: async (workspaceId, sheetId) => {
     const request = ++openSheetRequest
     if (sheetId === null) {
-      set({ workspaceId, activeSheetId: null, visibleSheetIds: [], elements: [], annotations: [], planned: [], plannedEdges: [] })
+      set({ workspaceId, activeSheetId: null, visibleSheetIds: [], elements: [], annotations: [], planned: [], plannedEdges: [], layouts: [] })
       return
     }
     try {
@@ -388,7 +416,7 @@ export const useSheetStore = create<SheetState>((set, get) => ({
           visibleSheetIds: [...visibleSheetIds.filter(id => id !== sheetId), sheetId],
           layersById: { ...layersById, [sheetId]: data },
           ...(!currentWorkspace ? {
-            activeSheetId: null, elements: [], annotations: [], planned: [], plannedEdges: [],
+            activeSheetId: null, elements: [], annotations: [], planned: [], plannedEdges: [], layouts: [],
           } : {}),
         }
       })
@@ -528,47 +556,118 @@ export const useSheetStore = create<SheetState>((set, get) => ({
     })()
   },
 
-  updateLayoutsBatch: async (workspaceId, sheetId, layouts) => {
-    const byElement = new Map(layouts.filter(layout => layout.kind === 'element').map(layout => [layout.id, layout]))
-    const byPlanned = new Map(layouts.filter(layout => layout.kind === 'planned').map(layout => [layout.id, layout]))
+  previewLayoutsBatch: (workspaceId, sheetId, layouts) => {
     set(state => {
       const layer = state.layersById[sheetId]
       if (!layer) return state
-      const elements = layer.elements.map(element => {
-        const layout = byElement.get(element.id)
-        return layout ? { ...element, positionX: layout.x, positionY: layout.y, parentSystemId: layout.parentSystemId,
-          ...(layout.width !== undefined ? { width: layout.width } : {}), ...(layout.height !== undefined ? { height: layout.height } : {}),
-          ...(layout.scale !== undefined ? { scale: layout.scale } : {}) } : element
-      })
-      const planned = layer.planned.map(node => {
-        const layout = byPlanned.get(node.id)
-        return layout ? { ...node, positionX: layout.x, positionY: layout.y, parentSystemId: layout.parentSystemId,
-          ...(layout.width !== undefined ? { width: layout.width } : {}), ...(layout.height !== undefined ? { height: layout.height } : {}),
-          ...(layout.scale !== undefined ? { scale: layout.scale } : {}) } : node
-      })
-      return commitSheetLayer(state, sheetId, { ...layer, elements, planned })
+      const byId = new Map(layer.layouts.map(layout => [layout.nodeId, layout]))
+      const updatedAt = Date.now()
+      for (const layout of layouts) {
+        byId.set(layout.nodeId, { ...layout, sheetId, workspaceId, updatedAt })
+      }
+      return commitSheetLayer(state, sheetId, { ...layer, layouts: [...byId.values()] })
     })
+  },
+
+  updateLayoutsBatch: async (workspaceId, sheetId, layouts, rollbackLayouts) => {
+    if (layouts.length === 0) return
+    const sequence = ++sheetLayoutWriteSequence
+    const previous = new Map<string, SheetLayout | undefined>()
+    const requestedIds = new Set(layouts.map(layout => layout.nodeId))
+    const layerBefore = get().layersById[sheetId]
+    const rollbackById = rollbackLayouts
+      ? new Map(rollbackLayouts.map(layout => [layout.nodeId, layout]))
+      : null
+    for (const layout of layouts) {
+      previous.set(
+        layout.nodeId,
+        rollbackById
+          ? rollbackById.get(layout.nodeId)
+          : layerBefore?.layouts.find(item => item.nodeId === layout.nodeId),
+      )
+      pendingSheetLayoutWrites.set(`${sheetId}:${layout.nodeId}`, sequence)
+    }
+    set(state => {
+      const layer = state.layersById[sheetId]
+      if (!layer) return state
+      const byId = new Map(layer.layouts.map(layout => [layout.nodeId, layout]))
+      const updatedAt = Date.now()
+      for (const layout of layouts) {
+        byId.set(layout.nodeId, { ...layout, sheetId, workspaceId, updatedAt })
+      }
+      return commitSheetLayer(state, sheetId, { ...layer, layouts: [...byId.values()] })
+    })
+    const predecessor = sheetLayoutSaveQueues.get(sheetId) ?? Promise.resolve()
+    let releaseQueue!: () => void
+    const gate = new Promise<void>(resolve => { releaseQueue = resolve })
+    const queueTail = predecessor.catch(() => {}).then(() => gate)
+    sheetLayoutSaveQueues.set(sheetId, queueTail)
+    await predecessor.catch(() => {})
     try {
-      const response = await fetch(`${API}/api/sheets/${encodeURIComponent(sheetId)}/layout/batch`, {
+      const response = await fetch(`${API}/api/sheets/${encodeURIComponent(sheetId)}/layouts/batch`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspaceId, layouts }),
       })
       if (!response.ok) throw new Error(await response.text())
+      const result = await response.json() as { revision: number; layouts: SheetLayout[] }
+      set(state => {
+        const layer = state.layersById[sheetId]
+        if (!layer) return state
+        const byId = new Map(layer.layouts.map(layout => [layout.nodeId, layout]))
+        for (const layout of result.layouts ?? []) {
+          if (pendingSheetLayoutWrites.get(`${sheetId}:${layout.nodeId}`) === sequence) {
+            byId.set(layout.nodeId, layout)
+          }
+        }
+        const sheet = result.revision > layer.sheet.revision
+          ? { ...layer.sheet, revision: result.revision }
+          : layer.sheet
+        return commitSheetLayer(state, sheetId, { ...layer, sheet, layouts: [...byId.values()] })
+      })
+      for (const id of requestedIds) {
+        const key = `${sheetId}:${id}`
+        if (pendingSheetLayoutWrites.get(key) === sequence) pendingSheetLayoutWrites.delete(key)
+      }
     } catch (error) {
       console.error('[sheets] batch layout update failed:', error)
-      const restored = await fetchSheetLayer(workspaceId, sheetId).catch(() => null)
-      if (restored) set(state => commitSheetLayer(state, sheetId, restored))
+      set(state => {
+        const layer = state.layersById[sheetId]
+        if (!layer) return state
+        const byId = new Map(layer.layouts.map(layout => [layout.nodeId, layout]))
+        for (const id of requestedIds) {
+          const key = `${sheetId}:${id}`
+          if (pendingSheetLayoutWrites.get(key) !== sequence) continue
+          const oldLayout = previous.get(id)
+          if (oldLayout) byId.set(id, oldLayout)
+          else byId.delete(id)
+          pendingSheetLayoutWrites.delete(key)
+        }
+        return commitSheetLayer(state, sheetId, { ...layer, layouts: [...byId.values()] })
+      })
       throw error
+    } finally {
+      releaseQueue()
+      if (sheetLayoutSaveQueues.get(sheetId) === queueTail) {
+        sheetLayoutSaveQueues.delete(sheetId)
+      }
     }
   },
 
   deletePlanned: async (workspaceId, id) => {
-    await fetch(`${API}/api/planned/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' }).catch(() => {})
+    const response = await fetch(
+      `${API}/api/planned/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceId)}`,
+      { method: 'DELETE' },
+    )
+    if (!response.ok) throw new Error(await response.text())
     set(s => {
       const sheetId = s.activeSheetId
       const layer = sheetId ? s.layersById[sheetId] : null
       if (!sheetId || !layer) return s
-      return commitSheetLayer(s, sheetId, { ...layer, planned: layer.planned.filter(p => p.id !== id) })
+      return commitSheetLayer(s, sheetId, {
+        ...layer,
+        planned: layer.planned.filter(p => p.id !== id),
+        layouts: layer.layouts.filter(layout => layout.nodeId !== `planned:${id}`),
+      })
     })
   },
 
@@ -588,30 +687,28 @@ export const useSheetStore = create<SheetState>((set, get) => ({
     })
   },
 
+  // Throws on refusal. The server rejects duplicate names, and "a sheet named X
+  // already exists" is the only useful thing to say at that moment — swallowing
+  // it into a null would leave the caller guessing that archd was down.
   createSheet: async (workspaceId, name, purpose, fileIds) => {
-    try {
-      const res = await fetch(`${API}/api/sheets`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workspaceId, name,
-          purpose: purpose || null,
-          createdBy: 'user',
-          elements: fileIds.map((id, i) => ({
-            fileId: id,
-            // starting grid so a fresh sheet isn't a stack at 0,0
-            x: 40 + (i % 5) * 220, y: 40 + Math.floor(i / 5) * 120,
-          })),
-        }),
-      })
-      if (!res.ok) throw new Error(await res.text())
-      const sheet = await res.json() as Sheet
-      await get().fetchSheets(workspaceId)
-      return sheet
-    } catch (err) {
-      console.error('[sheets] create failed:', err)
-      return null
-    }
+    const res = await fetch(`${API}/api/sheets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId, name,
+        purpose: purpose || null,
+        createdBy: 'user',
+        elements: fileIds.map((id, i) => ({
+          fileId: id,
+          // starting grid so a fresh sheet isn't a stack at 0,0
+          x: 40 + (i % 5) * 220, y: 40 + Math.floor(i / 5) * 120,
+        })),
+      }),
+    })
+    if (!res.ok) throw new Error(await refusalReason(res, 'Create failed'))
+    const sheet = await res.json() as Sheet
+    await get().fetchSheets(workspaceId)
+    return sheet
   },
 
   deleteSheet: async (workspaceId, sheetId) => {
@@ -707,12 +804,21 @@ export const useSheetStore = create<SheetState>((set, get) => ({
   },
 
   removeElement: async (workspaceId, sheetId, elementId) => {
-    await fetch(`${API}/api/sheets/${encodeURIComponent(sheetId)}/elements/${encodeURIComponent(elementId)}?workspace=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' }).catch(() => {})
+    const response = await fetch(
+      `${API}/api/sheets/${encodeURIComponent(sheetId)}/elements/${encodeURIComponent(elementId)}?workspace=${encodeURIComponent(workspaceId)}`,
+      { method: 'DELETE' },
+    )
+    if (!response.ok) throw new Error(await response.text())
     set(s => {
       const layer = s.layersById[sheetId]
       if (!layer) return s
+      const removed = layer.elements.find(e => e.id === elementId)
+      const nodeId = removed?.systemId ?? removed?.fileId ?? removed?.infraId
       const elements = layer.elements.filter(e => e.id !== elementId)
-      return commitSheetLayer(s, sheetId, { ...layer, elements })
+      return commitSheetLayer(s, sheetId, {
+        ...layer, elements,
+        layouts: nodeId ? layer.layouts.filter(layout => layout.nodeId !== nodeId) : layer.layouts,
+      })
     })
   },
 
@@ -744,9 +850,9 @@ export function handleSheetPatch(patch: { type: string; payload: unknown }): voi
       const sheet = patch.payload as Sheet
       useSheetStore.setState(st => ({
         sheets: st.sheets.some(x => x.id === sheet.id)
-          ? st.sheets.map(x => x.id === sheet.id ? sheet : x)
+          ? st.sheets.map(x => x.id === sheet.id && sheet.revision >= x.revision ? sheet : x)
           : [...st.sheets, sheet],
-        layersById: st.layersById[sheet.id]
+        layersById: st.layersById[sheet.id] && sheet.revision >= st.layersById[sheet.id].sheet.revision
           ? { ...st.layersById, [sheet.id]: { ...st.layersById[sheet.id], sheet } }
           : st.layersById,
       }))
@@ -767,16 +873,51 @@ export function handleSheetPatch(patch: { type: string; payload: unknown }): voi
       break
     }
     case 'sheet:elements': {
-      const { sheetId, added, removed } = patch.payload as { sheetId: string; added?: SheetElement[]; removed?: string[] }
+      const { sheetId, added, removed, replace } = patch.payload as {
+        sheetId: string
+        added?: SheetElement[]
+        removed?: string[]
+        replace?: boolean
+      }
       if (!s.layersById[sheetId]) break
       useSheetStore.setState(st => {
         const layer = st.layersById[sheetId]
         if (!layer) return st
-        const elements = [
-          ...layer.elements.filter(e => !(removed ?? []).includes(e.id) && !(added ?? []).some(a => a.id === e.id)),
-          ...(added ?? []).map(withValidScale),
-        ]
+        const elements = replace
+          ? (added ?? []).map(withValidScale)
+          : [
+              ...layer.elements.filter(e => !(removed ?? []).includes(e.id) && !(added ?? []).some(a => a.id === e.id)),
+              ...(added ?? []).map(withValidScale),
+            ]
         return commitSheetLayer(st, sheetId, { ...layer, elements })
+      })
+      break
+    }
+    case 'sheet:layouts': {
+      const { sheetId, layouts, revision, replace } = patch.payload as {
+        sheetId: string
+        layouts?: SheetLayout[]
+        revision?: number
+        replace?: boolean
+      }
+      if (!s.layersById[sheetId]) break
+      useSheetStore.setState(st => {
+        const layer = st.layersById[sheetId]
+        if (!layer) return st
+        if (revision !== undefined && revision < layer.sheet.revision) return st
+        const byId = new Map((replace
+          ? layer.layouts.filter(layout => pendingSheetLayoutWrites.has(`${sheetId}:${layout.nodeId}`))
+          : layer.layouts
+        ).map(layout => [layout.nodeId, layout]))
+        for (const layout of layouts ?? []) {
+          if (!pendingSheetLayoutWrites.has(`${sheetId}:${layout.nodeId}`)) {
+            byId.set(layout.nodeId, layout)
+          }
+        }
+        const sheet = revision !== undefined && revision > layer.sheet.revision
+          ? { ...layer.sheet, revision }
+          : layer.sheet
+        return commitSheetLayer(st, sheetId, { ...layer, sheet, layouts: [...byId.values()] })
       })
       break
     }
@@ -818,7 +959,11 @@ export function handleSheetPatch(patch: { type: string; payload: unknown }): voi
       const { id } = patch.payload as { id: string }
       useSheetStore.setState(st => {
         const layersById = Object.fromEntries(Object.entries(st.layersById).map(([sheetId, layer]) => [
-          sheetId, { ...layer, planned: layer.planned.filter(x => x.id !== id) },
+          sheetId, {
+            ...layer,
+            planned: layer.planned.filter(x => x.id !== id),
+            layouts: layer.layouts.filter(layout => layout.nodeId !== `planned:${id}`),
+          },
         ]))
         return { layersById, ...activeLayerProjection(st.activeSheetId, layersById) }
       })

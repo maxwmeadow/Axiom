@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { onboardingStage, type OnboardingStage } from '../../shared/onboarding'
+import { findSheetByName, untakenSheetName } from '../../shared/sheetNames'
 import { useGraphStore } from '../store/graphStore'
+import { useOnboardingStore } from '../store/onboardingStore'
 import { useSheetStore } from '../store/sheetStore'
 
-interface GuideProgress {
-  startedAt: number
-  sheetId?: string
-  plannedId?: string
-  dispatched?: boolean
-}
+const FIRST_INCREMENT = 'First Increment'
 
 const COPY: Record<OnboardingStage, {
   eyebrow: string
@@ -48,19 +45,14 @@ const COPY: Record<OnboardingStage, {
   },
 }
 
-function readProgress(projectId: string): GuideProgress {
-  try {
-    const raw = localStorage.getItem(`onboarding_progress_${projectId}`)
-    if (raw) return JSON.parse(raw) as GuideProgress
-  } catch {
-    // A damaged local hint must never block the workbench.
-  }
-  return { startedAt: Date.now() }
-}
-
 export function OnboardingGuide({ projectId }: { projectId: string }) {
-  const [progress, setProgress] = useState<GuideProgress>(() => readProgress(projectId))
-  const [hidden, setHidden] = useState(false)
+  const { loadedProjectId, progress, patch, dismiss, complete } = useOnboardingStore(useShallow(state => ({
+    loadedProjectId: state.projectId,
+    progress: state.progress,
+    patch: state.patch,
+    dismiss: state.dismiss,
+    complete: state.complete,
+  })))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { files, isIndexing } = useGraphStore(useShallow(state => ({
@@ -79,83 +71,109 @@ export function OnboardingGuide({ projectId }: { projectId: string }) {
     openSheet: state.openSheet,
   })))
 
-  useEffect(() => {
-    localStorage.setItem(`onboarding_progress_${projectId}`, JSON.stringify(progress))
-  }, [progress, projectId])
+  // Progress belongs to a project. Until the store is pointed at this one, the
+  // guide neither reads nor writes it — a switch would otherwise record this
+  // project's sheets against the previous project's progress.
+  const ready = loadedProjectId === projectId
 
-  const sheet = progress.sheetId
-    ? sheets.find(item => item.id === progress.sheetId)
-    : undefined
-  const guidePlans = progress.sheetId
-    ? (layersById[progress.sheetId]?.planned ?? [])
-    : []
+  // The guide follows a real sheet, not a local flag. Three things it must
+  // survive, all of which used to restart the walkthrough and mint a duplicate:
+  //  · a relaunch, where sheets are listed but no layer is loaded yet;
+  //  · the user building their first increment from the rail instead of here;
+  //  · that sheet later being deleted.
+  const sheet = useMemo(() => {
+    const remembered = progress.sheetId
+      ? sheets.find(item => item.id === progress.sheetId)
+      : undefined
+    if (remembered) return remembered
+    if (progress.sheetId) return undefined  // deleted — fall back to step one
+    return findSheetByName(sheets, FIRST_INCREMENT) ?? sheets[0]
+  }, [sheets, progress.sheetId])
+
+  // Adopt whatever sheet we ended up following, so the next launch reads it
+  // straight out of local progress instead of guessing again.
+  useEffect(() => {
+    if (!ready) return
+    if (sheet && progress.sheetId !== sheet.id) {
+      patch({ sheetId: sheet.id })
+    } else if (!sheet && progress.sheetId) {
+      patch({ sheetId: undefined, plannedId: undefined })
+    }
+  }, [ready, sheet, progress.sheetId, patch])
+
+  // Only an opened sheet has its layer in memory; until then we cannot know
+  // whether it holds planned work, and the guide asks the user to open it.
+  const layer = sheet ? layersById[sheet.id] : undefined
+  const guidePlans = layer?.planned ?? []
   const plan = progress.plannedId
     ? guidePlans.find(item => item.id === progress.plannedId)
     : guidePlans[0]
 
   useEffect(() => {
-    if (!progress.plannedId && plan) {
-      setProgress(current => ({ ...current, plannedId: plan.id }))
+    if (ready && !progress.plannedId && plan) {
+      patch({ plannedId: plan.id })
     }
-  }, [plan, progress.plannedId])
+  }, [ready, plan, progress.plannedId, patch])
 
   const dispatchedMessage = useMemo(
-    () => messages.find(message =>
-      message.sheetId === progress.sheetId &&
-      message.createdAt >= progress.startedAt
-    ),
-    [messages, progress.sheetId, progress.startedAt],
+    () => messages.find(message => message.sheetId === sheet?.id),
+    [messages, sheet?.id],
   )
   useEffect(() => {
-    if (!progress.dispatched && dispatchedMessage) {
-      setProgress(current => ({ ...current, dispatched: true }))
+    if (ready && !progress.dispatched && dispatchedMessage) {
+      patch({ dispatched: true })
     }
-  }, [dispatchedMessage, progress.dispatched])
+  }, [ready, dispatchedMessage, progress.dispatched, patch])
 
   const stage = onboardingStage({
     baselineReady: files.length > 0 && !isIndexing,
-    sheetReady: Boolean(sheet && layersById[sheet.id]),
+    // Existence, not loadedness. The sheet is a durable row in archd; whether
+    // its layer happens to be in memory is a detail of what is open right now.
+    sheetReady: Boolean(sheet),
     planned: Boolean(plan),
     dispatched: Boolean(progress.dispatched),
     realized: plan?.status === 'realized' || plan?.status === 'flattened',
   })
   const copy = COPY[stage]
 
-  if (
-    hidden ||
-    localStorage.getItem(`onboarding_completed_${projectId}`) === 'true'
-  ) return null
+  // Say nothing until this project's own progress is loaded. Rendering against
+  // the default would flash step one at someone who finished months ago.
+  if (!ready) return null
+
+  // Hiding sticks across launches — "not now" that reappears every morning is
+  // just nagging. The status bar keeps the way back while the loop is open.
+  if (progress.dismissed) return null
 
   const createFirstIncrement = async () => {
     setBusy(true)
     setError(null)
-    const created = await createSheet(
-      projectId,
-      'First Increment',
-      'The first draw → dispatch → realized cycle',
-      [],
-    )
-    if (!created) {
-      setError('Could not create the first increment.')
+    try {
+      // If a First Increment is already sitting there, this is a re-entry, not
+      // a new build — adopt it rather than minting a same-named twin.
+      const existing = findSheetByName(sheets, FIRST_INCREMENT)
+      const target = existing ?? await createSheet(
+        projectId,
+        untakenSheetName(sheets, FIRST_INCREMENT),
+        'The first draw → dispatch → realized cycle',
+        [],
+      )
+      await openSheet(projectId, target.id)
+      patch({ sheetId: target.id })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create the first increment.')
+    } finally {
       setBusy(false)
-      return
     }
-    await openSheet(projectId, created.id)
-    setProgress(current => ({ ...current, sheetId: created.id }))
-    setBusy(false)
   }
 
   const activateGuideSheet = async () => {
-    if (!progress.sheetId) return
+    if (!sheet) return
     setBusy(true)
-    await openSheet(projectId, progress.sheetId)
+    await openSheet(projectId, sheet.id)
     setBusy(false)
   }
 
-  const finish = () => {
-    localStorage.setItem(`onboarding_completed_${projectId}`, 'true')
-    setHidden(true)
-  }
+  const finish = () => complete()
 
   return (
     <aside className={`axiom-onboarding-guide axiom-onboarding-guide--${stage}`} aria-live="polite">
@@ -173,9 +191,9 @@ export function OnboardingGuide({ projectId }: { projectId: string }) {
       </div>
       <button
         className="axiom-onboarding-guide__close"
-        onClick={() => setHidden(true)}
-        aria-label="Hide onboarding guide for now"
-        title="Hide for now"
+        onClick={dismiss}
+        aria-label="Hide the setup guide"
+        title="Hide — reopen from the status bar"
       >
         ×
       </button>
@@ -192,10 +210,12 @@ export function OnboardingGuide({ projectId }: { projectId: string }) {
             {busy ? 'Creating…' : 'Create First Increment'}
           </button>
         )}
-        {stage === 'draw' && activeSheetId !== progress.sheetId && (
-          <button onClick={() => void activateGuideSheet()} disabled={busy}>Open First Increment</button>
+        {stage === 'draw' && activeSheetId !== sheet?.id && (
+          <button onClick={() => void activateGuideSheet()} disabled={busy}>
+            {busy ? 'Opening…' : `Open ${sheet?.name ?? 'First Increment'}`}
+          </button>
         )}
-        {stage === 'draw' && activeSheetId === progress.sheetId && (
+        {stage === 'draw' && activeSheetId === sheet?.id && (
           <span className="axiom-onboarding-guide__waiting">DRAG A STENCIL FROM THE LEFT</span>
         )}
         {stage === 'dispatch' && (

@@ -124,15 +124,17 @@ function ClaimRow({
 }
 
 export function DeltaPanel() {
-  const { delta, reviewing, cursor, files, systems, startReview, setCursor, endReview } =
+  const { delta, reviewing, cursor, deferredUntil, files, systems, startReview, setCursor, deferDelta, endReview } =
     useGraphStore(useShallow(state => ({
       delta: state.delta,
       reviewing: state.deltaReviewing,
       cursor: state.deltaCursor,
+      deferredUntil: state.deltaDeferredUntil,
       files: state.files,
       systems: state.systems,
       startReview: state.startDeltaReview,
       setCursor: state.setDeltaCursor,
+      deferDelta: state.deferDelta,
       endReview: state.endDeltaReview,
     })))
 
@@ -196,6 +198,10 @@ export function DeltaPanel() {
 
   if (!delta || review.empty) return null
 
+  // Set aside with "Later": the delta is still unreviewed in archd, but it has
+  // stopped asking. The status bar carries the way back in.
+  if (!reviewing && deferredUntil === delta.until) return null
+
   // Collapsed: a single quiet line. It states what is waiting and gets out of
   // the way — an unreviewed delta should invite, never block.
   if (!reviewing) {
@@ -209,7 +215,12 @@ export function DeltaPanel() {
         <button type="button" className="axiom-delta__button axiom-delta__button--primary" onClick={startReview}>
           Review
         </button>
-        <button type="button" className="axiom-delta__button" title="Keep this delta for later" onClick={() => endReview(false)}>
+        <button
+          type="button"
+          className="axiom-delta__button"
+          title="Set aside — stays unreviewed, reopen from the status bar"
+          onClick={deferDelta}
+        >
           Later
         </button>
       </aside>

@@ -2193,6 +2193,21 @@ a { color: var(--accent); text-decoration: none; }
   color: #fff;
 }
 
+/* Why the name was refused, sitting directly under the row it belongs to. */
+.axiom-sheet-rail__create-error {
+  margin: 0;
+  padding: 6px 9px 7px;
+  border-bottom: 1px solid #82908b;
+  background: #f6e7e3;
+  color: #7a3129;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.axiom-sheet-rail__name-input[aria-invalid='true'] {
+  border-color: #a4534a;
+}
+
 .axiom-sheet-rail__commit-hint {
   flex: 0 0 auto;
   color: #375c55;
@@ -2779,6 +2794,45 @@ select.axiom-inspector-input {
 .axiom-status-bar__metric strong {
   color: #e1e6e4;
   font-size: 9px;
+}
+
+/* Set-aside delta. It is the one status segment that is clickable, so it reads
+   as a control: amber lamp, hover lift, pointer. */
+.axiom-status-bar__delta {
+  border: 0;
+  border-right: 1px solid #3e4847;
+  background: transparent;
+  color: #d9c48c;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.axiom-status-bar__delta:hover {
+  background: #313c3a;
+  color: #f0dfae;
+}
+
+.axiom-status-bar__delta .axiom-status-bar__lamp {
+  background: #d7a844;
+  box-shadow: 0 0 0 1px #8a6826;
+}
+
+.axiom-status-bar__guide {
+  border: 0;
+  border-right: 1px solid #3e4847;
+  background: transparent;
+  color: #9db3ad;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.axiom-status-bar__guide:hover {
+  background: #313c3a;
+  color: #d8e6e2;
 }
 
 .axiom-status-bar__indexing {
@@ -6020,6 +6074,15 @@ select.axiom-inspector-input {
   background: linear-gradient(180deg, #527f77 0%, #356b63 100%);
   color: #fffdf6;
   text-shadow: 0 1px 0 #1d443f;
+}
+
+/* The generic hover above out-specifies the primary rule, so without this the
+   primary button hovers to a pale cream ground while keeping its near-white
+   ink — the label disappears under the cursor. Primary hovers lighter sage. */
+.axiom-delta__button--primary:not(:disabled):hover {
+  border-color: #1d443f;
+  background: linear-gradient(180deg, #5f8e85 0%, #3d7a71 100%);
+  color: #fffdf6;
 }
 
 @media (max-width: 1180px) {
