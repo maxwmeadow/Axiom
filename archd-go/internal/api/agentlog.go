@@ -39,7 +39,7 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	// Attribute the action to whatever work the agent declared it was doing,
 	// so the log groups into tasks rather than reading as a flat firehose.
 	if body.SessionID == "" {
-		body.SessionID = db.ActiveWorkSessionID(sqlDB, body.WorkspaceID)
+		body.SessionID = db.ActiveWorkSessionIDForRoot(sqlDB, body.WorkspaceID, body.RootID)
 	}
 	activity.MarkAgent(body.WorkspaceID)
 

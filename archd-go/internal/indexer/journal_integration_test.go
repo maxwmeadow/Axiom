@@ -23,7 +23,10 @@ func journalFixture(t *testing.T) (*sql.DB, db.Root, *hub.Hub) {
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	root := db.Root{ID: "root", WorkspaceID: "ws", Path: t.TempDir()}
+	root := db.Root{
+		ID: "root", WorkspaceID: "ws", Path: t.TempDir(),
+		Branch: "feature/journal", IsPrimary: true,
+	}
 	if err := db.UpsertWorkspace(sqlDB, db.Workspace{ID: "ws", Name: "journal"}); err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +90,15 @@ func TestReindexJournalsCreationAndTopology(t *testing.T) {
 	for _, file := range summary.Files {
 		if file.Language != "python" {
 			t.Fatalf("journal lost the file's language: %+v", file)
+		}
+	}
+	events, err := db.GetStructuralEvents(sqlDB, "ws", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.RootID != root.ID || event.Branch != root.Branch {
+			t.Fatalf("event lost watcher root identity: %#v", event)
 		}
 	}
 }

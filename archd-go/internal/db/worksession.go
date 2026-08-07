@@ -32,7 +32,8 @@ func scanWorkSession(scanner interface{ Scan(...any) error }) (WorkSession, erro
 	var session WorkSession
 	var notes, focusSystems, focusFiles string
 	err := scanner.Scan(
-		&session.ID, &session.WorkspaceID, &session.OwnerKey, &session.Agent,
+		&session.ID, &session.WorkspaceID, &session.RootID, &session.Branch,
+		&session.OwnerKey, &session.Agent,
 		&session.Goal, &session.Summary, &notes, &focusSystems, &focusFiles,
 		&session.StartedAt, &session.EndedAt,
 	)
@@ -47,7 +48,16 @@ func scanWorkSession(scanner interface{ Scan(...any) error }) (WorkSession, erro
 }
 
 const workSessionColumns = `
-	id, workspace_id, owner_key, agent, goal, summary, notes,
+	id, workspace_id,
+	COALESCE(root_id, (
+		SELECT r.id FROM roots r WHERE r.workspace_id=work_sessions.workspace_id
+		ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+	), ''),
+	COALESCE(branch, (
+		SELECT r.branch FROM roots r WHERE r.workspace_id=work_sessions.workspace_id
+		ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+	), ''),
+	owner_key, agent, goal, summary, notes,
 	focus_system_ids, focus_file_ids, started_at, ended_at`
 
 // StartWorkSession opens a session, closing only a session left open by the
@@ -61,6 +71,9 @@ func StartWorkSession(db *sql.DB, session WorkSession) (WorkSession, error) {
 	if session.Notes == nil {
 		session.Notes = []SessionNote{}
 	}
+	session.RootID, session.Branch = completeHistoryIdentity(
+		db, session.WorkspaceID, session.RootID, session.Branch,
+	)
 	notes, err := json.Marshal(session.Notes)
 	if err != nil {
 		return session, err
@@ -87,10 +100,12 @@ func StartWorkSession(db *sql.DB, session WorkSession) (WorkSession, error) {
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO work_sessions (
-			id, workspace_id, owner_key, agent, goal, summary, notes,
+			id, workspace_id, root_id, branch, owner_key, agent, goal, summary, notes,
 			focus_system_ids, focus_file_ids, started_at, ended_at
-		) VALUES (?,?,?,?,?,?,?,?,?,?,0)`,
-		session.ID, session.WorkspaceID, session.OwnerKey, session.Agent,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+		session.ID, session.WorkspaceID,
+		nullableHistoryIdentity(session.RootID), nullableHistoryIdentity(session.Branch),
+		session.OwnerKey, session.Agent,
 		session.Goal, session.Summary, string(notes), focusSystems, focusFiles,
 		session.StartedAt); err != nil {
 		return session, err
@@ -100,13 +115,22 @@ func StartWorkSession(db *sql.DB, session WorkSession) (WorkSession, error) {
 
 // ActiveWorkSessionID returns the newest open session. It exists for legacy
 // callers that do not identify a session; new parallel-aware callers should
-// use a session ID or ActiveWorkSessionIDForEntities.
+// use a session ID or ActiveWorkSessionIDForRootEntities.
 func ActiveWorkSessionID(db *sql.DB, workspaceID string) string {
+	return ActiveWorkSessionIDForRoot(db, workspaceID, "")
+}
+
+func ActiveWorkSessionIDForRoot(db *sql.DB, workspaceID, rootID string) string {
+	rootID = effectiveRootID(db, workspaceID, rootID)
 	var id string
 	err := db.QueryRow(`
-		SELECT id FROM work_sessions
-		WHERE workspace_id = ? AND ended_at = 0
-		ORDER BY started_at DESC LIMIT 1`, workspaceID).Scan(&id)
+		SELECT ws.id FROM work_sessions ws
+		WHERE ws.workspace_id = ? AND ws.ended_at = 0
+		  AND COALESCE(ws.root_id, (
+		      SELECT r.id FROM roots r WHERE r.workspace_id=ws.workspace_id
+		      ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		  ), '') = ?
+		ORDER BY ws.started_at DESC LIMIT 1`, workspaceID, rootID).Scan(&id)
 	if err != nil {
 		return ""
 	}
@@ -118,6 +142,16 @@ func ActiveWorkSessionID(db *sql.DB, workspaceID string) string {
 // implicit attribution remains useful; with multiple unmatched or overlapping
 // sessions it returns empty rather than claiming the wrong agent did the work.
 func ActiveWorkSessionIDForEntities(db *sql.DB, workspaceID string, entityIDs ...string) string {
+	return ActiveWorkSessionIDForRootEntities(db, workspaceID, "", entityIDs...)
+}
+
+func ActiveWorkSessionIDForRootEntities(
+	db *sql.DB,
+	workspaceID string,
+	rootID string,
+	entityIDs ...string,
+) string {
+	rootID = effectiveRootID(db, workspaceID, rootID)
 	sessions, err := GetActiveWorkSessions(db, workspaceID)
 	if err != nil || len(sessions) == 0 {
 		return ""
@@ -129,7 +163,12 @@ func ActiveWorkSessionIDForEntities(db *sql.DB, workspaceID string, entityIDs ..
 		}
 	}
 	matches := make([]string, 0, 1)
+	rootSessions := make([]string, 0, 1)
 	for _, session := range sessions {
+		if session.RootID != rootID {
+			continue
+		}
+		rootSessions = append(rootSessions, session.ID)
 		matched := false
 		for _, id := range append(session.FocusSystemIDs, session.FocusFileIDs...) {
 			if _, ok := wanted[id]; ok {
@@ -144,8 +183,8 @@ func ActiveWorkSessionIDForEntities(db *sql.DB, workspaceID string, entityIDs ..
 	if len(matches) == 1 {
 		return matches[0]
 	}
-	if len(matches) == 0 && len(sessions) == 1 {
-		return sessions[0].ID
+	if len(matches) == 0 && len(rootSessions) == 1 {
+		return rootSessions[0]
 	}
 	return ""
 }

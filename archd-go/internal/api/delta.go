@@ -175,6 +175,8 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		WorkspaceID    string   `json:"workspaceId"`
+		RootID         string   `json:"rootId"`
+		Branch         string   `json:"branch"`
 		SessionID      string   `json:"sessionId"`
 		OwnerKey       string   `json:"ownerKey"`
 		Agent          string   `json:"agent"`
@@ -203,6 +205,8 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 		session, err := db.StartWorkSession(sqlDB, db.WorkSession{
 			ID:             uuid.NewString(),
 			WorkspaceID:    body.WorkspaceID,
+			RootID:         body.RootID,
+			Branch:         body.Branch,
 			OwnerKey:       body.OwnerKey,
 			Agent:          body.Agent,
 			Goal:           body.Goal,

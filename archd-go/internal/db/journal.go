@@ -41,6 +41,8 @@ const journalRetentionMs = 30 * 24 * 60 * 60 * 1000
 type StructuralEvent struct {
 	ID           int64  `json:"id"`
 	WorkspaceID  string `json:"workspaceId"`
+	RootID       string `json:"rootId"`
+	Branch       string `json:"branch"`
 	TS           int64  `json:"ts"`
 	Actor        string `json:"actor"` // 'human'|'agent'
 	TraceID      string `json:"traceId,omitempty"`
@@ -69,6 +71,8 @@ type StructuralEvent struct {
 type WorkSession struct {
 	ID             string        `json:"id"`
 	WorkspaceID    string        `json:"workspaceId"`
+	RootID         string        `json:"rootId"`
+	Branch         string        `json:"branch"`
 	OwnerKey       string        `json:"-"`
 	Agent          string        `json:"agent,omitempty"`
 	Goal           string        `json:"goal"`
@@ -95,6 +99,9 @@ func RecordStructuralEvent(db *sql.DB, ev StructuralEvent) error {
 	if ev.Actor == "" {
 		ev.Actor = "human"
 	}
+	ev.RootID, ev.Branch = completeHistoryIdentity(
+		db, ev.WorkspaceID, ev.RootID, ev.Branch,
+	)
 
 	if ev.Kind == EventFileUpdated {
 		res, err := db.Exec(`
@@ -103,11 +110,15 @@ func RecordStructuralEvent(db *sql.DB, ev StructuralEvent) error {
 			WHERE id = (
 				SELECT id FROM structural_events
 				WHERE workspace_id = ? AND kind = ? AND subject_id = ? AND actor = ?
-					AND session_id = ? AND ts >= ?
+					AND session_id = ?
+					AND COALESCE(root_id, '') = COALESCE(?, '')
+					AND COALESCE(branch, '') = COALESCE(?, '')
+					AND ts >= ?
 				ORDER BY ts DESC LIMIT 1
 			)`,
 			ev.TS, ev.TraceID,
 			ev.WorkspaceID, ev.Kind, ev.SubjectID, ev.Actor, ev.SessionID,
+			nullableHistoryIdentity(ev.RootID), nullableHistoryIdentity(ev.Branch),
 			ev.TS-updateCollapseWindowMs)
 		if err != nil {
 			return err
@@ -119,10 +130,11 @@ func RecordStructuralEvent(db *sql.DB, ev StructuralEvent) error {
 
 	_, err := db.Exec(`
 		INSERT INTO structural_events
-			(workspace_id, ts, actor, trace_id, kind,
+			(workspace_id, root_id, branch, ts, actor, trace_id, kind,
 			 subject_id, subject_label, object_id, object_label, detail, count, session_id)
-		VALUES (?,?,?,?,?,?,?,?,?,?,1,?)`,
-		ev.WorkspaceID, ev.TS, ev.Actor, ev.TraceID, ev.Kind,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)`,
+		ev.WorkspaceID, nullableHistoryIdentity(ev.RootID), nullableHistoryIdentity(ev.Branch),
+		ev.TS, ev.Actor, ev.TraceID, ev.Kind,
 		ev.SubjectID, ev.SubjectLabel, ev.ObjectID, ev.ObjectLabel, ev.Detail, ev.SessionID)
 	return err
 }
@@ -132,11 +144,20 @@ func RecordStructuralEvent(db *sql.DB, ev StructuralEvent) error {
 // choreography that would have animated it live.
 func GetStructuralEvents(db *sql.DB, workspaceID string, since int64) ([]StructuralEvent, error) {
 	rows, err := db.Query(`
-		SELECT id, workspace_id, ts, actor, trace_id, kind,
+		SELECT se.id, se.workspace_id,
+		       COALESCE(se.root_id, (
+		           SELECT r.id FROM roots r WHERE r.workspace_id=se.workspace_id
+		           ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		       ), ''),
+		       COALESCE(se.branch, (
+		           SELECT r.branch FROM roots r WHERE r.workspace_id=se.workspace_id
+		           ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		       ), ''),
+		       se.ts, se.actor, se.trace_id, se.kind,
 		       subject_id, subject_label, object_id, object_label, detail, count, session_id
-		FROM structural_events
-		WHERE workspace_id = ? AND ts > ?
-		ORDER BY ts ASC, id ASC`, workspaceID, since)
+		FROM structural_events se
+		WHERE se.workspace_id = ? AND se.ts > ?
+		ORDER BY se.ts ASC, se.id ASC`, workspaceID, since)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +167,8 @@ func GetStructuralEvents(db *sql.DB, workspaceID string, since int64) ([]Structu
 	for rows.Next() {
 		var ev StructuralEvent
 		if err := rows.Scan(
-			&ev.ID, &ev.WorkspaceID, &ev.TS, &ev.Actor, &ev.TraceID, &ev.Kind,
+			&ev.ID, &ev.WorkspaceID, &ev.RootID, &ev.Branch,
+			&ev.TS, &ev.Actor, &ev.TraceID, &ev.Kind,
 			&ev.SubjectID, &ev.SubjectLabel, &ev.ObjectID, &ev.ObjectLabel,
 			&ev.Detail, &ev.Count, &ev.SessionID,
 		); err != nil {
