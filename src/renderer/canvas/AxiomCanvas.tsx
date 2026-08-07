@@ -25,6 +25,7 @@ import {
   Controls,
   MiniMap,
   useReactFlow,
+  useNodesInitialized,
   useViewport,
   type Node,
   type Edge,
@@ -86,6 +87,7 @@ import { inspectFloorScene, partitionCanvasNodeChanges } from './sceneIntegrity'
 import { routeWheelEvent, wheelScrollStep } from './wheelRouting'
 import { rectContainsRect } from './selectionResize'
 import { sheetEditableNodeIds } from './sheetEditability'
+import { advanceSceneMeasurement, sceneMeasurementIsSettled } from './initialCameraFit'
 import {
   diffScene,
   recordSceneMutation,
@@ -1289,6 +1291,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   )
   const currentProject = useGraphStore(s => s.currentProject)
   const { fitView, getViewport, setViewport, getInternalNode, screenToFlowPosition } = useReactFlow()
+  const nodesInitialized = useNodesInitialized({ includeHiddenNodes: true })
   const livingVisibilityOptions = useMemo(() => {
     const semanticParentById = new Map<string, string | null>()
     const labelById = new Map<string, string>()
@@ -1381,6 +1384,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const liveNodeCountRef = useRef(0)
   const lastUserMoveAtRef = useRef(0)
   const cameraFitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingInitialFitProjectRef = useRef<string | null>(null)
   const canvasRootRef = useRef<HTMLDivElement>(null)
   const domSceneRecoveryRef = useRef('')
   const cursorTraceSignatureRef = useRef('')
@@ -2537,11 +2541,59 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
 
     if (isFirstLayout) {
       layoutBuiltRef.current = projectId
-      // maxZoom keeps a sparse Floor (one or two fresh files) from being blown
-      // up to fill the screen; live growth reframes gently from here.
-      queueCameraFit(80, { padding: 0.25, duration: 950, maxZoom: 1.0 })
+      pendingInitialFitProjectRef.current = projectId
     }
-  }, [systems, files, infraNodes, floorLayouts, dependencies, onNodeResizeEnd, armResizeEndFallback, queueCameraFit])
+  }, [systems, files, infraNodes, floorLayouts, dependencies, onNodeResizeEnd, armResizeEndFallback])
+
+  // The first camera used to be an 80ms guess after setRfNodes. That raced both
+  // React Flow measurement and the immediate persisted-layout reprojection, so
+  // unrelated mount work could decide which bounds fitView observed. Sample
+  // the complete internal scene until its absolute measured geometry is stable
+  // across consecutive frames, then fit exactly once for this project.
+  useEffect(() => {
+    if (!nodesInitialized || pendingInitialFitProjectRef.current !== sceneProjectId || rfNodes.length === 0) {
+      return
+    }
+
+    let frame = 0
+    let measurement = { signature: null as string | null, stableFrames: 0 }
+    const sampleMeasuredScene = () => {
+      if (pendingInitialFitProjectRef.current !== sceneProjectId) return
+
+      const parts: string[] = []
+      for (const node of rfNodes) {
+        const internal = getInternalNode(node.id)
+        const width = internal?.measured.width
+        const height = internal?.measured.height
+        const position = internal?.internals.positionAbsolute
+        if (!position || !width || !height) {
+          measurement = advanceSceneMeasurement(measurement, null)
+          frame = requestAnimationFrame(sampleMeasuredScene)
+          return
+        }
+        parts.push(`${node.id}:${position.x},${position.y},${width},${height}`)
+      }
+      parts.sort()
+      measurement = advanceSceneMeasurement(measurement, parts.join('|'))
+      if (!sceneMeasurementIsSettled(measurement)) {
+        frame = requestAnimationFrame(sampleMeasuredScene)
+        return
+      }
+
+      pendingInitialFitProjectRef.current = null
+      // maxZoom keeps a sparse Floor from filling the viewport. The short
+      // authored entrance completes well before the canvas is interactive.
+      void fitView({
+        nodes: rfNodes.map(node => ({ id: node.id })),
+        padding: 0.25,
+        duration: 400,
+        maxZoom: 1.0,
+      })
+    }
+
+    frame = requestAnimationFrame(sampleMeasuredScene)
+    return () => cancelAnimationFrame(frame)
+  }, [fitView, getInternalNode, nodesInitialized, rfNodes, sceneProjectId])
 
   // Live reframing — as files stream in from the watcher, gently fit the growing
   // graph so new nodes come into view at a sensible zoom, instead of leaving the
