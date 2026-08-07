@@ -1,4 +1,11 @@
-import type { AgentAction, DbSystem, DeltaSummary, FloorLayout, ParallelAgentSnapshot } from '../../shared/types'
+import type {
+  AgentAction,
+  DbSystem,
+  DeltaSummary,
+  FloorLayout,
+  ParallelAgentSnapshot,
+  ParallelCommandDeckStatus,
+} from '../../shared/types'
 
 const BASE = 'http://127.0.0.1:7744'
 
@@ -55,6 +62,16 @@ export async function apiGetBranchCollisions(
   const res = await fetch(`${BASE}/api/collisions?${params}`, { signal })
   if (!res.ok) throw new Error(await res.text() || `Unable to load branch collisions (${res.status})`)
   return res.json() as Promise<ParallelAgentSnapshot>
+}
+
+export async function apiGetParallelCommandDeck(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<ParallelCommandDeckStatus> {
+  const params = new URLSearchParams({ workspace: workspaceId })
+  const res = await fetch(`${BASE}/api/command-deck?${params}`, { signal })
+  if (!res.ok) throw new Error(await res.text() || `Unable to load branch briefing (${res.status})`)
+  return res.json() as Promise<ParallelCommandDeckStatus>
 }
 
 export interface FileSource {

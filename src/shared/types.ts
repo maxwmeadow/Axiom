@@ -637,3 +637,22 @@ export interface ParallelAgentSnapshot {
   branches: ActiveBranch[]
   collisions: BranchCollision[]
 }
+
+export interface CommandDeckBranchStatus {
+  rootId: string
+  branch: string
+  headCommit: string
+  isPrimary: boolean
+  files: number
+  systems: number
+  unreviewedClaims: number
+  unexplained: number
+  unexpected: number
+  activeWork: DeltaWorkSession[]
+  lastActivityAt: number
+}
+
+export interface ParallelCommandDeckStatus {
+  workspaceId: string
+  branches: CommandDeckBranchStatus[]
+}
