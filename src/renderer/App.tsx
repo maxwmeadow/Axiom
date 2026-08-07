@@ -16,14 +16,15 @@ import { ReplayBar } from './components/ReplayBar'
 import { OnboardingGuide } from './components/OnboardingGuide'
 import { AgentLane } from './components/AgentLane'
 import { InterruptionLane } from './components/InterruptionLane'
+import { EmptyIndexNotice } from './components/EmptyIndexNotice'
 import { HomeScreen } from './screens/HomeScreen'
 import { ProjectSetupScreen } from './screens/ProjectSetupScreen'
 import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
 
 import { useGraphStore, connectToArchd } from './store/graphStore'
 import { useOnboardingStore } from './store/onboardingStore'
-import { raiseFailure, useInterruptionStore } from './store/interruptionStore'
-import { resumeDecision } from '../shared/sessionResume'
+import { raiseFailure, useInterruptionStore } from './store/interruptionStore.ts'
+import { resumeDecision } from '../shared/sessionResume.ts'
 import { useRegistryStore } from './store/registryStore'
 import { SheetRail } from './components/SheetRail'
 import type { ProjectConfig } from '../shared/types'
@@ -428,6 +429,9 @@ export default function App() {
 
           {/* Raises a decision when an agent asks to override a runtime value */}
           <InjectConfirmBanner />
+
+          {/* Recovers the "indexed nothing, blank Floor, nothing to click" trap */}
+          <EmptyIndexNotice onReconfigure={() => setPendingSetup(currentProject)} />
 
           {/* Agent activity log — everything the agent is doing, live */}
           {agentLogOpen && <AgentLogPanel onClose={() => setAgentLogOpen(false)} />}

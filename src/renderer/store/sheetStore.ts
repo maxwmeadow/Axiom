@@ -3,6 +3,7 @@
 // activeSheetId === null.
 import { create } from 'zustand'
 import type { FloorLayout } from '../../shared/types'
+import { raiseFailure } from './interruptionStore.ts'
 
 const API = 'http://127.0.0.1:7743'
 let openSheetRequest = 0
@@ -473,15 +474,26 @@ export const useSheetStore = create<SheetState>((set, get) => ({
       })
       if (!res.ok) throw new Error(await res.text())
     } catch (error) {
+      let reverted = false
       if (previous) set(s => {
         const layer = s.layersById[n.sheetId]
         if (!layer) return s
         const current = layer.planned.find(planned => planned.id === n.id)
         if (current !== n) return s
         const planned = layer.planned.map(item => item.id === n.id ? previous : item)
+        reverted = true
         return commitSheetLayer(s, n.sheetId, { ...layer, planned })
       })
       console.error('[sheets] planned node update failed:', error)
+      // Watching your own typing silently undo itself reads as the app
+      // corrupting your work. Say who reverted it and why.
+      if (reverted) {
+        raiseFailure(
+          `planned-update:${n.id}`,
+          `Could not save changes to "${previous?.name ?? 'this element'}"`,
+          `${error instanceof Error ? error.message : String(error)} — your edit was rolled back.`,
+        )
+      }
     }
   },
 

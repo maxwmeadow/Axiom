@@ -5,8 +5,8 @@ import {
   laneState,
   nextExpiry,
   type Interruption,
-} from '../../shared/interruptions'
-import { useInterruptionStore } from '../store/interruptionStore'
+} from '../../shared/interruptions.ts'
+import { useInterruptionStore } from '../store/interruptionStore.ts'
 
 /**
  * The single place anything interrupts you.

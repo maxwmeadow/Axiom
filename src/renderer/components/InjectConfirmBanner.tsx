@@ -5,7 +5,7 @@ import {
   raiseFailure,
   resolveInterruption,
   useInterruptionStore,
-} from '../store/interruptionStore'
+} from '../store/interruptionStore.ts'
 
 /**
  * The warn-and-confirm gate for perturbations.

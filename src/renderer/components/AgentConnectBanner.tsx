@@ -5,7 +5,7 @@ import {
   raiseInvitation,
   raiseNotice,
   resolveInterruption,
-} from '../store/interruptionStore'
+} from '../store/interruptionStore.ts'
 
 /**
  * "Files are indexed but unclassified — connect an agent to give them

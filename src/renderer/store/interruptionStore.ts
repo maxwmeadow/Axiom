@@ -6,7 +6,7 @@
 // through one store means the ordering rules in shared/interruptions.ts are the
 // only ordering rules, and adding a surface cannot reintroduce a collision.
 import { create } from 'zustand'
-import type { Interruption, InterruptionAction } from '../../shared/interruptions'
+import type { Interruption, InterruptionAction } from '../../shared/interruptions.ts'
 
 /** How long a plain confirmation stays on screen before removing itself. */
 const NOTICE_TTL_MS = 4000
