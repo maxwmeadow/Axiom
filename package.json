@@ -16,9 +16,11 @@
     "package": "electron-vite build && electron-builder",
     "postinstall": "electron-rebuild",
     "archd": "node out/main/archd.js",
-    "build:archd": "C:\\msys64\\usr\\bin\\bash.exe --login -c \"export PATH=/mingw64/bin:/mingw64/lib/go/bin:$PATH && cd /c/Users/maxst/VSCodeProjects/Axiom/archd-go && GOROOT=/mingw64/lib/go GOPATH=/c/Users/maxst/go CGO_ENABLED=1 go build -o archd.exe ./cmd/archd && ./archd.exe -h >/dev/null && echo Done\"",
-    "dbquery": "C:\\msys64\\usr\\bin\\bash.exe --login -c \"export PATH=/mingw64/bin:/mingw64/lib/go/bin:$PATH && cd /c/Users/maxst/VSCodeProjects/Axiom/archd-go && GOROOT=/mingw64/lib/go GOPATH=/c/Users/maxst/go CGO_ENABLED=1 go run ./cmd/dbquery/main.go -db /c/Users/maxst/.axiom/data/axiom.db\"",
-    "seed-arch": "npx tsx scripts/seed-architecture.ts"
+    "build:archd": "C:\\msys64\\usr\\bin\\bash.exe scripts/archd.sh build",
+    "dbquery": "C:\\msys64\\usr\\bin\\bash.exe scripts/archd.sh dbquery",
+    "seed-arch": "npx tsx scripts/seed-architecture.ts",
+    "test:archd": "C:\\msys64\\usr\\bin\\bash.exe scripts/archd.sh test",
+    "vet:archd": "C:\\msys64\\usr\\bin\\bash.exe scripts/archd.sh vet"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.5",
