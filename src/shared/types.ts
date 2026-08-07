@@ -610,6 +610,12 @@ export interface ActiveBranch {
   touchedSystems: BranchSystemTouch[]
   unclassifiedFiles: string[]
   errors?: string[]
+  activeWork: Array<{
+    sessionId: string
+    agent?: string
+    goal: string
+    startedAt: number
+  }>
 }
 
 export interface CollisionBranch {

@@ -198,6 +198,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID    string   `json:"workspaceId"`
 		RootID         string   `json:"rootId"`
 		Branch         string   `json:"branch"`
+		Cwd            string   `json:"cwd"`
 		SessionID      string   `json:"sessionId"`
 		OwnerKey       string   `json:"ownerKey"`
 		Agent          string   `json:"agent"`
@@ -223,11 +224,30 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "goal is required", 400)
 			return
 		}
+		rootID, branch := body.RootID, body.Branch
+		if rootID == "" && body.Cwd != "" {
+			if root, matched, resolveErr := resolveWorkspaceRootForCwd(
+				sqlDB, body.WorkspaceID, body.Cwd,
+			); resolveErr != nil {
+				jsonError(w, resolveErr.Error(), http.StatusInternalServerError)
+				return
+			} else if matched {
+				rootID, branch = root.ID, root.Branch
+			}
+		}
+		if rootID != "" {
+			root, resolveErr := resolveWorkspaceRoot(sqlDB, body.WorkspaceID, rootID, branch)
+			if resolveErr != nil {
+				jsonError(w, resolveErr.Error(), http.StatusBadRequest)
+				return
+			}
+			rootID, branch = root.ID, root.Branch
+		}
 		session, err := db.StartWorkSession(sqlDB, db.WorkSession{
 			ID:             uuid.NewString(),
 			WorkspaceID:    body.WorkspaceID,
-			RootID:         body.RootID,
-			Branch:         body.Branch,
+			RootID:         rootID,
+			Branch:         branch,
 			OwnerKey:       body.OwnerKey,
 			Agent:          body.Agent,
 			Goal:           body.Goal,
@@ -239,6 +259,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		activity.MarkAgent(body.WorkspaceID)
+		s.invalidateCollisionCache(body.WorkspaceID)
 		s.hub.Broadcast("work:session", session)
 		jsonOK(w, session)
 
@@ -279,6 +300,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.hub.Broadcast("work:session", session)
+		s.invalidateCollisionCache(body.WorkspaceID)
 		jsonOK(w, session)
 
 	default:

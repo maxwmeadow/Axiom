@@ -18,6 +18,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 import { actionKind, actionSummary, actionTargets } from './agentAction.ts'
 import { routeTool } from './toolRouting.ts'
+import { findWorktreeForCwd, type WorktreeContext, type WorktreeRow } from './worktreeContext.ts'
 import fs from 'fs'
 
 // Helper: UUID generator for system nodes
@@ -32,7 +33,11 @@ function generateUUID(): string {
 // Stable for this MCP process: starting another task supersedes only this
 // client's forgotten session, never another agent working in parallel.
 const workOwnerKey = generateUUID()
-const activeWorkSessionIds = new Map<string, string>()
+interface ActiveWorkSession extends WorktreeContext {
+  id: string
+}
+
+const activeWorkSessions = new Map<string, ActiveWorkSession>()
 
 // Helper: Retrieve the active project metadata
 interface ActiveProject {
@@ -100,6 +105,7 @@ async function postAgentAction(
   result: unknown,
   startedAt: number,
   error?: string,
+  session?: ActiveWorkSession,
 ) {
   try {
     await fetch(`${API_BASE}/api/agent/action`, {
@@ -107,6 +113,10 @@ async function postAgentAction(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         workspaceId,
+        cwd: process.cwd(),
+        rootId: session?.rootId,
+        branch: session?.branch,
+        sessionId: session?.id,
         tool,
         kind: actionKind(tool),
         summary: actionSummary(tool, args),
@@ -119,6 +129,13 @@ async function postAgentAction(
   } catch {
     // The log is an observability aid, never a dependency.
   }
+}
+
+async function currentWorktreeContext(workspaceId: string, cwd: string): Promise<WorktreeContext | undefined> {
+  const roots = await queryDb(workspaceId, `
+    SELECT id, path, branch FROM roots
+    WHERE workspace_id = ? AND is_active = 1`, [workspaceId]) as WorktreeRow[]
+  return findWorktreeForCwd(roots, cwd)
 }
 
 // Helper: resolve a sheet by ID or exact name.
@@ -134,18 +151,24 @@ async function resolveSheetId(workspaceId: string, ref: string): Promise<string>
 
 // Helper: resolve a model ref (file rel path / system name / infra name / UUID)
 // to exactly one of {fileId|systemId|infraId} for sheet membership.
-async function resolveModelRef(workspaceId: string, ref: string): Promise<{ fileId?: string; systemId?: string; infraId?: string }> {
+async function resolveModelRef(
+  workspaceId: string,
+  ref: string,
+  rootId?: string,
+): Promise<{ fileId?: string; systemId?: string; infraId?: string }> {
   const norm = ref.replace(/\\/g, '/').replace(/^(file|sys|infra):\/\//, '')
   // Files: exact rel path, then unique suffix.
   const fileRows = await queryDb(workspaceId, `
     SELECT f.id FROM files f JOIN roots r ON f.root_id = r.id
-    WHERE r.workspace_id = ? AND (f.id = ? OR f.rel_path = ? OR f.rel_path LIKE ?)
-    LIMIT 2`, [workspaceId, ref, norm, `%/${norm.split('/').pop()}`])
+    WHERE r.workspace_id = ? AND (? = '' OR f.root_id = ?)
+      AND (f.id = ? OR f.rel_path = ? OR f.rel_path LIKE ?)
+    LIMIT 2`, [workspaceId, rootId ?? '', rootId ?? '', ref, norm, `%/${norm.split('/').pop()}`])
   if (fileRows.length === 1) return { fileId: fileRows[0].id }
   if (fileRows.length > 1) {
     const exact = await queryDb(workspaceId, `
       SELECT f.id FROM files f JOIN roots r ON f.root_id = r.id
-      WHERE r.workspace_id = ? AND f.rel_path = ? LIMIT 1`, [workspaceId, norm])
+      WHERE r.workspace_id = ? AND (? = '' OR f.root_id = ?) AND f.rel_path = ? LIMIT 1`,
+      [workspaceId, rootId ?? '', rootId ?? '', norm])
     if (exact.length === 1) return { fileId: exact[0].id }
     throw new Error(`Ambiguous file ref "${ref}" — use the full relative path`)
   }
@@ -493,10 +516,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   const startedAt = Date.now()
   let loggedWorkspaceId = ''
+  let loggedWorkSession: ActiveWorkSession | undefined
 
   try {
     const project = getActiveProject()
     loggedWorkspaceId = project.workspaceId
+    loggedWorkSession = activeWorkSessions.get(project.workspaceId)
     let result: unknown
 
     // Consolidated tools are rewritten into the legacy call that already
@@ -1391,8 +1416,10 @@ Steps to execute:
         const focus = (args.focus as string[] | undefined) ?? []
         const focusSystemIds: string[] = []
         const focusFileIds: string[] = []
+        const cwd = process.cwd()
+        const worktree = await currentWorktreeContext(project.workspaceId, cwd)
         for (const ref of focus) {
-          const resolved = await resolveModelRef(project.workspaceId, ref)
+          const resolved = await resolveModelRef(project.workspaceId, ref, worktree?.rootId)
           if (resolved.systemId) focusSystemIds.push(resolved.systemId)
           else if (resolved.fileId) focusFileIds.push(resolved.fileId)
           else throw new Error(`Work focus "${ref}" is infrastructure; use a file or system boundary`)
@@ -1401,6 +1428,7 @@ Steps to execute:
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             workspaceId: project.workspaceId,
+            cwd,
             ownerKey: workOwnerKey,
             goal,
             agent,
@@ -1410,18 +1438,20 @@ Steps to execute:
         })
         if (!res.ok) throw new Error(`start_work failed: ${await res.text()}`)
         result = await res.json()
-        activeWorkSessionIds.set(project.workspaceId, (result as { id: string }).id)
+        const session = result as ActiveWorkSession
+        activeWorkSessions.set(project.workspaceId, session)
+        loggedWorkSession = session
         await postAgentActivity(project.workspaceId, `Working: ${goal}`, 'info')
         break
       }
 
       case 'note_work': {
         const text = args.text as string
-        const sessionId = activeWorkSessionIds.get(project.workspaceId)
-        if (!sessionId) throw new Error('No active work session in this MCP client — call start_work first')
+        const session = activeWorkSessions.get(project.workspaceId)
+        if (!session) throw new Error('No active work session in this MCP client — call start_work first')
         const res = await fetch(`${API_BASE}/api/work/note`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workspaceId: project.workspaceId, sessionId, text }),
+          body: JSON.stringify({ workspaceId: project.workspaceId, sessionId: session.id, text }),
         })
         if (!res.ok) throw new Error(`note_work failed: ${await res.text()}`)
         result = await res.json()
@@ -1431,15 +1461,15 @@ Steps to execute:
 
       case 'finish_work': {
         const summary = args.summary as string
-        const sessionId = activeWorkSessionIds.get(project.workspaceId)
-        if (!sessionId) throw new Error('No active work session in this MCP client — call start_work first')
+        const session = activeWorkSessions.get(project.workspaceId)
+        if (!session) throw new Error('No active work session in this MCP client — call start_work first')
         const res = await fetch(`${API_BASE}/api/work/finish`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workspaceId: project.workspaceId, sessionId, summary }),
+          body: JSON.stringify({ workspaceId: project.workspaceId, sessionId: session.id, summary }),
         })
         if (!res.ok) throw new Error(`finish_work failed: ${await res.text()}`)
         result = await res.json()
-        activeWorkSessionIds.delete(project.workspaceId)
+        activeWorkSessions.delete(project.workspaceId)
         await postAgentActivity(project.workspaceId, `Finished: ${summary}`, 'success')
         break
       }
@@ -1924,7 +1954,9 @@ Steps to execute:
     // Every tool lands here, so a tool added later is visible on the canvas
     // and in the log without anyone remembering to instrument it.
     // Logged under the name the AGENT used, not the legacy name it routed to.
-    void postAgentAction(project.workspaceId, name, callerArgs, result, startedAt)
+    void postAgentAction(
+      project.workspaceId, name, callerArgs, result, startedAt, undefined, loggedWorkSession,
+    )
 
     const trailer = await canvasTrailer(project.workspaceId, call)
     return {
@@ -1938,7 +1970,9 @@ Steps to execute:
     // A failed attempt is still something the agent did, and seeing it fail is
     // often the most useful entry in the log.
     if (loggedWorkspaceId) {
-      void postAgentAction(loggedWorkspaceId, name, callerArgs, undefined, startedAt, msg)
+      void postAgentAction(
+        loggedWorkspaceId, name, callerArgs, undefined, startedAt, msg, loggedWorkSession,
+      )
     }
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: msg }) }],

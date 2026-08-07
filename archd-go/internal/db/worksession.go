@@ -263,6 +263,23 @@ func GetActiveWorkSessions(db *sql.DB, workspaceID string) ([]WorkSession, error
 		workspace_id = ? AND ended_at = 0`, workspaceID)
 }
 
+func GetActiveWorkSessionsForRoot(
+	db *sql.DB,
+	workspaceID, rootID, branch string,
+) ([]WorkSession, error) {
+	rootID, branch = completeHistoryIdentity(db, workspaceID, rootID, branch)
+	return getWorkSessions(db, workspaceID, `
+		workspace_id = ? AND ended_at = 0
+		AND COALESCE(root_id, (
+			SELECT r.id FROM roots r WHERE r.workspace_id=work_sessions.workspace_id
+			ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		), '') = ?
+		AND COALESCE(branch, (
+			SELECT r.branch FROM roots r WHERE r.workspace_id=work_sessions.workspace_id
+			ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		), '') = ?`, workspaceID, rootID, branch)
+}
+
 // GetWorkSessions returns sessions that overlap the delta window: anything
 // still open, or anything that ran after the user last reviewed.
 func GetWorkSessions(db *sql.DB, workspaceID string, since int64) ([]WorkSession, error) {

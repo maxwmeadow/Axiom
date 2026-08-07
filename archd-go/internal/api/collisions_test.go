@@ -95,6 +95,14 @@ func TestCollisionsSurfaceUnmergedSemanticOverlapAfterDeltaReview(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
+	for _, session := range []db.WorkSession{
+		{ID: "left-work", WorkspaceID: "ws", RootID: "left", OwnerKey: "left-agent", Agent: "codex", Goal: "left payment"},
+		{ID: "right-work", WorkspaceID: "ws", RootID: "right", OwnerKey: "right-agent", Agent: "claude", Goal: "right payment"},
+	} {
+		if _, err := db.StartWorkSession(sqlDB, session); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	request := httptest.NewRequest(http.MethodGet, "/api/collisions?workspace=ws", nil)
 	response := httptest.NewRecorder()
@@ -108,6 +116,9 @@ func TestCollisionsSurfaceUnmergedSemanticOverlapAfterDeltaReview(t *testing.T) 
 	}
 	if len(snapshot.Branches) != 3 {
 		t.Fatalf("branches = %#v", snapshot.Branches)
+	}
+	if len(snapshot.Branches[1].ActiveWork) != 1 || len(snapshot.Branches[2].ActiveWork) != 1 {
+		t.Fatalf("branch agent attribution = %#v", snapshot.Branches)
 	}
 	if len(snapshot.Collisions) != 1 || snapshot.Collisions[0].SystemID != "payments" {
 		t.Fatalf("collisions = %#v", snapshot.Collisions)

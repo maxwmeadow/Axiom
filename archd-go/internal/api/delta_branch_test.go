@@ -110,3 +110,54 @@ func TestDeltaAckAdvancesOnlySelectedRoot(t *testing.T) {
 		t.Fatalf("watermarks after primary ack = primary:%d branch:%d", primary, branch)
 	}
 }
+
+func TestWorkStartResolvesNestedCwdToItsLongestRoot(t *testing.T) {
+	server, response := branchDeltaServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"workspaceId": "ws",
+		"cwd":         "C:/branch/packages/payments",
+		"ownerKey":    "agent",
+		"agent":       "codex",
+		"goal":        "change payments",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/work/start", bytes.NewReader(payload))
+	server.handleWork(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("start status %d: %s", response.Code, response.Body.String())
+	}
+	var session db.WorkSession
+	if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.RootID != "branch" || session.Branch != "feature/agents" {
+		t.Fatalf("cwd session identity = %#v", session)
+	}
+}
+
+func TestAgentActionResolvesCwdBeforeSessionAttribution(t *testing.T) {
+	server, response := branchDeltaServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"workspaceId": "ws",
+		"cwd":         "C:/branch/src",
+		"tool":        "get_architecture",
+		"kind":        "read",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/agent/action", bytes.NewReader(payload))
+	server.handleAgentAction(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("action status %d: %s", response.Code, response.Body.String())
+	}
+	var action db.AgentAction
+	if err := json.Unmarshal(response.Body.Bytes(), &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.RootID != "branch" || action.Branch != "feature/agents" {
+		t.Fatalf("cwd action identity = %#v", action)
+	}
+}

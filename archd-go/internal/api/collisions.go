@@ -140,9 +140,23 @@ func (s *Server) crossBranchCollisions(
 			summary, s.systemTopologyForRoot(sqlDB, workspaceID, root.ID),
 		)
 		claims = delta.ClassifyRealization(claims, dispatchedIntents(sqlDB, workspaceID))
+		activeWork := []collision.Agent{}
+		if sessions, sessionsErr := db.GetActiveWorkSessionsForRoot(
+			sqlDB, workspaceID, root.ID, root.Branch,
+		); sessionsErr != nil {
+			return collision.Snapshot{}, sessionsErr
+		} else {
+			for _, session := range sessions {
+				activeWork = append(activeWork, collision.Agent{
+					SessionID: session.ID, Agent: session.Agent,
+					Goal: session.Goal, StartedAt: session.StartedAt,
+				})
+			}
+		}
 		inputs = append(inputs, collision.BranchInput{
 			RootID: root.ID, Branch: root.Branch, HeadCommit: root.HeadCommit,
 			IsPrimary: root.IsPrimary, PathSystems: pathSystems, Claims: claims,
+			ActiveWork: activeWork,
 		})
 		working[root.ID], workingErrors[root.ID] = gitworktree.WorkingChangedPaths(root.Path)
 	}

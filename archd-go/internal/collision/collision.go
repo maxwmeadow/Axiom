@@ -19,6 +19,14 @@ type BranchInput struct {
 	IsPrimary   bool
 	PathSystems map[string]Boundary
 	Claims      []delta.Claim
+	ActiveWork  []Agent
+}
+
+type Agent struct {
+	SessionID string `json:"sessionId"`
+	Agent     string `json:"agent,omitempty"`
+	Goal      string `json:"goal"`
+	StartedAt int64  `json:"startedAt"`
 }
 
 // PairInput contains each side's files changed since that pair's merge base.
@@ -47,6 +55,7 @@ type Branch struct {
 	TouchedSystems    []SystemTouch `json:"touchedSystems"`
 	UnclassifiedFiles []string      `json:"unclassifiedFiles"`
 	Errors            []string      `json:"errors,omitempty"`
+	ActiveWork        []Agent       `json:"activeWork"`
 }
 
 type CollisionBranch struct {
@@ -141,7 +150,14 @@ func Build(
 			Branch:     accumulator.input.Branch,
 			HeadCommit: accumulator.input.HeadCommit,
 			IsPrimary:  accumulator.input.IsPrimary,
+			ActiveWork: append([]Agent(nil), accumulator.input.ActiveWork...),
 		}
+		sort.Slice(branch.ActiveWork, func(i, j int) bool {
+			if branch.ActiveWork[i].StartedAt != branch.ActiveWork[j].StartedAt {
+				return branch.ActiveWork[i].StartedAt < branch.ActiveWork[j].StartedAt
+			}
+			return branch.ActiveWork[i].SessionID < branch.ActiveWork[j].SessionID
+		})
 		branch.TouchedSystems = materializeTouches(accumulator.touches)
 		branch.UnclassifiedFiles = sortedSet(accumulator.unclassified)
 		branch.Errors = sortedSet(accumulator.errors)

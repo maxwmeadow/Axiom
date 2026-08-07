@@ -3,9 +3,41 @@ package api
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"axiom.local/archd/internal/db"
 )
+
+func pathInsideRoot(path, root string) bool {
+	return path == root || strings.HasPrefix(path, root+"/")
+}
+
+func resolveWorkspaceRootForCwd(
+	sqlDB *sql.DB,
+	workspaceID, cwd string,
+) (db.Root, bool, error) {
+	if strings.TrimSpace(cwd) == "" {
+		return db.Root{}, false, nil
+	}
+	roots, err := db.GetRoots(sqlDB, workspaceID)
+	if err != nil {
+		return db.Root{}, false, err
+	}
+	normalizedCwd := normalizedRootPath(cwd)
+	best := -1
+	var match db.Root
+	for _, root := range roots {
+		if !root.IsActive {
+			continue
+		}
+		normalizedRoot := normalizedRootPath(root.Path)
+		if pathInsideRoot(normalizedCwd, normalizedRoot) && len(normalizedRoot) > best {
+			match = root
+			best = len(normalizedRoot)
+		}
+	}
+	return match, best >= 0, nil
+}
 
 // resolveWorkspaceRoot gives every branch-aware API the same selection rules:
 // explicit root ID wins, branch is an optional consistency check, and legacy
