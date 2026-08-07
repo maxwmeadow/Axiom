@@ -1,4 +1,4 @@
-import type { AgentAction, DbSystem, DeltaSummary, FloorLayout } from '../../shared/types'
+import type { AgentAction, DbSystem, DeltaSummary, FloorLayout, ParallelAgentSnapshot } from '../../shared/types'
 
 const BASE = 'http://127.0.0.1:7744'
 
@@ -45,6 +45,16 @@ export async function apiAckDeltaForRoot(
     body: JSON.stringify({ workspaceId, rootId, branch, until }),
   })
   if (!res.ok) throw new Error(await res.text() || `Unable to acknowledge delta (${res.status})`)
+}
+
+export async function apiGetBranchCollisions(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<ParallelAgentSnapshot> {
+  const params = new URLSearchParams({ workspace: workspaceId })
+  const res = await fetch(`${BASE}/api/collisions?${params}`, { signal })
+  if (!res.ok) throw new Error(await res.text() || `Unable to load branch collisions (${res.status})`)
+  return res.json() as Promise<ParallelAgentSnapshot>
 }
 
 export interface FileSource {

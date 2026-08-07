@@ -71,6 +71,8 @@ type Server struct {
 	worktreeMonitors  map[string]worktreeMonitor
 	rootSyncing       map[string]bool
 	rootSyncPending   map[string]pendingRootSync
+	collisionCache    map[string]collisionCacheEntry
+	collisionCacheTTL time.Duration
 }
 
 func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
@@ -87,6 +89,8 @@ func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
 		worktreeMonitors:  make(map[string]worktreeMonitor),
 		rootSyncing:       make(map[string]bool),
 		rootSyncPending:   make(map[string]pendingRootSync),
+		collisionCache:    make(map[string]collisionCacheEntry),
+		collisionCacheTTL: 2 * time.Second,
 	}
 	// Adapters started outside the launcher (PYTHONPATH opt-in) have no
 	// AXIOM_WORKSPACE_ID; map them to a workspace by their working directory.
@@ -177,6 +181,7 @@ func (s *Server) closeDB(workspaceID string) {
 	}
 	d := s.dbs[workspaceID]
 	delete(s.dbs, workspaceID)
+	delete(s.collisionCache, workspaceID)
 	s.mu.Unlock()
 	for _, w := range watchers {
 		_ = w.Close()
@@ -257,6 +262,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/activity/hotspots", s.handleActivityHotspots)
 	mux.HandleFunc("/api/delta", s.handleDelta)
 	mux.HandleFunc("/api/delta/ack", s.handleDeltaAck)
+	mux.HandleFunc("/api/collisions", s.handleCollisions)
 	mux.HandleFunc("/api/work/", s.handleWork)
 	mux.HandleFunc("/api/command-deck", s.handleCommandDeck)
 	mux.HandleFunc("/api/query", s.handleQuery)

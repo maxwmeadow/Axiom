@@ -594,3 +594,40 @@ export interface AgentAction {
   rootId?: string
   branch?: string
 }
+
+export interface BranchSystemTouch {
+  systemId: string
+  systemName: string
+  files: string[]
+  claims: DeltaClaim[]
+}
+
+export interface ActiveBranch {
+  rootId: string
+  branch: string
+  headCommit: string
+  isPrimary: boolean
+  touchedSystems: BranchSystemTouch[]
+  unclassifiedFiles: string[]
+  errors?: string[]
+}
+
+export interface CollisionBranch {
+  rootId: string
+  branch: string
+  files: string[]
+  claims: DeltaClaim[]
+}
+
+export interface BranchCollision {
+  systemId: string
+  systemName: string
+  branches: CollisionBranch[]
+}
+
+export interface ParallelAgentSnapshot {
+  workspaceId: string
+  generatedAt: number
+  branches: ActiveBranch[]
+  collisions: BranchCollision[]
+}

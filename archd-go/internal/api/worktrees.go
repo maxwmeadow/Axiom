@@ -256,6 +256,7 @@ func (s *Server) launchRootSync(sqlDB *sql.DB, root db.Root, fullIndex bool) {
 		if snapshot != nil {
 			s.hub.BroadcastSnapshot(snapshot)
 		}
+		s.invalidateCollisionCache(root.WorkspaceID)
 		s.hub.Broadcast("delta:ready", map[string]any{
 			"workspaceId": root.WorkspaceID,
 			"rootId":      root.ID,
