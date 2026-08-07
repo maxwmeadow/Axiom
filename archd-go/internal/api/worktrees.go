@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -34,7 +35,18 @@ type pendingRootSync struct {
 }
 
 func normalizedRootPath(path string) string {
-	return strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	return normalizedRootPathForOS(path, runtime.GOOS)
+}
+
+func normalizedRootPathForOS(path, goos string) string {
+	normalized := filepath.ToSlash(filepath.Clean(path))
+	if goos == "windows" {
+		// filepath follows the running host, while tests and persisted metadata
+		// can contain Windows separators on another host.
+		normalized = strings.ReplaceAll(normalized, `\`, "/")
+		return strings.ToLower(normalized)
+	}
+	return normalized
 }
 
 func sameRootPath(left, right string) bool {
@@ -60,7 +72,7 @@ func ignoredPathsForWorktree(patterns []string, requestedRoot, targetRoot string
 	for _, pattern := range patterns {
 		normalized := filepath.ToSlash(pattern)
 		if len(normalized) >= len(requested) &&
-			strings.EqualFold(normalized[:len(requested)], requested) &&
+			sameRootPath(normalized[:len(requested)], requested) &&
 			(len(normalized) == len(requested) || normalized[len(requested)] == '/') {
 			normalized = target + normalized[len(requested):]
 		}
@@ -287,23 +299,69 @@ func (s *Server) startWorktreeMonitor(
 
 	go func() {
 		defer close(done)
+		metadata, err := gitworktree.WatchMetadata(anchorPath)
+		var changes <-chan struct{}
+		var watchErrors <-chan error
+		if err != nil {
+			log.Printf("api: watch Git metadata for %s: %v; using safety refresh", workspaceID, err)
+		} else {
+			defer metadata.Close()
+			changes = metadata.Changes()
+			watchErrors = metadata.Errors()
+		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		var debounce *time.Timer
+		var debounceC <-chan time.Time
+		defer func() {
+			if debounce != nil {
+				debounce.Stop()
+			}
+		}()
+		reconcile := func() {
+			worktrees, err := s.discoverWorktrees(anchorPath)
+			if err != nil {
+				log.Printf("api: refresh worktrees for %s: %v", workspaceID, err)
+				return
+			}
+			if _, err := s.syncWorkspaceWorktrees(
+				sqlDB, workspaceID, anchorPath, worktrees, options, true, false,
+			); err != nil {
+				log.Printf("api: reconcile worktrees for %s: %v", workspaceID, err)
+			}
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				worktrees, err := s.discoverWorktrees(anchorPath)
-				if err != nil {
-					log.Printf("api: refresh worktrees for %s: %v", workspaceID, err)
+			case _, ok := <-changes:
+				if !ok {
+					changes = nil
 					continue
 				}
-				if _, err := s.syncWorkspaceWorktrees(
-					sqlDB, workspaceID, anchorPath, worktrees, options, true, false,
-				); err != nil {
-					log.Printf("api: reconcile worktrees for %s: %v", workspaceID, err)
+				if debounce == nil {
+					debounce = time.NewTimer(200 * time.Millisecond)
+				} else {
+					if !debounce.Stop() {
+						select {
+						case <-debounce.C:
+						default:
+						}
+					}
+					debounce.Reset(200 * time.Millisecond)
 				}
+				debounceC = debounce.C
+			case <-debounceC:
+				debounceC = nil
+				reconcile()
+			case err, ok := <-watchErrors:
+				if !ok {
+					watchErrors = nil
+					continue
+				}
+				log.Printf("api: Git metadata watcher for %s: %v", workspaceID, err)
+			case <-ticker.C:
+				reconcile()
 			}
 		}
 	}()

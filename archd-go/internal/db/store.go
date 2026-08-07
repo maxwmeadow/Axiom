@@ -968,6 +968,35 @@ func GetDependencies(db *sql.DB, workspaceID string) ([]Dependency, error) {
 	return deps, rows.Err()
 }
 
+// GetDependenciesByRoot returns relationships authored by files in one root.
+// Dependencies are workspace-owned rows, so a workspace-wide snapshot can
+// observe another worktree's concurrent write. The source file is the owner of
+// an authored relationship and provides the stable root boundary.
+func GetDependenciesByRoot(db *sql.DB, rootID string) ([]Dependency, error) {
+	rows, err := db.Query(`
+		SELECT d.id, d.workspace_id, d.src, d.dst, d.src_type, d.dst_type,
+			d.dependency_type, d.weight, d.created_by, d.evidence
+		FROM dependencies d
+		JOIN files f ON f.id = d.src
+		WHERE f.root_id = ?`, rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var deps []Dependency
+	for rows.Next() {
+		var d Dependency
+		if err := rows.Scan(
+			&d.ID, &d.WorkspaceID, &d.Src, &d.Dst,
+			&d.SrcType, &d.DstType, &d.DependencyType, &d.Weight, &d.CreatedBy, &d.Evidence,
+		); err != nil {
+			return nil, err
+		}
+		deps = append(deps, d)
+	}
+	return deps, rows.Err()
+}
+
 // GetOutgoingDependenciesByFile returns the authored relationships whose
 // source is one file. Live reindexing diffs this set before/after a parse; it
 // must not include inbound edges, which are owned by other source files.

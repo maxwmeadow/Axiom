@@ -9,19 +9,21 @@ export interface WorktreeContext {
   branch: string
 }
 
-function normalizePath(value: string): string {
-  return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+function normalizePath(value: string, caseSensitive: boolean): string {
+  const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '')
+  return caseSensitive ? normalized : normalized.toLowerCase()
 }
 
 export function findWorktreeForCwd(
   roots: WorktreeRow[],
   cwd: string,
+  caseSensitive = process.platform !== 'win32',
 ): WorktreeContext | undefined {
-  const target = normalizePath(cwd)
+  const target = normalizePath(cwd, caseSensitive)
   let best: WorktreeRow | undefined
   let bestLength = -1
   for (const root of roots) {
-    const candidate = normalizePath(root.path)
+    const candidate = normalizePath(root.path, caseSensitive)
     const contains = target === candidate || target.startsWith(`${candidate}/`)
     if (contains && candidate.length > bestLength) {
       best = root

@@ -64,8 +64,8 @@ type Server struct {
 	// re-index and feed the activity engine. Keyed by root ID; closed on
 	// workspace close.
 	watchers map[string]*watcher.Watcher
-	// worktree discovery is polled because linked-worktree metadata lives in
-	// Git's shared administration directory, outside the watched source roots.
+	// Worktree topology and heads are driven by Git metadata notifications. A
+	// slow periodic refresh remains only as protection against dropped events.
 	discoverWorktrees func(string) ([]gitworktree.Worktree, error)
 	worktreeRefresh   time.Duration
 	worktreeMonitors  map[string]worktreeMonitor
@@ -85,7 +85,7 @@ func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
 		registry:          registry.Load(nil),
 		watchers:          make(map[string]*watcher.Watcher),
 		discoverWorktrees: gitworktree.Discover,
-		worktreeRefresh:   2 * time.Second,
+		worktreeRefresh:   5 * time.Minute,
 		worktreeMonitors:  make(map[string]worktreeMonitor),
 		rootSyncing:       make(map[string]bool),
 		rootSyncPending:   make(map[string]pendingRootSync),
@@ -104,14 +104,14 @@ func (s *Server) workspaceForCwd(cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	norm := strings.ToLower(filepath.ToSlash(filepath.Clean(cwd)))
+	norm := normalizedRootPath(cwd)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	best := ""
 	bestLen := -1
 	for _, root := range s.roots {
-		rootNorm := strings.ToLower(filepath.ToSlash(filepath.Clean(root.Path)))
-		if (norm == rootNorm || strings.HasPrefix(norm, rootNorm+"/")) && len(rootNorm) > bestLen {
+		rootNorm := normalizedRootPath(root.Path)
+		if pathInsideRoot(norm, rootNorm) && len(rootNorm) > bestLen {
 			best = root.WorkspaceID
 			bestLen = len(rootNorm)
 		}
@@ -337,7 +337,7 @@ func (s *Server) handleWorkspaceScope(w http.ResponseWriter, r *http.Request) {
 	}
 	requestedPath := filepath.Clean(r.URL.Query().Get("rootPath"))
 	for _, root := range roots {
-		if requestedPath != "." && !strings.EqualFold(filepath.Clean(root.Path), requestedPath) {
+		if requestedPath != "." && !sameRootPath(root.Path, requestedPath) {
 			continue
 		}
 		jsonOK(w, map[string]any{

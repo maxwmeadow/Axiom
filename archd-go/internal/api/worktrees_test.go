@@ -122,6 +122,19 @@ func TestIgnoredPathsFollowEachLinkedWorktree(t *testing.T) {
 	}
 }
 
+func TestRootPathNormalizationMatchesHostFilesystemSemantics(t *testing.T) {
+	windowsUpper := normalizedRootPathForOS(`C:\Code\Axiom-Agent`, "windows")
+	windowsLower := normalizedRootPathForOS(`c:/code/axiom-agent`, "windows")
+	if windowsUpper != windowsLower {
+		t.Fatalf("Windows paths should compare case-insensitively: %q != %q", windowsUpper, windowsLower)
+	}
+	linuxUpper := normalizedRootPathForOS(`/code/Axiom-Agent`, "linux")
+	linuxLower := normalizedRootPathForOS(`/code/axiom-agent`, "linux")
+	if linuxUpper == linuxLower {
+		t.Fatalf("case-sensitive hosts must keep distinct worktrees distinct: %q == %q", linuxUpper, linuxLower)
+	}
+}
+
 func runWorktreeGit(t *testing.T, directory string, args ...string) string {
 	t.Helper()
 	commandArgs := append([]string{"-C", directory}, args...)
@@ -169,7 +182,9 @@ func TestOpenWorkspaceDiscoversIndexesAndWatchesNewGitWorktrees(t *testing.T) {
 
 	eventHub := hub.New()
 	server := NewServer(t.TempDir(), eventHub, runtime.NewManager(eventHub))
-	server.worktreeRefresh = 25 * time.Millisecond
+	// Keep the fallback far beyond the test deadline: the new worktree must be
+	// discovered from Git metadata, not from a hot subprocess polling loop.
+	server.worktreeRefresh = time.Hour
 	t.Cleanup(func() { server.closeDB("ws") })
 	payload, err := json.Marshal(openWorkspaceReq{
 		WorkspaceID: "ws",

@@ -177,8 +177,8 @@ func rebuildAllCallGraph(sqlDB *sql.DB, root db.Root) error {
 	return buildCallGraph(sqlDB, root, &rawCalls)
 }
 
-func projectFileDependencies(sqlDB *sql.DB, workspaceID string) ([]db.Dependency, error) {
-	all, err := db.GetDependencies(sqlDB, workspaceID)
+func projectFileDependencies(sqlDB *sql.DB, rootID string) ([]db.Dependency, error) {
+	all, err := db.GetDependenciesByRoot(sqlDB, rootID)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +269,7 @@ func ReindexFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error 
 		prev = &p
 		prevSyms, _ = db.GetSymbolsByFile(sqlDB, p.ID)
 	}
-	beforeDeps, err := projectFileDependencies(sqlDB, root.WorkspaceID)
+	beforeDeps, err := projectFileDependencies(sqlDB, root.ID)
 	if err != nil {
 		return err
 	}
@@ -310,7 +310,7 @@ func ReindexFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error 
 		log.Printf("indexer: rebuild call graph for %s: %v", relPath, err)
 	}
 
-	afterDeps, err := projectFileDependencies(sqlDB, root.WorkspaceID)
+	afterDeps, err := projectFileDependencies(sqlDB, root.ID)
 	if err != nil {
 		return err
 	}
@@ -407,7 +407,7 @@ func RemoveFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error {
 		return err
 	}
 
-	beforeDeps, err := projectFileDependencies(sqlDB, root.WorkspaceID)
+	beforeDeps, err := projectFileDependencies(sqlDB, root.ID)
 	if err != nil {
 		return err
 	}
@@ -430,7 +430,7 @@ func RemoveFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error {
 	if err := rebuildAllCallGraph(sqlDB, root); err != nil {
 		return fmt.Errorf("rebuild calls after deleting %s: %w", relPath, err)
 	}
-	afterDeps, err := projectFileDependencies(sqlDB, root.WorkspaceID)
+	afterDeps, err := projectFileDependencies(sqlDB, root.ID)
 	if err != nil {
 		return err
 	}

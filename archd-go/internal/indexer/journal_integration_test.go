@@ -129,6 +129,65 @@ func TestNoOpSaveIsNotJournaled(t *testing.T) {
 	}
 }
 
+func TestDependencySnapshotExcludesConcurrentWritesFromAnotherRoot(t *testing.T) {
+	sqlDB, rootA, _ := journalFixture(t)
+	rootB := db.Root{ID: "root-b", WorkspaceID: rootA.WorkspaceID, Path: t.TempDir(), Branch: "feature/b"}
+	if err := db.UpsertRoot(sqlDB, rootB); err != nil {
+		t.Fatal(err)
+	}
+
+	files := []db.File{
+		{ID: "a-source", RootID: rootA.ID, Path: filepath.Join(rootA.Path, "a-source.ts"), RelPath: "a-source.ts", Language: "typescript"},
+		{ID: "a-target", RootID: rootA.ID, Path: filepath.Join(rootA.Path, "a-target.ts"), RelPath: "a-target.ts", Language: "typescript"},
+		{ID: "b-source", RootID: rootB.ID, Path: filepath.Join(rootB.Path, "b-source.ts"), RelPath: "b-source.ts", Language: "typescript"},
+		{ID: "b-target", RootID: rootB.ID, Path: filepath.Join(rootB.Path, "b-target.ts"), RelPath: "b-target.ts", Language: "typescript"},
+	}
+	for _, file := range files {
+		if err := db.UpsertFile(sqlDB, file); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.UpsertDependency(sqlDB, db.Dependency{
+		ID: "a-import", WorkspaceID: rootA.WorkspaceID, Src: "a-source", Dst: "a-target",
+		SrcType: "file", DstType: "file", DependencyType: "IMPORTS",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := projectFileDependencies(sqlDB, rootA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 || before[0].ID != "a-import" {
+		t.Fatalf("root A snapshot should contain its existing import: %#v", before)
+	}
+
+	// This models the exact interleaving that used to corrupt attribution:
+	// root B commits an import between root A's before/after snapshots.
+	if err := db.UpsertDependency(sqlDB, db.Dependency{
+		ID: "b-import", WorkspaceID: rootB.WorkspaceID, Src: "b-source", Dst: "b-target",
+		SrcType: "file", DstType: "file", DependencyType: "IMPORTS",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := projectFileDependencies(sqlDB, rootA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := diffRelationshipChanges(before, after, nil, nil, nil)
+	if len(changes) != 0 {
+		t.Fatalf("root B's concurrent dependency must not be attributed to root A: %#v", changes)
+	}
+
+	rootBDeps, err := projectFileDependencies(sqlDB, rootB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rootBDeps) != 1 || rootBDeps[0].ID != "b-import" {
+		t.Fatalf("root B should retain its own dependency: %#v", rootBDeps)
+	}
+}
+
 func TestRepeatedEditsCollapseToOneJournalRow(t *testing.T) {
 	sqlDB, root, eventHub := journalFixture(t)
 	path := filepath.Join(root.Path, "hot.py")
