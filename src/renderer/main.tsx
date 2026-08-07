@@ -2,6 +2,10 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './styles/global.css'
+// Per-track stylesheets. Loading them here keeps two long-running worktrees
+// out of global.css, which is the one file guaranteed to conflict.
+import './styles/agents.css'
+import './styles/spine.css'
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

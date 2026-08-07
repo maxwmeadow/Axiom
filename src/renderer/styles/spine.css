@@ -1,0 +1,10 @@
+/* ─── Workbench spine (Track B) ─────────────────────────────────────────────
+   Styles for entry, the single interruption lane, empty states, and failure
+   surfaces.
+
+   This file exists so Track B never edits global.css. That file is 6,000+
+   lines and shared by every surface, which makes it the one guaranteed merge
+   conflict between two long-running worktrees. Add rules here instead.
+
+   Loaded from src/renderer/main.tsx after global.css, so these rules win ties
+   against it without needing !important. */

@@ -14,6 +14,7 @@ import { PaperTextureDefs } from './canvas/nodes/PaperTexture'
 import { DeltaPanel } from './components/DeltaPanel'
 import { ReplayBar } from './components/ReplayBar'
 import { OnboardingGuide } from './components/OnboardingGuide'
+import { AgentLane } from './components/AgentLane'
 import { HomeScreen } from './screens/HomeScreen'
 import { ProjectSetupScreen } from './screens/ProjectSetupScreen'
 import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
@@ -335,6 +336,11 @@ export default function App() {
           <ReplayBar />
 
           {!E2E_MODE && <OnboardingGuide projectId={currentProject.id} />}
+
+          {/* Which worktree each agent is in, and how the branches relate.
+              Mount point owned by the parallel-agents track; renders nothing
+              until that track fills it in. Do not move or remove. */}
+          <AgentLane />
           </div>
         </div>
 
