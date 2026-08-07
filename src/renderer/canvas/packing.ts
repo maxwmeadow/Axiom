@@ -198,7 +198,19 @@ export function placeIncoming(
 }
 
 /**
- * The free slot CLOSEST to where the user let go, constrained to `bounds`.
+ * The free slot CLOSEST to where the user let go. Framed nodes are constrained
+ * to `bounds`; root nodes use the same search without artificial canvas bounds.
+ *
+ * `baseGap` here is BOTH where candidate spots are generated and what rejects
+ * them, so it must be the caller's legal minimum and not its layout
+ * preference. Handing this the packing gap is what turned a preference into a
+ * force field: the release point was rejected for sitting inside a margin that
+ * only existed to make machine-authored arrangements look even, and every
+ * candidate offered instead sat a full packing gap clear of everything, so a
+ * node overlapping a system by a hair flew a hundred units to escape it. Given
+ * the legal minimum, the same search leaves a clear drop exactly where it was
+ * released and moves a conflicting one by the smallest distance that resolves
+ * the conflict.
  *
  * `placeIncoming` answers a different question — "where does this extend the
  * cluster most compactly?" — scored against the cluster's bounds and centroid,
@@ -209,26 +221,30 @@ export function placeIncoming(
  * caller read the collision as "no room", and a drop into a frame with obvious
  * empty space fell through to a full interior compression.
  *
- * Here `bounds` is a filter rather than a post-hoc clamp, so a returned slot is
- * always genuinely free and genuinely inside the frame, and null genuinely
- * means the frame is full.
+ * When present, `bounds` is a filter rather than a post-hoc clamp, so a
+ * returned slot is always genuinely free and genuinely inside the frame, and
+ * null genuinely means the frame is full.
  */
 export function placeNearest(
   item: PackItem,
   occupied: readonly { x: number; y: number; width: number; height: number }[],
-  options: { baseGap: number; bounds: { x: number; y: number; width: number; height: number }; preferred: { x: number; y: number } },
+  options: {
+    baseGap: number
+    bounds?: { x: number; y: number; width: number; height: number } | null
+    preferred: { x: number; y: number }
+  },
 ): { x: number; y: number } | null {
   const { baseGap, bounds, preferred } = options
-  if (item.width > bounds.width || item.height > bounds.height) return null
+  if (bounds && (item.width > bounds.width || item.height > bounds.height)) return null
   const placed: PlacedRect[] = occupied.map((rect, index) => ({
     id: 'occupied:' + index, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
   }))
   const minClearance = baseGap - CLEARANCE_EPSILON
-  const maxX = bounds.x + bounds.width - item.width
-  const maxY = bounds.y + bounds.height - item.height
+  const maxX = bounds ? bounds.x + bounds.width - item.width : Number.POSITIVE_INFINITY
+  const maxY = bounds ? bounds.y + bounds.height - item.height : Number.POSITIVE_INFINITY
   const clampIntoBounds = (spot: { x: number; y: number }) => ({
-    x: Math.min(Math.max(spot.x, bounds.x), maxX),
-    y: Math.min(Math.max(spot.y, bounds.y), maxY),
+    x: bounds ? Math.min(Math.max(spot.x, bounds.x), maxX) : spot.x,
+    y: bounds ? Math.min(Math.max(spot.y, bounds.y), maxY) : spot.y,
   })
 
   // The release point first, then every edge-flush spot around a neighbour, and
@@ -240,12 +256,14 @@ export function placeNearest(
       candidates.push(candidate, { x: candidate.x, y: preferred.y }, { x: preferred.x, y: candidate.y })
     }
   }
-  candidates.push(
-    { x: bounds.x, y: bounds.y },
-    { x: maxX, y: bounds.y },
-    { x: bounds.x, y: maxY },
-    { x: maxX, y: maxY },
-  )
+  if (bounds) {
+    candidates.push(
+      { x: bounds.x, y: bounds.y },
+      { x: maxX, y: bounds.y },
+      { x: bounds.x, y: maxY },
+      { x: maxX, y: maxY },
+    )
+  }
 
   let best: { x: number; y: number } | null = null
   let bestDistance = Number.POSITIVE_INFINITY

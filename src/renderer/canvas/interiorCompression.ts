@@ -74,8 +74,14 @@ export interface InteriorCompressionInput {
    * the deepest, smallest child is what limits the compression.
    */
   minChildWorldScale: number
-  /** Clearance required between the newcomer and its neighbours. */
-  gap: number
+  /**
+   * The only distance the newcomer may not come closer than, in the
+   * container's content space. Compression asks "has a LEGAL slot opened yet?",
+   * so this is the legal minimum, not the spacing a tidy would have chosen —
+   * measuring against the latter made a frame shrink its whole interior to
+   * satisfy a margin the drop never had to satisfy.
+   */
+  clearance: number
 }
 
 export interface InteriorCompressionPlan {
@@ -101,7 +107,7 @@ export type SlotFinder = (
   incoming: Rect,
   destination: Rect,
   occupied: readonly Rect[],
-  gap: number,
+  clearance: number,
 ) => Point | null
 
 /**
@@ -124,7 +130,7 @@ export function planInteriorCompression(
       { x: input.origin.x, y: input.origin.y, width: input.incoming.width, height: input.incoming.height },
       box,
       input.occupied,
-      input.gap,
+      input.clearance,
     )
     // The finder answers with a translation from the drop point, so the landing
     // position is the drop point plus that translation.

@@ -165,3 +165,13 @@ test('placeNearest reports null only when the frame is genuinely full', () => {
     [{ x: 0, y: 0, width: 250, height: 140 }],
     { baseGap: 12, bounds, preferred: { x: 0, y: 0 } }), null)
 })
+
+test('placeNearest resolves root collisions without artificial bounds', () => {
+  const spot = placeNearest(
+    { id: 'incoming', width: 220, height: 110 },
+    [{ x: 100, y: 100, width: 220, height: 110 }],
+    { baseGap: 72, bounds: null, preferred: { x: 100, y: 100 } },
+  )
+  assert.ok(spot)
+  assert.notDeepEqual(spot, { x: 100, y: 100 })
+})

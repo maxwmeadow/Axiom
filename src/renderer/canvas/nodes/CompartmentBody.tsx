@@ -1,7 +1,7 @@
 // CompartmentBody — the ONE member/symbol row renderer (Rev 2b unification).
 // A planned member and a live symbol are the same row in different states:
 // planned ○ → realized ✓ (green) → live ƒ/C/I/T/v. PlannedNode uses it now;
-// FileNode's symbol viewport adopts it as part of its NodeShell port so the
+// Planned entities use FileNode directly, so the
 // moment of realization changes nothing visually except the icon and color.
 import React from 'react'
 

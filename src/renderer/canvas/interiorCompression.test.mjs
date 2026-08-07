@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { slideIncomingIntoFreeSlot } from './dropPersistence.ts'
+import { DROP_CLEARANCE } from './frameGeometry.ts'
 import {
   INTERIOR_COMPRESSION_STEP,
   INTERIOR_LEGIBILITY_MIN_WORLD_SCALE,
@@ -18,7 +19,9 @@ const input = (overrides = {}) => ({
   origin: { x: 28, y: 54 },
   interiorScale: 1,
   minChildWorldScale: 1,
-  gap: 12,
+  // The legal minimum, not the spacing a tidy would choose. Compression only
+  // has to open a slot the drop can legally occupy.
+  clearance: DROP_CLEARANCE,
   ...overrides,
 })
 

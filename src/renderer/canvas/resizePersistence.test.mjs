@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { planFloorResize, planSheetResize, replaceFloorLayouts } from './resizePersistence.ts'
+import { planCanvasResize, replaceFloorLayouts } from './resizePersistence.ts'
 
 const node = (id, overrides = {}) => ({
   id,
@@ -14,7 +14,7 @@ test('plans an optimistic Floor resize and compensates direct children', () => {
   const parent = node('system')
   const child = node('file', { parentId: 'system' })
   const start = { x: 0, y: 0, width: 620, height: 420, children: new Map([['file', { x: 100, y: 120 }]]) }
-  const plan = planFloorResize({
+  const plan = planCanvasResize({
     workspaceId: 'workspace',
     nodeId: 'system',
     node: parent,
@@ -49,7 +49,7 @@ test('preserves previous child dimensions and produces a precise rollback set', 
     positionX: 20, positionY: 30, width: 333.25, height: 222.75, scale: 0.75, updatedAt: 10,
   }
   const untouched = { ...previousChild, nodeId: 'untouched', updatedAt: 11 }
-  const plan = planFloorResize({
+  const plan = planCanvasResize({
     workspaceId: 'workspace', nodeId: 'platform', node: parent,
     start: { x: 0, y: 0, width: 380, height: 260, children: new Map([['service', { x: 20, y: 30 }]]) },
     end: { x: 0, y: 0, width: 400.5, height: 280.25 },
@@ -64,19 +64,32 @@ test('preserves previous child dimensions and produces a precise rollback set', 
   assert.deepEqual(replaceFloorLayouts(plan.optimisticLayouts.concat(untouched), plan.previousLayouts, plan.changedKeys), [untouched, previousChild])
 })
 
-test('maps sheet live and planned nodes to one resize batch', () => {
+test('the canonical resize planner includes child compensation for Sheet nodes', () => {
   const parent = node('planned:parent', { data: { frameScale: 1, worldScale: 1 } })
-  const mutations = planSheetResize({
+  const child = node('live-child', { parentId: 'planned:parent' })
+  const plan = planCanvasResize({
+    workspaceId: 'workspace',
     nodeId: 'planned:parent',
     node: parent,
     start: { x: 0, y: 0, width: 300, height: 200, children: new Map([['live-child', { x: 40, y: 50 }]]) },
     end: { x: 5, y: 10, width: 360, height: 240 },
-    elements: [{ id: 'element-child', systemId: 'live-child', fileId: null, infraId: null }],
-    planned: [{ id: 'parent' }],
+    nodes: [parent, child],
+    systemIds: new Set(['planned:parent', 'live-child']),
+    fileIds: new Set(),
+    infraIds: new Set(),
+    floorLayouts: [],
   })
 
-  assert.deepEqual(mutations, [
-    { kind: 'planned', id: 'parent', x: 5, y: 10, parentSystemId: null, width: 360, height: 240, scale: 1 },
-    { kind: 'element', id: 'element-child', x: 35, y: 40, parentSystemId: 'planned:parent' },
+  assert.deepEqual(plan.updates, [
+    {
+      nodeId: 'planned:parent', nodeType: 'system', parentNodeId: null, parentNodeType: null,
+      containmentKind: 'root', positionX: 5, positionY: 10,
+      width: 360, height: 240, scale: 1, interiorScale: 1,
+    },
+    {
+      nodeId: 'live-child', nodeType: 'system', parentNodeId: 'planned:parent', parentNodeType: 'system',
+      containmentKind: 'part_of', positionX: 35, positionY: 40,
+      width: 100, height: 50, scale: 1, interiorScale: 1,
+    },
   ])
 })

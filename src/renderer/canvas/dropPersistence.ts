@@ -1,9 +1,8 @@
 import type { Node } from '@xyflow/react'
 import type { FloorLayout, FloorNodeType } from '../../shared/types'
-import type { PlannedNode, SheetElement, SheetLayoutMutation } from '../store/sheetStore'
 import {
   boundsOf,
-  contentRectFor,
+  DROP_CLEARANCE,
   FRAME_ITEM_GAP,
   fitReferenceFrame,
   highestSelectedRoots,
@@ -17,26 +16,57 @@ import {
   planInteriorCompression,
   type InteriorCompressionPlan,
 } from './interiorCompression.ts'
-import { placeNearest } from './packing.ts'
+import {
+  dropClearance,
+  frameOwnContentRect,
+  frameWorldContentRect,
+  nodeContentScale,
+  nodeInteriorScale,
+  nodeWorldRect,
+  nodeWorldScale,
+  packingGapWithin,
+  positiveFinite,
+} from './nodeGeometry.ts'
+import { packFrame, placeNearest } from './packing.ts'
 import { type FloorLayoutWrite } from './resizePersistence.ts'
 
-const BASE_FILE_WIDTH = 220
-const BASE_FILE_HEIGHT = 110
-
-interface DropFrameInput {
+export interface DropFrameInput {
   allNodes: Node[]
   selectedIds: string[]
   targetNodeId: string | null
   absolutePositions: ReadonlyMap<string, Point>
-  includeExistingChild: (node: Node) => boolean
   /**
-   * Enables case 3. The Floor can compress a frame's interior; the sheet layer
-   * has no such concept and falls back to the group transform.
+   * Enables case 3. Both the Floor and Sheets use the same compression model.
    */
   allowInteriorCompression?: boolean
 }
 
-interface DropFrame {
+/**
+ * Which placement strategy produced the landing spot, in escalating order of
+ * how much of the existing arrangement it disturbs.
+ *
+ *   direct     — landed where it was released (clamped inside the frame).
+ *   slide      — moved to the nearest free slot inside a frame.
+ *   root-slide — same search among top-level frames, at FRAME_ROOT_GAP.
+ *   repack     — same-parent move with no free slot: siblings were rearranged.
+ *   compress   — the frame shrank its interior to make room.
+ *   group-fit  — no interior lever available: the whole group was scaled in.
+ *   blocked    — nothing worked; the node keeps its released position.
+ */
+export type DropResolution =
+  | 'direct' | 'slide' | 'root-slide' | 'repack' | 'compress' | 'group-fit' | 'blocked'
+
+export interface DropFrame {
+  resolution: DropResolution
+  /** True when the drop moves the node into a different parent. */
+  changesParent: boolean
+  /**
+   * The spacing Axiom would CHOOSE inside this destination, in absolute world
+   * units. A preference used by the repack fallback; it never rejects a drop.
+   */
+  worldGap: number
+  /** The only spacing this drop had to satisfy, in absolute world units. */
+  clearance: number
   roots: Node[]
   layoutRoots: Node[]
   target: Node | null
@@ -58,9 +88,11 @@ interface DropFrame {
   targetContentScale: number
   /** Case 3: how much the target must compress its interior to fit the drop. */
   compression: InteriorCompressionPlan | null
+  /** Full sibling repack used only when an in-place move has no free slot. */
+  repackedPositions: ReadonlyMap<string, Point> | null
 }
 
-interface FloorDropPlanInput {
+interface CanvasDropPlanInput {
   workspaceId: string | null
   draggedNodeId: string
   targetNodeId: string | null
@@ -70,20 +102,15 @@ interface FloorDropPlanInput {
   fileIds: Set<string>
   infraIds: Set<string>
   floorLayouts: FloorLayout[]
+  /**
+   * Limits which selected nodes may participate in the gesture without
+   * removing the rest of the projected scene from collision detection.
+   */
+  editableNodeIds?: ReadonlySet<string>
   now?: number
 }
 
-interface SheetDropPlanInput {
-  draggedNodeId: string
-  targetNodeId: string | null
-  allNodes: Node[]
-  absolutePositions: ReadonlyMap<string, Point>
-  activeNodeIds: ReadonlySet<string>
-  elements: SheetElement[]
-  planned: PlannedNode[]
-}
-
-export interface FloorDropPersistencePlan {
+export interface CanvasDropPersistencePlan {
   selectedIds: string[]
   updates: FloorLayoutWrite[]
   changedKeys: Set<string>
@@ -104,23 +131,24 @@ export interface FloorDropPersistencePlan {
   arrivalLayouts: FloorLayout[]
 }
 
-export interface SheetDropPersistencePlan {
-  selectedIds: string[]
-  mutations: SheetLayoutMutation[]
-}
-
 function nodeTypeFor(id: string, systemIds: Set<string>, fileIds: Set<string>): FloorNodeType {
   if (systemIds.has(id)) return 'system'
   if (fileIds.has(id)) return 'file'
   return 'infra'
 }
 
-function buildDropFrame({
+/**
+ * The complete geometric state of one drop, exactly as the planner sees it.
+ *
+ * Exported so a debug view can render the engine's own reasoning rather than
+ * reimplementing it. Anything drawn on screen from this object is, by
+ * construction, what actually decided where the node landed.
+ */
+export function buildDropFrame({
   allNodes,
   selectedIds,
   targetNodeId,
   absolutePositions,
-  includeExistingChild,
   allowInteriorCompression = false,
 }: DropFrameInput): DropFrame {
   const parentById = new Map(allNodes.map(node => [node.id, node.parentId ?? null]))
@@ -130,38 +158,41 @@ function buildDropFrame({
   const target = targetNodeId ? allNodes.find(node => node.id === targetNodeId) ?? null : null
   const changesParent = !!target && roots.some(root => root.parentId !== target.id)
   const incomingIds = new Set(roots.map(root => root.id))
-  const layoutRoots = changesParent && target
-    ? [
-        ...allNodes.filter(node => node.parentId === target.id && includeExistingChild(node) && !incomingIds.has(node.id)),
-        ...roots,
-      ]
-    : roots
-  const placementRects = layoutRoots.map(root => {
-    const absolute = absolutePositions.get(root.id) ?? root.position
-    return {
-      id: root.id,
-      x: absolute.x,
-      y: absolute.y,
-      width: Number(root.measured?.width ?? root.style?.width ?? 1),
-      height: Number(root.measured?.height ?? root.style?.height ?? 1),
-    }
-  })
+  // Every drop plans against its complete sibling set. Previously residents
+  // were only present for a reparent, so moving a node within its existing
+  // frame (or among root nodes) bypassed collision handling altogether.
+  const destinationParentId = target?.id ?? null
+  const layoutRoots = [
+    ...allNodes.filter(node =>
+      (node.parentId ?? null) === destinationParentId &&
+      !incomingIds.has(node.id) &&
+      node.id !== target?.id),
+    ...roots,
+  ]
+  const placementRects = layoutRoots.map(root => ({
+    id: root.id,
+    ...nodeWorldRect(root, absolutePositions.get(root.id) ?? root.position),
+  }))
   const targetAbsolute = target ? absolutePositions.get(target.id) ?? { x: 0, y: 0 } : { x: 0, y: 0 }
-  const targetScale = target ? Number((target.data as Record<string, unknown>).worldScale ?? 1) : 1
+  const targetScale = target ? nodeWorldScale(target) : 1
   // Children live in the target's CONTENT space. It differs from the target's
   // own world scale exactly when the target already compresses its interior.
-  const targetContentScale = target
-    ? Number((target.data as Record<string, unknown>).contentScale ?? targetScale)
-    : 1
-  const targetInteriorScale = target
-    ? Number((target.data as Record<string, unknown>).interiorScale ?? 1)
-    : 1
+  const targetContentScale = target ? nodeContentScale(target) : 1
+  const targetInteriorScale = target ? nodeInteriorScale(target) : 1
   // Size parity: a node arriving from elsewhere carries its own world scale,
   // so applying one fit factor to every node left the newcomer a different
   // size from the siblings it just joined. Adopt the scale they already use.
+  const incomingVisualType = roots.length > 0 && roots.every(root => root.type === roots[0].type)
+    ? roots[0].type
+    : null
   const siblingWorldScales = allNodes
-    .filter(node => target && node.parentId === target.id && !incomingIds.has(node.id))
-    .map(node => Number((node.data as Record<string, unknown>).worldScale ?? 0))
+    .filter(node =>
+      target &&
+      node.parentId === target.id &&
+      !incomingIds.has(node.id) &&
+      incomingVisualType !== null &&
+      node.type === incomingVisualType)
+    .map(node => positiveFinite((node.data as Record<string, unknown>).worldScale, 0))
     .filter(value => Number.isFinite(value) && value > 0)
     .sort((a, b) => a - b)
   const siblingWorldScale = siblingWorldScales.length > 0
@@ -170,20 +201,7 @@ function buildDropFrame({
   // Header-aware, exactly like the resize clamp and the resize minimum. Using
   // `contentRect`'s flat defaults here made a drop and a resize disagree about
   // where a frame's usable space begins.
-  const targetBox = target ? contentRectFor(
-    {
-      width: Number(target.style?.width ?? target.measured?.width ?? 1) / Math.max(0.0001, targetScale),
-      height: Number(target.style?.height ?? target.measured?.height ?? 1) / Math.max(0.0001, targetScale),
-    },
-    Number((target.data as Record<string, unknown>).depth ?? 0),
-    targetScale,
-  ) : null
-  const destination = targetBox ? {
-    x: targetAbsolute.x + targetBox.x * targetScale,
-    y: targetAbsolute.y + targetBox.y * targetScale,
-    width: targetBox.width * targetScale,
-    height: targetBox.height * targetScale,
-  } : null
+  const destination = target ? frameWorldContentRect(target, targetAbsolute) : null
   const groupBounds = boundsOf(placementRects)
   const incomingBounds = boundsOf(placementRects.filter(rect => incomingIds.has(rect.id)))
   const occupiedRects = placementRects.filter(rect => !incomingIds.has(rect.id))
@@ -194,22 +212,38 @@ function buildDropFrame({
   //      children are immovable obstacles; nothing else changes.
   //   3. Only then compress the frame's interior.
   //
+  // Two spacings, and the difference between them is the difference between a
+  // preference and a law.
+  //
+  // `clearance` is the only distance a hand-placed drop can FAIL. It is small,
+  // flat and identical at every depth — just enough that two borders never
+  // share a line. Steps 1, 2 and 3 all measure against it and nothing else.
+  //
+  // `worldGap` is how far apart Axiom LIKES to leave things when IT is the one
+  // arranging them. Below, that is the repack fallback alone. Letting it reach
+  // any step that judges a human's drop is what made a node unable to approach
+  // a system: the release point was legal — not overlapping, inside the frame —
+  // and got thrown a hundred units away for sitting inside a tidiness margin,
+  // because every alternative the search offered was a full gap clear of
+  // everything.
+  //
   // These rects are ABSOLUTE WORLD geometry, while FRAME_ITEM_GAP is authored
-  // in canonical units, so the clearance converts through the content scale.
-  // Without this a frame nested at half scale enforced twice the gap.
-  const worldGap = FRAME_ITEM_GAP * Math.max(0.0001, targetContentScale)
+  // in canonical units, so the packing gap converts through the content scale.
+  // Without this a frame nested at half scale left twice the gap.
+  const worldGap = packingGapWithin(target).gap
+  const clearance = dropClearance().gap
   const collidesAt = (position: Point, size: Rect): boolean => occupiedRects.some(rect =>
-    position.x < rect.x + rect.width + worldGap &&
-    position.x + size.width + worldGap > rect.x &&
-    position.y < rect.y + rect.height + worldGap &&
-    position.y + size.height + worldGap > rect.y)
+    position.x < rect.x + rect.width + clearance &&
+    position.x + size.width + clearance > rect.x &&
+    position.y < rect.y + rect.height + clearance &&
+    position.y + size.height + clearance > rect.y)
 
   // Step 1 is a plain minimal clamp. It used to be a "wall-directed" search
   // that pushed the node to the MIDPOINT of the largest free run — so a node
   // dropped a few pixels above a frame's tab flew hundreds of units down the
   // frame, while every other path nudged by the smallest amount that worked.
   // A drop that already sits clear keeps its exact position, as before.
-  const directOffset = changesParent && target && destination && incomingBounds
+  const directOffset = target && destination && incomingBounds
     ? (() => {
         const clamped = containPointWithin(incomingBounds, incomingBounds, destination)
         return collidesAt(clamped, incomingBounds)
@@ -217,10 +251,34 @@ function buildDropFrame({
           : { x: clamped.x - incomingBounds.x, y: clamped.y - incomingBounds.y }
       })()
     : null
-  const slidOffset = !directOffset && changesParent && target && destination && incomingBounds
-    ? slideIncomingIntoFreeSlot(incomingBounds, destination, occupiedRects, worldGap)
+  const slidOffset = !directOffset && target && destination && incomingBounds
+    ? slideIncomingIntoFreeSlot(incomingBounds, destination, occupiedRects, clearance)
     : null
-  const incomingOffset = directOffset ?? slidOffset
+  const rootOffset = !target && incomingBounds
+    ? slideIncomingIntoFreeSlot(incomingBounds, null, occupiedRects, clearance)
+    : null
+  const incomingOffset = directOffset ?? slidOffset ?? rootOffset
+
+  // A same-parent move cannot add pressure to the frame: the dragged nodes
+  // were already part of its contents. If their requested slot and every
+  // nearest free slot are blocked, rebuild the complete sibling arrangement
+  // with the same deterministic packer used by a fresh live Canvas.
+  const repackedPositions = target && !changesParent && !incomingOffset && destination
+    ? (() => {
+        const packed = packFrame(
+          placementRects.map(rect => ({ id: rect.id, width: rect.width, height: rect.height })),
+          {
+            baseGap: worldGap,
+            aspect: destination.width / Math.max(1, destination.height),
+          },
+        )
+        if (packed.width > destination.width || packed.height > destination.height) return null
+        return new Map([...packed.positions].map(([id, position]) => [
+          id,
+          { x: destination.x + position.x, y: destination.y + position.y },
+        ]))
+      })()
+    : null
 
   // Case 3. Only reached when neither the drop point nor any free slot works.
   // The whole computation happens in the target's CONTENT space, because that
@@ -230,14 +288,7 @@ function buildDropFrame({
     ? planInteriorCompression(
         {
           // Content box in the target's OWN canonical space.
-          ownContent: contentRectFor(
-            {
-              width: Number(target.style?.width ?? target.measured?.width ?? 1) / Math.max(0.0001, targetScale),
-              height: Number(target.style?.height ?? target.measured?.height ?? 1) / Math.max(0.0001, targetScale),
-            },
-            Number((target.data as Record<string, unknown>).depth ?? 0),
-            targetScale,
-          ),
+          ownContent: frameOwnContentRect(target),
           occupied: occupiedRects.map(rect => toContentSpace(rect, targetAbsolute, targetContentScale)),
           incoming: incomingSizeAtSiblingScale(incomingBounds, roots, siblingWorldScale, targetContentScale),
           origin: toContentSpace(incomingBounds, targetAbsolute, targetContentScale),
@@ -245,7 +296,9 @@ function buildDropFrame({
           // The legibility floor binds on the SMALLEST child, so a frame that
           // already holds tiny nodes gets little further headroom.
           minChildWorldScale: smallestChildWorldScale(allNodes, target.id, incomingIds, siblingWorldScale),
-          gap: FRAME_ITEM_GAP,
+          // Authored in world units, so it converts INTO the container's
+          // content space, which is the space this whole plan is computed in.
+          clearance: clearance / Math.max(0.0001, targetContentScale),
         },
         slideIncomingIntoFreeSlot,
       )
@@ -255,7 +308,25 @@ function buildDropFrame({
   const frameTransform = needsCompression && !allowInteriorCompression && groupBounds && destination && incomingBounds
     ? fitReferenceFrame(groupBounds, destination, incomingBounds)
     : null
+
+  // Which of the escalating placement strategies actually decided the landing
+  // spot. The cases are mutually exclusive by construction — compression needs
+  // a parent change, a repack needs the absence of one — so this reads the
+  // outcome rather than re-deciding it.
+  const resolution: DropResolution =
+    compression ? 'compress'
+    : repackedPositions ? 'repack'
+    : frameTransform ? 'group-fit'
+    : directOffset ? 'direct'
+    : slidOffset ? 'slide'
+    : rootOffset ? 'root-slide'
+    : 'blocked'
+
   return {
+    resolution,
+    changesParent,
+    worldGap,
+    clearance,
     roots,
     layoutRoots,
     target,
@@ -272,6 +343,7 @@ function buildDropFrame({
     siblingWorldScale,
     targetContentScale,
     compression,
+    repackedPositions,
   }
 }
 
@@ -300,7 +372,7 @@ function incomingSizeAtSiblingScale(
   if (siblingWorldScale === null || roots.length === 0) {
     return { width: incomingBounds.width / scale, height: incomingBounds.height / scale }
   }
-  const ownWorldScale = Math.max(0.0001, Number((roots[0].data as Record<string, unknown>).worldScale ?? 1))
+  const ownWorldScale = positiveFinite((roots[0].data as Record<string, unknown>).worldScale)
   const resized = siblingWorldScale / ownWorldScale
   return {
     width: (incomingBounds.width * resized) / scale,
@@ -321,7 +393,7 @@ function smallestChildWorldScale(
 ): number {
   const scales = allNodes
     .filter(node => node.parentId === targetId && !incomingIds.has(node.id))
-    .map(node => Number((node.data as Record<string, unknown>).worldScale ?? 1))
+    .map(node => positiveFinite((node.data as Record<string, unknown>).worldScale))
     .filter(value => Number.isFinite(value) && value > 0)
   if (siblingWorldScale !== null && siblingWorldScale > 0) scales.push(siblingWorldScale)
   return scales.length > 0 ? Math.min(...scales) : 1
@@ -348,27 +420,34 @@ export function containPointWithin(
 
 /**
  * Nearest free slot for the incoming group, searched from where it was
- * dropped. `placeIncoming` treats existing children as fixed obstacles, so
- * this never disturbs an arrangement the user has already set up — it only
- * decides where the newcomer lands. Returns the translation to apply, or null
- * if the frame has no room at all.
+ * dropped. Existing children are fixed obstacles, so this never disturbs an
+ * arrangement the user has already set up — it only decides where the newcomer
+ * lands. Returns the translation to apply, or null if the frame has no room.
+ *
+ * `clearance` is the ONLY spacing this obeys, and the packing gaps are
+ * deliberately not passed in. A drop that already sits clear translates by
+ * zero, because the release point is the first candidate tried and nothing
+ * rejects it; a drop that genuinely conflicts moves the smallest distance that
+ * separates the two borders, not to the distance Axiom would have chosen.
  */
 export function slideIncomingIntoFreeSlot(
   incoming: Rect,
-  destination: Rect,
+  destination: Rect | null,
   occupied: readonly Rect[],
-  gap = FRAME_ITEM_GAP,
+  clearance = DROP_CLEARANCE,
 ): Point | null {
   const placed = placeNearest(
     { id: '__incoming__', width: incoming.width, height: incoming.height },
     occupied,
-    { baseGap: gap, bounds: destination, preferred: { x: incoming.x, y: incoming.y } },
+    { baseGap: clearance, bounds: destination, preferred: { x: incoming.x, y: incoming.y } },
   )
   if (!placed) return null
   return { x: placed.x - incoming.x, y: placed.y - incoming.y }
 }
 
-function worldPositionFor(rect: Rect & { id: string }, frame: DropFrame): Point {
+export function worldPositionFor(rect: Rect & { id: string }, frame: DropFrame): Point {
+  const repacked = frame.repackedPositions?.get(rect.id)
+  if (repacked) return repacked
   if (frame.frameTransform) return transformReferencePoint(rect, frame.frameTransform)
   if (frame.incomingIds.has(rect.id) && frame.incomingOffset) {
     return { x: rect.x + frame.incomingOffset.x, y: rect.y + frame.incomingOffset.y }
@@ -430,8 +509,8 @@ function containerCompressionWrite(
   // skipping this write would place it against a frame that never shrank.
   // Reconstruct the row from the projected geometry it is currently rendering.
   const data = target.data as Record<string, unknown>
-  const ownScale = Number(data.frameScale ?? 1)
-  const worldScale = Number(data.worldScale ?? ownScale)
+  const ownScale = positiveFinite(data.frameScale)
+  const worldScale = positiveFinite(data.worldScale, ownScale)
   const parentContentScale = target.parentId ? worldScale / Math.max(0.0001, ownScale) : 1
   const parentNodeType: FloorLayoutWrite['parentNodeType'] = target.parentId
     ? (infraIds.has(target.parentId) ? 'infra' : 'system')
@@ -444,8 +523,8 @@ function containerCompressionWrite(
     containmentKind: parentNodeType === 'infra' ? 'hosted_by' : parentNodeType === 'system' ? 'part_of' : 'root',
     positionX: target.position.x / Math.max(0.0001, parentContentScale),
     positionY: target.position.y / Math.max(0.0001, parentContentScale),
-    width: Number(target.style?.width ?? target.measured?.width ?? 1) / Math.max(0.0001, worldScale),
-    height: Number(target.style?.height ?? target.measured?.height ?? 1) / Math.max(0.0001, worldScale),
+    width: positiveFinite(target.style?.width ?? target.measured?.width, 1) / worldScale,
+    height: positiveFinite(target.style?.height ?? target.measured?.height, 1) / worldScale,
     scale: ownScale,
     interiorScale,
   }
@@ -457,7 +536,7 @@ function selectedIdsForDrop(nodes: Node[], draggedNodeId: string, eligible: (nod
   return selected
 }
 
-export function planFloorDrop({
+export function planCanvasDrop({
   workspaceId,
   draggedNodeId,
   targetNodeId,
@@ -467,33 +546,42 @@ export function planFloorDrop({
   fileIds,
   infraIds,
   floorLayouts,
+  editableNodeIds,
   now = Date.now(),
-}: FloorDropPlanInput): FloorDropPersistencePlan {
-  const selectedIds = selectedIdsForDrop(allNodes, draggedNodeId, () => true)
+}: CanvasDropPlanInput): CanvasDropPersistencePlan {
+  if (editableNodeIds && !editableNodeIds.has(draggedNodeId)) {
+    return {
+      selectedIds: [],
+      updates: [],
+      changedKeys: new Set(),
+      previousLayouts: [],
+      optimisticLayouts: [],
+      arrivalLayouts: [],
+    }
+  }
+  const selectedIds = selectedIdsForDrop(
+    allNodes,
+    draggedNodeId,
+    node => !editableNodeIds || editableNodeIds.has(node.id),
+  )
   const frame = buildDropFrame({
     allNodes,
     selectedIds,
     targetNodeId,
     absolutePositions,
-    includeExistingChild: () => true,
     allowInteriorCompression: true,
   })
-  // Cases 1-3 all leave existing children exactly where they are, so only the
-  // newcomers get a row — compression moves the space, not the nodes in it.
-  //
-  // Writing residents too was harmless while the plan echoed their current
-  // geometry back, but the containment clamp is applied to every row it writes:
-  // a resident overlapping its frame's tab band got silently nudged by an
-  // unrelated drop. `layoutRoots` now only matters to the sheet layer, whose
-  // group transform genuinely does move everyone.
-  const writtenRoots = frame.roots
+  // Normal placement and compression leave residents untouched. The one
+  // exception is the deterministic same-parent fallback above: it is a real
+  // repack, so every sibling whose canonical position may change is written.
+  const writtenRoots = frame.repackedPositions ? frame.layoutRoots : frame.roots
   // Where each node physically was when the pointer came up, expressed in its
   // NEW parent's coordinate space. Phase one of the drop puts it here, so the
   // reparent itself is visually a no-op and every correction after it animates.
   const arrivalById = new Map<string, { x: number; y: number; scale: number }>()
   for (const root of writtenRoots) {
     const rect = frame.placementRects.find(candidate => candidate.id === root.id)!
-    const ownWorldScale = Number((root.data as Record<string, unknown>).worldScale ?? 1)
+    const ownWorldScale = positiveFinite((root.data as Record<string, unknown>).worldScale)
     arrivalById.set(root.id, frame.target
       ? {
           x: (rect.x - frame.targetAbsolute.x) / frame.targetContentScale,
@@ -525,9 +613,12 @@ export function planFloorDrop({
                 y: (nextWorld.y - frame.targetAbsolute.y) / frame.targetContentScale,
               }
             : nextWorld
-        const oldWorldScale = Number((root.data as Record<string, unknown>).worldScale ?? previous?.scale ?? 1)
-        const materializedWidth = Number(root.style?.width ?? rect.width) / Math.max(0.0001, oldWorldScale)
-        const materializedHeight = Number(root.style?.height ?? rect.height) / Math.max(0.0001, oldWorldScale)
+        const oldWorldScale = positiveFinite(
+          (root.data as Record<string, unknown>).worldScale,
+          previous?.scale ?? 1,
+        )
+        const materializedWidth = positiveFinite(root.style?.width, rect.width) / oldWorldScale
+        const materializedHeight = positiveFinite(root.style?.height, rect.height) / oldWorldScale
         const parentNodeType: FloorLayoutWrite['parentNodeType'] = frame.target
           ? (infraIds.has(frame.target.id) ? 'infra' : 'system')
           : null
@@ -549,7 +640,7 @@ export function planFloorDrop({
             ? frame.siblingWorldScale / Math.max(0.0001, frame.targetContentScale)
             : localScaleAfterWorldFit(oldWorldScale, frame.fit, frame.target ? frame.targetContentScale : 1),
           interiorScale: previous?.interiorScale
-            ?? Number((root.data as Record<string, unknown>).interiorScale ?? 1),
+            ?? positiveFinite((root.data as Record<string, unknown>).interiorScale),
         }
       })
     : []
@@ -582,53 +673,10 @@ export function planFloorDrop({
             ...(arrival
               ? { positionX: arrival.x, positionY: arrival.y, scale: arrival.scale }
               : { interiorScale: frame.target && update.nodeId === frame.target.id
-                  ? Number((frame.target.data as Record<string, unknown>).interiorScale ?? 1)
+                  ? positiveFinite((frame.target.data as Record<string, unknown>).interiorScale)
                   : update.interiorScale }),
           }
         })
       : [],
   }
-}
-
-export function planSheetDrop({
-  draggedNodeId,
-  targetNodeId,
-  allNodes,
-  absolutePositions,
-  activeNodeIds,
-  elements,
-  planned,
-}: SheetDropPlanInput): SheetDropPersistencePlan {
-  const selectedIds = selectedIdsForDrop(allNodes, draggedNodeId, node => activeNodeIds.has(node.id))
-  const frame = buildDropFrame({
-    allNodes,
-    selectedIds,
-    targetNodeId,
-    absolutePositions,
-    includeExistingChild: node => activeNodeIds.has(node.id),
-  })
-  const mutations: SheetLayoutMutation[] = []
-  if (frame.groupBounds) {
-    for (const root of frame.layoutRoots) {
-      const element = elements.find(item => (item.systemId ?? item.fileId ?? item.infraId) === root.id)
-      const plannedNode = root.id.startsWith('planned:')
-        ? planned.find(item => item.id === root.id.slice(8))
-        : undefined
-      if (!element && !plannedNode) continue
-      const rect = frame.placementRects.find(item => item.id === root.id)!
-      const world = worldPositionFor(rect, frame)
-      const oldScale = Number((root.data as Record<string, unknown>).worldScale ?? element?.scale ?? plannedNode?.scale ?? 1)
-      mutations.push({
-        kind: element ? 'element' : 'planned',
-        id: element?.id ?? plannedNode!.id,
-        x: frame.target ? (world.x - frame.targetAbsolute.x) / frame.targetScale : world.x,
-        y: frame.target ? (world.y - frame.targetAbsolute.y) / frame.targetScale : world.y,
-        parentSystemId: frame.target?.id ?? null,
-        width: Number(element?.width ?? plannedNode?.width ?? root.style?.width ?? (root.type === 'file' ? BASE_FILE_WIDTH : 620)),
-        height: Number(element?.height ?? plannedNode?.height ?? root.style?.height ?? (root.type === 'file' ? BASE_FILE_HEIGHT : 420)),
-        scale: localScaleAfterWorldFit(oldScale, frame.fit, frame.target ? frame.targetScale : 1),
-      })
-    }
-  }
-  return { selectedIds, mutations }
 }

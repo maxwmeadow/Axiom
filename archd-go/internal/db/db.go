@@ -453,6 +453,28 @@ func migrate(db *sql.DB) error {
 		workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
 		revision INTEGER NOT NULL DEFAULT 0
 	);
+	-- Sheet geometry uses the exact same spatial algebra as the Floor while
+	-- remaining proposal-local. Membership/intent stays in sheet_elements and
+	-- planned_nodes; this table owns geometry only.
+	CREATE TABLE IF NOT EXISTS sheet_layouts (
+		sheet_id           TEXT NOT NULL REFERENCES sheets(id) ON DELETE CASCADE,
+		workspace_id       TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+		node_id            TEXT NOT NULL,
+		node_type          TEXT NOT NULL CHECK(node_type IN ('system','file','infra')),
+		parent_node_id     TEXT,
+		parent_node_type   TEXT CHECK(parent_node_type IS NULL OR parent_node_type IN ('system','infra')),
+		containment_kind   TEXT NOT NULL DEFAULT 'root' CHECK(containment_kind IN ('root','part_of','hosted_by')),
+		position_x         REAL NOT NULL DEFAULT 0,
+		position_y         REAL NOT NULL DEFAULT 0,
+		width              REAL NOT NULL,
+		height             REAL NOT NULL,
+		scale              REAL NOT NULL DEFAULT 1 CHECK(scale > 0),
+		interior_scale     REAL NOT NULL DEFAULT 1 CHECK(interior_scale > 0),
+		updated_at         INTEGER NOT NULL,
+		PRIMARY KEY(sheet_id, node_id)
+	);
+	CREATE INDEX IF NOT EXISTS sheet_layouts_parent
+		ON sheet_layouts(sheet_id, parent_node_type, parent_node_id);
 	CREATE TRIGGER IF NOT EXISTS floor_layout_cleanup_system AFTER DELETE ON systems BEGIN
 		DELETE FROM floor_layouts WHERE node_type='system' AND node_id=OLD.id;
 		UPDATE floor_layouts SET parent_node_id=NULL, parent_node_type=NULL, containment_kind='root'
@@ -464,6 +486,19 @@ func migrate(db *sql.DB) error {
 	CREATE TRIGGER IF NOT EXISTS floor_layout_cleanup_infra AFTER DELETE ON infra_nodes BEGIN
 		DELETE FROM floor_layouts WHERE node_type='infra' AND node_id=OLD.id;
 		UPDATE floor_layouts SET parent_node_id=NULL, parent_node_type=NULL, containment_kind='root'
+			WHERE parent_node_type='infra' AND parent_node_id=OLD.id;
+	END;
+	CREATE TRIGGER IF NOT EXISTS sheet_layout_cleanup_system AFTER DELETE ON systems BEGIN
+		DELETE FROM sheet_layouts WHERE node_type='system' AND node_id=OLD.id;
+		UPDATE sheet_layouts SET parent_node_id=NULL, parent_node_type=NULL, containment_kind='root'
+			WHERE parent_node_type='system' AND parent_node_id=OLD.id;
+	END;
+	CREATE TRIGGER IF NOT EXISTS sheet_layout_cleanup_file AFTER DELETE ON files BEGIN
+		DELETE FROM sheet_layouts WHERE node_type='file' AND node_id=OLD.id;
+	END;
+	CREATE TRIGGER IF NOT EXISTS sheet_layout_cleanup_infra AFTER DELETE ON infra_nodes BEGIN
+		DELETE FROM sheet_layouts WHERE node_type='infra' AND node_id=OLD.id;
+		UPDATE sheet_layouts SET parent_node_id=NULL, parent_node_type=NULL, containment_kind='root'
 			WHERE parent_node_type='infra' AND parent_node_id=OLD.id;
 	END;
 	`
@@ -563,6 +598,9 @@ func migrate(db *sql.DB) error {
 				return fmt.Errorf("migration: %s: %w", col, err)
 			}
 		}
+	}
+	if err := BackfillSheetLayouts(db); err != nil {
+		return err
 	}
 
 	// 2026-07: filename-based cylinder/hexagon shape guessing was removed

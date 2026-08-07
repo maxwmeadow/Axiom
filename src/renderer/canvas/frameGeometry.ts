@@ -86,6 +86,25 @@ export const FRAME_ITEM_GAP = 12
  */
 export const FRAME_ROOT_GAP = 96
 
+/**
+ * The only spacing a HAND-PLACED node has to respect.
+ *
+ * The gaps above are how Axiom arranges things when it is the one deciding —
+ * a fresh pack, a tidy, a newly indexed file. They are preferences about how a
+ * machine-authored layout should look. They are NOT laws, and treating them as
+ * laws is what made a dropped node fly a hundred units away from a system it
+ * was nowhere near touching: the drop was legal in every way that matters and
+ * got rejected anyway for sitting inside a moat that only exists for tidiness.
+ *
+ * When a person places a node, where they let go is where it goes. The single
+ * exception is that two nodes may not share a line — at zero clearance two
+ * borders stack into one thick stroke and the boundary between two nodes stops
+ * being readable. A few units of daylight is all that takes, so this is small
+ * and, unlike the packing gaps, does not scale with nesting: it exists to keep
+ * two RENDERED borders apart, and border thickness does not shrink with depth.
+ */
+export const DROP_CLEARANCE = 6
+
 /** World-space title font sizes per depth — fixed, no counter-scaling. */
 export const DEPTH_TITLE_PX = [24, 14, 10, 8]
 

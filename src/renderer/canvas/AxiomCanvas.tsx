@@ -60,22 +60,32 @@ import { apiUpdateSystem, apiSaveNodePosition, apiSaveFloorLayouts } from './arc
 import { contentRectFor, FRAME_ITEM_GAP, FRAME_ROOT_GAP, frameContentInsets, normalizeGeometry } from './frameGeometry'
 import { packFrame, placeIncoming } from './packing'
 import { resizeChanged, type NodeResizeParams } from './resizeGeometry'
-import { planFloorResize, planSheetResize, replaceFloorLayouts, type ResizeSessionStart } from './resizePersistence'
+import { planCanvasResize, replaceFloorLayouts, type ResizeSessionStart } from './resizePersistence'
 import { projectFloorNodes, type FloorSceneDescriptor } from './floorSceneProjection'
 import { canPersistGeneratedFrame, growFrameToContainChildren, orderFramePlacementCandidates } from './incrementalFrameLayout'
 import { easeViewportTowardZoom, MAX_CANVAS_ZOOM, MIN_CANVAS_ZOOM, nextWheelZoomTarget, ZOOM_SNAP_EPSILON, zoomViewportAroundPoint } from './viewportMath'
-import { emptySelection, selectionAfterNodeChanges, singleNodeSelection, stampSelection } from './selectionController'
-import { planFloorDrop, planSheetDrop } from './dropPersistence'
+import {
+  emptySelection,
+  isAdditiveEvent,
+  selectionAfterDragStart,
+  selectionAfterNodeChanges,
+  singleNodeSelection,
+  stampSelection,
+} from './selectionController'
+import { planCanvasDrop } from './dropPersistence'
 import { applyZoomVisibility, makeFullyVisible } from './semanticZoom'
 import { livingVisibilityIndex, surfaceLivingNodeFx } from './livingVisibility'
 import { applyDeltaMarks, buildDeltaReview, claimFocusTargets, clampClaimCursor } from './deltaReview'
 import { applyAgentAttention, surfaceAgentAttention } from './agentAttentionProjection'
 import { useSheetPhase } from './sheetPhase'
 import { stampAgentPresence } from './agentPresence'
+import { CollisionDebugOverlay } from './CollisionDebugOverlay'
+import { absolutePositionsFromTree, buildCollisionModel } from './collisionModel'
 import { LivingFlowOverlay } from './LivingFlowOverlay'
 import { inspectFloorScene, partitionCanvasNodeChanges } from './sceneIntegrity'
 import { routeWheelEvent, wheelScrollStep } from './wheelRouting'
 import { rectContainsRect } from './selectionResize'
+import { sheetEditableNodeIds } from './sheetEditability'
 import {
   diffScene,
   recordSceneMutation,
@@ -1318,8 +1328,16 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   if (candidateSceneIntegrity.valid && candidateRfNodes.length > 0) {
     lastHealthySceneRef.current = { projectId: sceneProjectId, nodes: candidateRfNodes }
   }
-  const retainedScene = lastHealthySceneRef.current?.projectId === sceneProjectId
+  const retainedCandidate = lastHealthySceneRef.current?.projectId === sceneProjectId
     ? lastHealthySceneRef.current.nodes
+    : null
+  // A healthy snapshot from before an index add/delete is not a valid recovery
+  // target for the new canonical graph. Reusing it creates a permanent
+  // canonical-mismatch loop and leaves deleted nodes interactive.
+  const retainedScene = retainedCandidate &&
+    retainedCandidate.length === canonicalNodeIds.size &&
+    retainedCandidate.every(node => canonicalNodeIds.has(node.id))
+    ? retainedCandidate
     : null
   const rfNodes = !candidateSceneIntegrity.valid && retainedScene?.length
     ? retainedScene
@@ -1374,8 +1392,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   // authoritative set is selectedIdsRef, so mirror its file subset into state
   // and render the chip from that instead.
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([])
+  const [selectionRevision, setSelectionRevision] = useState(0)
   const commitSelection = useCallback((ids: Set<string>) => {
+    const previous = selectedIdsRef.current
+    const changed = previous.size !== ids.size || [...ids].some(id => !previous.has(id))
     selectedIdsRef.current = ids
+    if (changed) setSelectionRevision(revision => revision + 1)
     const fileIds = new Set(useGraphStore.getState().files.map(file => file.id))
     const next = [...ids].filter(id => fileIds.has(id))
     setSelectedFileIds(previous => {
@@ -1450,6 +1472,14 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }
     return byNodeId
   }, [visibleLayers, overlayElements])
+  const sheetOpinionIds = useMemo(() => new Set(visibleLayers.flatMap(layer => [
+    ...layer.elements.flatMap(element => {
+      const id = element.systemId ?? element.fileId ?? element.infraId
+      return id ? [id] : []
+    }),
+    ...layer.planned.map(node => `planned:${node.id}`),
+    ...layer.layouts.map(layout => layout.nodeId),
+  ])), [visibleLayers])
 
   const activeElementByNodeId = useMemo(() => {
     const result = new Map<string, (typeof overlayElements)[number]>()
@@ -1468,10 +1498,106 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const activePlannedByNodeId = useMemo(() => new Map(
     (layersById[overlaySheetId ?? '']?.planned ?? []).map(p => [`planned:${p.id}`, p]),
   ), [layersById, overlaySheetId])
-  const activeNodeIds = useMemo(() => new Set([
-    ...activeElementByNodeId.keys(),
-    ...activePlannedByNodeId.keys(),
-  ]), [activeElementByNodeId, activePlannedByNodeId])
+  const activeNodeIds = useMemo(() => sheetEditableNodeIds({
+    activeSheetId: overlaySheetId,
+    // Live entities are shared with the Floor. Moving one for the first time
+    // promotes its geometry into a sparse sheet layout row.
+    liveNodeIds: [
+      ...systems.map(system => system.id),
+      ...files.map(file => file.id),
+      ...infraNodes.map(infra => infra.id),
+    ],
+    activePlannedNodeIds: activePlannedByNodeId.keys(),
+    activeLayoutNodeIds: (layersById[overlaySheetId ?? '']?.layouts ?? []).map(layout => layout.nodeId),
+  }), [overlaySheetId, systems, files, infraNodes, activePlannedByNodeId, layersById])
+  // A sheet is a sparse set of layout opinions over the complete live Floor.
+  // Overlaying those full rows gives the one canonical layout input used by
+  // projection, drag/drop, resize, and tidy. Legacy columns are read only as an
+  // upgrade fallback for a node whose canonical row has not arrived yet.
+  const sheetEffectiveLayouts = useMemo<FloorLayout[]>(() => {
+    const byId = new Map(floorLayouts.map(layout => [layout.nodeId, layout]))
+    const liveSystems = new Map(systems.map(system => [system.id, system]))
+    const liveFiles = new Map(files.map(file => [file.id, file]))
+    const liveInfra = new Map(infraNodes.map(infra => [infra.id, infra]))
+    const plannedInfraIds = new Set(overlayPlanned
+      .filter(node => node.kind === 'infra')
+      .map(node => `planned:${node.id}`))
+    const parentType = (id: string | null): 'system' | 'infra' | null => id
+      ? (liveInfra.has(id) || plannedInfraIds.has(id) ? 'infra' : 'system')
+      : null
+    const containment = (type: 'system' | 'infra' | null) => type === 'infra'
+      ? 'hosted_by' as const
+      : type === 'system' ? 'part_of' as const : 'root' as const
+    for (const layer of visibleLayers) {
+      const canonicalIds = new Set(layer.layouts.map(layout => layout.nodeId))
+      for (const element of layer.elements) {
+        const nodeId = element.systemId ?? element.fileId ?? element.infraId
+        if (!nodeId || canonicalIds.has(nodeId)) continue
+        const previous = byId.get(nodeId)
+        const nodeType: FloorNodeType = element.systemId ? 'system' : element.fileId ? 'file' : 'infra'
+        const infra = liveInfra.get(nodeId)
+        const type = parentType(element.parentSystemId)
+        byId.set(nodeId, {
+          workspaceId: workspaceIdForOverlay,
+          nodeId,
+          nodeType,
+          parentNodeId: element.parentSystemId,
+          parentNodeType: type,
+          containmentKind: containment(type),
+          positionX: element.positionX,
+          positionY: element.positionY,
+          width: element.width ?? previous?.width
+            ?? liveSystems.get(nodeId)?.width ?? liveFiles.get(nodeId)?.width
+            ?? (infra?.category === 'platform' ? 760 : infra ? 260 : BASE_FILE_W),
+          height: element.height ?? previous?.height
+            ?? liveSystems.get(nodeId)?.height ?? liveFiles.get(nodeId)?.height
+            ?? (infra?.category === 'platform' ? 520 : infra ? 160 : BASE_FILE_H),
+          scale: element.scale ?? previous?.scale ?? 1,
+          interiorScale: previous?.interiorScale ?? 1,
+          updatedAt: 0,
+        })
+      }
+      for (const planned of layer.planned) {
+        const nodeId = `planned:${planned.id}`
+        if (canonicalIds.has(nodeId)) continue
+        const metadata = plannedMetadata(planned)
+        const nodeType: FloorNodeType = planned.kind === 'system'
+          ? 'system' : planned.kind === 'infra' ? 'infra' : 'file'
+        const type = parentType(planned.parentSystemId)
+        byId.set(nodeId, {
+          workspaceId: workspaceIdForOverlay,
+          nodeId,
+          nodeType,
+          parentNodeId: planned.parentSystemId,
+          parentNodeType: type,
+          containmentKind: containment(type),
+          positionX: planned.positionX,
+          positionY: planned.positionY,
+          width: planned.width ?? (nodeType === 'system'
+            ? 620 : nodeType === 'infra' ? (metadata.category === 'platform' ? 760 : 260) : BASE_FILE_W),
+          height: planned.height ?? (nodeType === 'system'
+            ? 420 : nodeType === 'infra' ? (metadata.category === 'platform' ? 520 : 160) : BASE_FILE_H),
+          scale: planned.scale ?? 1,
+          interiorScale: 1,
+          updatedAt: 0,
+        })
+      }
+      for (const layout of layer.layouts) byId.set(layout.nodeId, layout)
+    }
+    return [...byId.values()]
+  }, [floorLayouts, systems, files, infraNodes, overlayPlanned, visibleLayers, workspaceIdForOverlay])
+  const sheetSystemIds = useMemo(() => new Set([
+    ...systems.map(system => system.id),
+    ...overlayPlanned.filter(node => node.kind === 'system').map(node => `planned:${node.id}`),
+  ]), [systems, overlayPlanned])
+  const sheetFileIds = useMemo(() => new Set([
+    ...files.map(file => file.id),
+    ...overlayPlanned.filter(node => node.kind !== 'system' && node.kind !== 'infra').map(node => `planned:${node.id}`),
+  ]), [files, overlayPlanned])
+  const sheetInfraIds = useMemo(() => new Set([
+    ...infraNodes.map(infra => infra.id),
+    ...overlayPlanned.filter(node => node.kind === 'infra').map(node => `planned:${node.id}`),
+  ]), [infraNodes, overlayPlanned])
   const [isTransitioningLayout, setIsTransitioningLayout] = useState(false)
   // Placements decided for nodes with no persisted row. Refs, not state: they
   // must survive every reprojection without causing one. See GeneratedPlacement.
@@ -1503,10 +1629,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         : rfNodes
     }
 
-    const memberIds = new Set(effectiveElements.keys())
     const visiblePlanned = overlayPlanned.filter(p => p.status !== 'flattened')
     const plannedSystems: DbSystem[] = visiblePlanned
-      .filter(p => p.kind === 'system' || (p.kind === 'infra' && (plannedMetadata(p).capabilities?.includes('container') || plannedMetadata(p).category === 'platform')))
+      .filter(p => p.kind === 'system')
       .map(p => ({
         id: `planned:${p.id}`,
         workspaceId: p.workspaceId,
@@ -1524,132 +1649,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         createdAt: 0,
         updatedAt: 0,
       }))
-    // A live system used as a sheet-local parent must keep its existing Floor
-    // subtree visible. Otherwise its children remain in the flattened base
-    // projection and are painted behind the now-opaque composed system body.
-    const contextSystemIds = new Set<string>()
-    for (const element of effectiveElements.values()) {
-      if (element.systemId) contextSystemIds.add(element.systemId)
-      if (element.parentSystemId && !element.parentSystemId.startsWith('planned:')) {
-        contextSystemIds.add(element.parentSystemId)
-      }
-    }
-    for (const planned of visiblePlanned) {
-      if (planned.parentSystemId && !planned.parentSystemId.startsWith('planned:')) {
-        contextSystemIds.add(planned.parentSystemId)
-      }
-    }
-    const liveSystemById = new Map(systems.map(system => [system.id, system]))
-    for (const id of [...contextSystemIds]) {
-      let parentId = liveSystemById.get(id)?.parentId ?? null
-      const seen = new Set<string>([id])
-      while (parentId && !seen.has(parentId)) {
-        seen.add(parentId)
-        contextSystemIds.add(parentId)
-        parentId = liveSystemById.get(parentId)?.parentId ?? null
-      }
-    }
-    let addedContextDescendant = true
-    while (addedContextDescendant) {
-      addedContextDescendant = false
-      for (const system of systems) {
-        if (!system.parentId || !contextSystemIds.has(system.parentId) || contextSystemIds.has(system.id)) continue
-        contextSystemIds.add(system.id)
-        addedContextDescendant = true
-      }
-    }
-    // Containers are structural context: a selected file remains inside its
-    // sheet-local parent even when that system was not explicitly selected.
-    const requiredSystemIds = new Set<string>()
-    for (const [nodeId, element] of effectiveElements) {
-      if (element.systemId) requiredSystemIds.add(nodeId)
-      if (element.parentSystemId) requiredSystemIds.add(element.parentSystemId)
-    }
-    for (const system of plannedSystems) {
-      requiredSystemIds.add(system.id)
-      if (system.parentId) requiredSystemIds.add(system.parentId)
-    }
-    for (const p of visiblePlanned) {
-      if (p.parentSystemId) requiredSystemIds.add(p.parentSystemId)
-    }
-    for (const id of contextSystemIds) requiredSystemIds.add(id)
-    let addedAncestor = true
-    while (addedAncestor) {
-      addedAncestor = false
-      for (const system of systems) {
-        if (!requiredSystemIds.has(system.id) || !system.parentId || requiredSystemIds.has(system.parentId)) continue
-        requiredSystemIds.add(system.parentId)
-        addedAncestor = true
-      }
-    }
-    const systemsById = new Map(systems.map(s => [s.id, s]))
-    const getFloorAbsolutePosition = (id: string, type: 'system' | 'file'): { x: number; y: number } => {
-      if (type === 'file') {
-        const f = files.find(x => x.id === id)
-        if (!f) return { x: 0, y: 0 }
-        if (!f.systemId) return { x: f.positionX, y: f.positionY }
-        const parentPos = getFloorAbsolutePosition(f.systemId, 'system')
-        return { x: parentPos.x + f.positionX, y: parentPos.y + f.positionY }
-      }
-      let x = 0
-      let y = 0
-      let currentId: string | null = id
-      const visited = new Set<string>()
-      while (currentId && !visited.has(currentId)) {
-        visited.add(currentId)
-        const system = systemsById.get(currentId)
-        if (!system) break
-        x += system.positionX
-        y += system.positionY
-        currentId = system.parentId
-      }
-      return { x, y }
-    }
-
-    const virtualSystems: DbSystem[] = systems
-      .filter(s => requiredSystemIds.has(s.id))
-      .map(s => {
-        const e = effectiveElements.get(s.id)
-        return e
-          ? { ...s, parentId: e.parentSystemId, positionX: e.positionX, positionY: e.positionY }
-          : { ...s }
-      })
-      .concat(plannedSystems)
-    const virtualSystemIds = new Set(virtualSystems.map(s => s.id))
-    const virtualSystemById = new Map(virtualSystems.map(s => [s.id, s]))
-    for (const sys of virtualSystems) {
-      if (sys.parentId && (!virtualSystemIds.has(sys.parentId) || sys.parentId === sys.id)) {
-        if (!sys.id.startsWith('planned:')) {
-          const abs = getFloorAbsolutePosition(sys.id, 'system')
-          sys.positionX = abs.x
-          sys.positionY = abs.y
-        }
-        sys.parentId = null
-      }
-      const visited = new Set<string>([sys.id])
-      let parentId = sys.parentId
-      while (parentId) {
-        if (visited.has(parentId)) {
-          sys.parentId = null
-          break
-        }
-        visited.add(parentId)
-        parentId = virtualSystemById.get(parentId)?.parentId ?? null
-      }
-    }
-    const depthFor = (system: DbSystem): number => {
-      let depth = 0
-      let parentId = system.parentId
-      const seen = new Set([system.id])
-      while (parentId && !seen.has(parentId)) {
-        seen.add(parentId)
-        depth++
-        parentId = virtualSystemById.get(parentId)?.parentId ?? null
-      }
-      return depth
-    }
-    for (const system of virtualSystems) system.depth = depthFor(system)
-
+    const virtualSystems: DbSystem[] = systems.map(system => ({ ...system })).concat(plannedSystems)
     const plannedFiles: DbFile[] = visiblePlanned
       .filter(p => p.kind !== 'system' && p.kind !== 'infra')
       .map(p => {
@@ -1661,7 +1661,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           path: p.declaredPath || p.name,
           relPath: p.declaredPath || p.name,
           language: metadata.language ?? inferredLanguage,
-          systemId: p.parentSystemId && virtualSystemIds.has(p.parentSystemId) ? p.parentSystemId : null,
+          systemId: p.parentSystemId,
           lineCount: 0,
           churnScore: 0,
           shape: p.shape === 'cylinder' || p.shape === 'hexagon'
@@ -1675,28 +1675,9 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           indexedAt: 0,
         }
       })
-    const virtualFiles: DbFile[] = files
-      .filter(f => memberIds.has(f.id) || Boolean(f.systemId && contextSystemIds.has(f.systemId)))
-      .map(f => {
-        const e = effectiveElements.get(f.id)
-        if (!e) {
-          const parentId = f.systemId && virtualSystemIds.has(f.systemId) ? f.systemId : null
-          if (!parentId && f.systemId) {
-            const abs = getFloorAbsolutePosition(f.id, 'file')
-            return { ...f, systemId: null, positionX: abs.x, positionY: abs.y }
-          }
-          return { ...f, systemId: parentId }
-        }
-        return {
-          ...f,
-          systemId: e.parentSystemId && virtualSystemIds.has(e.parentSystemId) ? e.parentSystemId : null,
-          positionX: e.positionX,
-          positionY: e.positionY,
-        }
-      })
-      .concat(plannedFiles)
+    const virtualFiles: DbFile[] = files.map(file => ({ ...file })).concat(plannedFiles)
     const plannedInfra: DbInfraNode[] = visiblePlanned
-      .filter(p => p.kind === 'infra' && !(plannedMetadata(p).capabilities?.includes('container') || plannedMetadata(p).category === 'platform'))
+      .filter(p => p.kind === 'infra')
       .map(p => {
         const metadata = plannedMetadata(p)
         return {
@@ -1714,92 +1695,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           positionY: p.positionY,
         }
       })
-    const virtualInfra = infraNodes
-      .filter(n => memberIds.has(n.id))
-      .map(n => {
-        const e = effectiveElements.get(n.id)!
-        return { ...n, positionX: e.positionX, positionY: e.positionY }
-      })
-      .concat(plannedInfra)
-    const sheetFrameLayouts: FloorLayout[] = [
-      ...virtualSystems.map(system => {
-        const element = effectiveElements.get(system.id)
-        const planned = system.id.startsWith('planned:') ? visiblePlannedByNodeId.get(system.id) : undefined
-        return {
-          workspaceId: workspaceIdForOverlay, nodeId: system.id, nodeType: 'system' as const,
-          parentNodeId: element?.parentSystemId ?? planned?.parentSystemId ?? system.parentId,
-          parentNodeType: (element?.parentSystemId ?? planned?.parentSystemId ?? system.parentId) ? 'system' as const : null,
-          containmentKind: (element?.parentSystemId ?? planned?.parentSystemId ?? system.parentId) ? 'part_of' as const : 'root' as const,
-          positionX: element?.positionX ?? planned?.positionX ?? system.positionX,
-          positionY: element?.positionY ?? planned?.positionY ?? system.positionY,
-          width: element?.width ?? planned?.width ?? system.width ?? 620,
-          height: element?.height ?? planned?.height ?? system.height ?? 420,
-          scale: element?.scale ?? planned?.scale ?? 1,
-          // Sheets have no interior compression; the Floor owns that concept.
-          interiorScale: 1, updatedAt: 0,
-        }
-      }),
-      ...virtualFiles.map(file => {
-        const element = effectiveElements.get(file.id)
-        const planned = file.id.startsWith('planned:') ? visiblePlannedByNodeId.get(file.id) : undefined
-        const parentId = element?.parentSystemId ?? planned?.parentSystemId ?? file.systemId
-        return {
-          workspaceId: workspaceIdForOverlay, nodeId: file.id, nodeType: 'file' as const,
-          parentNodeId: parentId, parentNodeType: parentId ? 'system' as const : null,
-          containmentKind: parentId ? 'part_of' as const : 'root' as const,
-          positionX: element?.positionX ?? planned?.positionX ?? file.positionX,
-          positionY: element?.positionY ?? planned?.positionY ?? file.positionY,
-          width: element?.width ?? planned?.width ?? file.width ?? BASE_FILE_W,
-          height: element?.height ?? planned?.height ?? file.height ?? BASE_FILE_H,
-          scale: element?.scale ?? planned?.scale ?? 1,
-          // Sheets have no interior compression; the Floor owns that concept.
-          interiorScale: 1, updatedAt: 0,
-        }
-      }),
-      ...virtualInfra.map(infra => {
-        const element = effectiveElements.get(infra.id)
-        const planned = infra.id.startsWith('planned:') ? visiblePlannedByNodeId.get(infra.id) : undefined
-        const parentId = element?.parentSystemId ?? planned?.parentSystemId ?? null
-        return {
-          workspaceId: workspaceIdForOverlay, nodeId: infra.id, nodeType: 'infra' as const,
-          parentNodeId: parentId, parentNodeType: parentId ? 'system' as const : null,
-          containmentKind: parentId ? 'part_of' as const : 'root' as const,
-          positionX: element?.positionX ?? planned?.positionX ?? infra.positionX,
-          positionY: element?.positionY ?? planned?.positionY ?? infra.positionY,
-          width: element?.width ?? planned?.width ?? (infra.category === 'platform' ? 760 : 260),
-          height: element?.height ?? planned?.height ?? (infra.category === 'platform' ? 520 : 160),
-          scale: element?.scale ?? planned?.scale ?? 1,
-          // Sheets have no interior compression; the Floor owns that concept.
-          interiorScale: 1, updatedAt: 0,
-        }
-      }),
-    ]
+    const virtualInfra = infraNodes.map(infra => ({ ...infra })).concat(plannedInfra)
     const sheetLayout = applyZoomVisibility(buildFloorFrameLayout(
-      virtualSystems, virtualFiles, virtualInfra, dependencies, sheetFrameLayouts,
+      virtualSystems, virtualFiles, virtualInfra, dependencies, sheetEffectiveLayouts,
       currentZoomRef.current, sheetPlacementsRef.current,
     ).rfNodes, currentZoomRef.current)
     const floorById = new Map(rfNodes.map(n => [n.id, n]))
-    const floorAbsolutePositions = new Map<string, { x: number; y: number }>()
-    const floorAbsolutePosition = (node: Node, visiting = new Set<string>()): { x: number; y: number } => {
-      const cached = floorAbsolutePositions.get(node.id)
-      if (cached) return cached
-      if (!node.parentId || visiting.has(node.id)) {
-        const root = { x: node.position.x, y: node.position.y }
-        floorAbsolutePositions.set(node.id, root)
-        return root
-      }
-      const parent = floorById.get(node.parentId)
-      if (!parent) {
-        const root = { x: node.position.x, y: node.position.y }
-        floorAbsolutePositions.set(node.id, root)
-        return root
-      }
-      const nextVisiting = new Set(visiting).add(node.id)
-      const parentPosition = floorAbsolutePosition(parent, nextVisiting)
-      const absolute = { x: parentPosition.x + node.position.x, y: parentPosition.y + node.position.y }
-      floorAbsolutePositions.set(node.id, absolute)
-      return absolute
-    }
     const morphed = sheetLayout.map(sheetNode => {
       const floorNode = floorById.get(sheetNode.id)
       const planned = visiblePlannedByNodeId.get(sheetNode.id)
@@ -1830,20 +1731,23 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           : undefined
       const nodeOpacity = typeof sheetNode.style?.opacity === 'number' ? sheetNode.style.opacity : 1
       const isFloorContextNode = !effectiveElements.has(sheetNode.id) && !planned
+      const isSheetPlaced = sheetOpinionIds.has(sheetNode.id)
       const isStructuralFloorContext = Boolean(
         floorNode && sheetNode.type === 'system' && !effectiveElements.has(sheetNode.id),
       )
       const sheetW = parseFloat(String(sheetNode.style?.width ?? 0))
       const sheetH = parseFloat(String(sheetNode.style?.height ?? 0))
-      const floorW = parseFloat(String(floorNode?.style?.width ?? 0))
-      const floorH = parseFloat(String(floorNode?.style?.height ?? 0))
-      const renderedW = isStructuralFloorContext ? Math.max(sheetW, floorW) : sheetW
-      const renderedH = isStructuralFloorContext ? Math.max(sheetH, floorH) : sheetH
+      const renderedW = sheetW
+      const renderedH = sheetH
       return {
         ...sheetNode,
-        selected: selectedIdsRef.current.has(sheetNode.id) || sheetNode.id === selectedNodeId,
+        selected: selectedIdsRef.current.has(sheetNode.id),
         data: {
+          // Runtime/focus/trace flags belong to the live entity and survive a
+          // proposal projection. Canonical sheet geometry data wins afterward.
+          ...floorNode?.data,
           ...sheetNode.data,
+          sheetPlaced: isSheetPlaced,
           ...(planned && planned.kind !== 'system' ? {
             label: planned.name,
             displayName: planned.name,
@@ -1930,6 +1834,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           ...(isFloorContextNode ? { pointerEvents: 'auto' as const } : {}),
           transition,
         },
+        domAttributes: {
+          ...sheetNode.domAttributes,
+          'data-sheet-placed': isSheetPlaced ? 'true' : undefined,
+        },
         draggable: activeNodeIds.has(sheetNode.id) && nodeOpacity > 0.1,
         // Context nodes are selectable so they can be inspected, connected and
         // included in a prompt. Only repositioning is reserved for the sheet's
@@ -1938,36 +1846,31 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         zIndex: sheetNode.id.startsWith('planned:') ? 10000 : sheetNode.zIndex,
       }
     })
-    const sheetIds = new Set(sheetLayout.map(n => n.id))
-    const dimmedFloor = rfNodes.flatMap(n => {
-      if (sheetIds.has(n.id)) return []
-      const floorOpacity = typeof n.style?.opacity === 'number' ? n.style.opacity : 1
-      return [{
-        ...n,
-        // The Floor is a projected base layer. Flatten its non-sheet nodes to
-        // absolute coordinates so a sheet-local system cannot capture and
-        // recursively transform the live system's Floor descendants.
-        parentId: undefined,
-        position: floorAbsolutePosition(n),
-        // Full fidelity. A sheet proposes an alternative arrangement of THIS
-        // architecture, so the architecture has to stay readable and usable
-        // while you draw the proposal. Mode is communicated by the canvas
-        // surface, never by degrading the content.
-        style: { ...n.style, opacity: floorOpacity, transition },
-        selectable: true,
-        // Repositioning stays a Floor gesture until a sheet-local move has
-        // somewhere to persist to; selecting, inspecting and connecting do not.
-        draggable: false,
-      }]
-    })
-    return [...dimmedFloor, ...morphed]
-  }, [rfNodes, visibleLayers, effectiveElements, activeElementByNodeId, systems, files, infraNodes, dependencies, overlayPlanned, isTransitioningLayout, visiblePlannedByNodeId, activePlannedByNodeId, activeNodeIds, selectedNodeId, workspaceIdForOverlay, setInfraPickerNode])
+    return morphed
+  }, [rfNodes, visibleLayers, effectiveElements, sheetOpinionIds, activeElementByNodeId, systems, files, infraNodes, dependencies, overlayPlanned, isTransitioningLayout, visiblePlannedByNodeId, activePlannedByNodeId, activeNodeIds, selectedNodeId, selectionRevision, workspaceIdForOverlay, setInfraPickerNode, sheetEffectiveLayouts])
 
   const [sheetInteractionNodes, setSheetInteractionNodes] = useState<Node[] | null>(null)
   useEffect(() => setSheetInteractionNodes(null), [overlaySheetId, visibleSheetIds.join('|')])
   const displayNodes = sheetInteractionNodes ?? composedNodes
   const displayNodesRef = useRef<Node[]>(displayNodes)
   displayNodesRef.current = displayNodes
+
+  /**
+   * Record a new selection and repaint the scene from it in one step.
+   *
+   * Selection reaches the screen by several routes — the layout projection, the
+   * sheet projection, React Flow's own select changes — and any gesture that
+   * updated only some of them left the highlight disagreeing with what the next
+   * drag would actually pick up. Every deliberate selection change goes through
+   * here so the set and the pixels can never drift apart. The sheet snapshot is
+   * only touched when it already exists; creating one here would freeze the
+   * scene outside a gesture.
+   */
+  const applySelection = useCallback((next: Set<string>) => {
+    commitSelection(next)
+    setRfNodes(current => stampSelection(current, next))
+    setSheetInteractionNodes(current => current && stampSelection(current, next))
+  }, [commitSelection])
   const livingRevealIds = useMemo(() => {
     // A node appears only for its own stage: first the edited origin, then the
     // impact target. The top-layer flow can route to hidden authored geometry
@@ -2058,6 +1961,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       return source && target && source !== target ? [{ ...edge, source, target }] : []
     })
     if (visibleLayers.length === 0) return surfacedRfEdges
+    const visibleIds = new Set(displayNodes.filter(n => n.style?.opacity !== 0).map(n => n.id))
     const plannedRf: Edge[] = overlayPlannedEdges.map(e => ({
       id: `pedge:${e.id}`,
       source: e.srcPlanned ? `planned:${e.srcPlanned}` : (e.srcLive ?? ''),
@@ -2067,8 +1971,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       style: { strokeDasharray: '6 4', stroke: 'var(--accent)' },
       labelStyle: { fontSize: 8, fontFamily: 'var(--font-mono)', fill: 'var(--text-secondary)' },
       zIndex: 10000,
-    }))
-    const visibleIds = new Set(displayNodes.filter(n => n.style?.opacity !== 0).map(n => n.id))
+    })).filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target))
     return [
       ...surfacedRfEdges.map(e => visibleIds.has(e.source) && visibleIds.has(e.target)
         ? e
@@ -2086,11 +1989,18 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }
   }, [])
   const onOverlayDrop = useCallback((e: React.DragEvent) => {
+    if (readOnly) return
     const raw = e.dataTransfer.getData('application/axiom-stencil')
     if (!raw || !overlaySheetId) return
     e.preventDefault()
     e.stopPropagation()
-    const stencil = JSON.parse(raw) as StencilDef
+    let stencil: StencilDef
+    try {
+      stencil = JSON.parse(raw) as StencilDef
+    } catch (error) {
+      console.error('[sheets] ignored invalid stencil payload', error)
+      return
+    }
     const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     const store = useSheetStore.getState()
     if (stencil.shape === 'note') {
@@ -2108,7 +2018,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         setInfraPickerNode(created.id)
       }
     }).catch(err => console.error('[sheets] stencil creation failed:', err))
-  }, [overlaySheetId, workspaceIdForOverlay, screenToFlowPosition, setSelectedNode, setInfraPickerNode])
+  }, [readOnly, overlaySheetId, workspaceIdForOverlay, screenToFlowPosition, setSelectedNode, setInfraPickerNode])
 
   const onConnectPlanned = useCallback((conn: Connection) => {
     if (!overlaySheetId || !conn.source || !conn.target) return
@@ -2126,6 +2036,23 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const [focusEnabled, setFocusEnabled] = useState(true)
   // Bumped whenever the layout is fully rebuilt, so overlay effects restamp.
   const [layoutVersion, setLayoutVersion] = useState(0)
+
+  // ── Collision debug ───────────────────────────────────────────────────────
+  // One instrument for both layers: it draws the boxes the placement engine
+  // actually tests against, on the Floor and on a Sheet alike. Off by default
+  // and gated everywhere it costs anything, because it recomputes the whole
+  // scene's geometry on every frame of a drag.
+  const [collisionDebug, setCollisionDebug] = useState(false)
+  const [debugDragNodeId, setDebugDragNodeId] = useState<string | null>(null)
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.altKey || event.key.toLowerCase() !== 'b') return
+      event.preventDefault()
+      setCollisionDebug(value => !value)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const tidyCanvas = useCallback(async () => {
     if (systems.length === 0 && infraNodes.length === 0) return
@@ -2263,19 +2190,27 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
 
       const sheet = useSheetStore.getState()
       if (sheet.activeSheetId) {
-        const mutations: SheetLayoutMutation[] = children.flatMap(child => {
+        const mutations: SheetLayoutMutation[] = children.map(child => {
           const position = positions.get(child.id)!
-          const element = sheet.elements.find(item => (item.systemId ?? item.fileId ?? item.infraId) === child.id)
-          const planned = child.id.startsWith('planned:') ? sheet.planned.find(item => item.id === child.id.slice(8)) : undefined
-          if (!element && !planned) return []
-          return [{
-            kind: element ? 'element' as const : 'planned' as const,
-            id: element?.id ?? planned!.id,
-            x: position.x, y: position.y, parentSystemId: scopeId,
-            width: Number(element?.width ?? planned?.width ?? child.style?.width ?? BASE_FILE_W),
-            height: Number(element?.height ?? planned?.height ?? child.style?.height ?? BASE_FILE_H),
-            scale: element?.scale ?? planned?.scale ?? 1,
-          }]
+          const nodeType: FloorNodeType = sheetSystemIds.has(child.id)
+            ? 'system' : sheetFileIds.has(child.id) ? 'file' : 'infra'
+          const previous = sheetEffectiveLayouts.find(layout => layout.nodeId === child.id)
+          const data = child.data as Record<string, unknown>
+          const worldScale = Number(data.worldScale ?? 1)
+          const parentNodeType = scopeId ? (sheetInfraIds.has(scopeId) ? 'infra' : 'system') : null
+          return {
+            nodeId: child.id,
+            nodeType,
+            parentNodeId: scopeId,
+            parentNodeType,
+            containmentKind: parentNodeType === 'infra' ? 'hosted_by' : parentNodeType ? 'part_of' : 'root',
+            positionX: position.x,
+            positionY: position.y,
+            width: previous?.width ?? Number(child.style?.width ?? BASE_FILE_W) / Math.max(0.0001, worldScale),
+            height: previous?.height ?? Number(child.style?.height ?? BASE_FILE_H) / Math.max(0.0001, worldScale),
+            scale: previous?.scale ?? Number(data.frameScale ?? 1),
+            interiorScale: previous?.interiorScale ?? Number(data.interiorScale ?? 1),
+          }
         })
         await sheet.updateLayoutsBatch(workspaceIdForOverlay, sheet.activeSheetId, mutations)
       } else {
@@ -2315,7 +2250,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     } finally {
       setIsTidying(false)
     }
-  }, [queueCameraFit, selectedNodeId, workspaceIdForOverlay])
+  }, [queueCameraFit, selectedNodeId, workspaceIdForOverlay, sheetEffectiveLayouts, sheetSystemIds, sheetFileIds, sheetInfraIds])
 
   const zoomRafRef        = useRef<number | null>(null)
   const layoutBuiltRef = useRef<string | null>(null)
@@ -2337,6 +2272,11 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const dropTargetRef     = useRef<string | null>(null)
   const draggingNodeIdRef = useRef<string | null>(null)
   const dragPositionRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  // XYFlow commits its internal node store asynchronously. Keep every emitted
+  // absolute drag position outside React so the drop planner never reads the
+  // previous frame, especially for secondary nodes in a multi-selection.
+  const dragAbsolutePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const resizePointerCleanupRef = useRef<(() => void) | null>(null)
   const dragTraceSessionRef = useRef(0)
   const dragTraceRef = useRef<NodeMoveTrace | null>(null)
   const targetZoomRef      = useRef<number | null>(null)
@@ -2346,17 +2286,33 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
 
   rfNodesRef.current = rfNodes
 
+  useEffect(() => () => {
+    resizePointerCleanupRef.current?.()
+    resizePointerCleanupRef.current = null
+    if (zoomRafRef.current !== null) cancelAnimationFrame(zoomRafRef.current)
+    zoomRafRef.current = null
+    wheelLatchRef.current = null
+  }, [])
+
   // ── Node resize ──────────────────────────────────────────────────────────
   const armResizeEndFallback = useCallback((nodeId: string) => {
     // XYFlow intentionally omits onResizeEnd when a handle is pressed and
     // released without a drag. Clear our interaction session after pointer-up
     // only if the normal end callback did not already consume it.
-    const onPointerUp = () => requestAnimationFrame(() => {
-      if (!resizeStartRef.current.has(nodeId)) return
-      resizeStartRef.current.delete(nodeId)
-      if (resizingNodeIdRef.current === nodeId) resizingNodeIdRef.current = null
-      if (useSheetStore.getState().activeSheetId) setSheetInteractionNodes(null)
-    })
+    resizePointerCleanupRef.current?.()
+    const onPointerUp = () => {
+      resizePointerCleanupRef.current?.()
+      requestAnimationFrame(() => {
+        if (!resizeStartRef.current.has(nodeId)) return
+        resizeStartRef.current.delete(nodeId)
+        if (resizingNodeIdRef.current === nodeId) resizingNodeIdRef.current = null
+        if (useSheetStore.getState().activeSheetId) setSheetInteractionNodes(null)
+      })
+    }
+    resizePointerCleanupRef.current = () => {
+      window.removeEventListener('pointerup', onPointerUp, true)
+      resizePointerCleanupRef.current = null
+    }
     window.addEventListener('pointerup', onPointerUp, { once: true, capture: true })
   }, [])
 
@@ -2384,19 +2340,27 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       return
     }
 
-    // Sheets already store canonical local geometry. Resizing is intentionally
-    // freeform: no grid units and no sibling displacement.
+    // Both surfaces use the exact same canonical resize planner. The only
+    // difference is which sparse layout store receives its writes.
     if (sheetState.activeSheetId) {
-      const mutations = planSheetResize({
+      const plan = planCanvasResize({
+        workspaceId: workspaceIdForOverlay,
         nodeId,
         node,
         start,
         end,
-        elements: sheetState.elements,
-        planned: sheetState.planned,
+        nodes: displayNodesRef.current,
+        systemIds: sheetSystemIds,
+        fileIds: sheetFileIds,
+        infraIds: sheetInfraIds,
+        floorLayouts: sheetEffectiveLayouts,
       })
-      if (mutations) {
-        void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetState.activeSheetId, mutations).catch(() => {})
+      if (plan.updates.length > 0) {
+        void sheetState.updateLayoutsBatch(
+          workspaceIdForOverlay,
+          sheetState.activeSheetId,
+          plan.updates,
+        ).catch(() => {})
       }
       setSheetInteractionNodes(null)
       return
@@ -2405,7 +2369,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     const graph = useGraphStore.getState()
     const workspaceId = graph.currentProject?.id
     if (!workspaceId) return
-    const plan = planFloorResize({
+    const plan = planCanvasResize({
       workspaceId,
       nodeId,
       node,
@@ -2428,7 +2392,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     })
     return
 
-  }, [workspaceIdForOverlay])
+  }, [workspaceIdForOverlay, sheetSystemIds, sheetFileIds, sheetInfraIds, sheetEffectiveLayouts])
 
   useEffect(() => {
     // The map must always show every file. A fresh project (agent building into
@@ -2563,7 +2527,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       },
     }))
     const withZoom = applyZoomVisibility(layoutWithCallbacks, currentZoomRef.current)
-    const fixed = stampSelection(withZoom, selectedIdsRef.current, selectedNodeId)
+    const fixed = stampSelection(withZoom, selectedIdsRef.current)
     sceneSourceRef.current = isFirstLayout ? 'layout-build' : 'layout-rebuild'
     setRfNodes(fixed)
     setRfEdges(newEdges)
@@ -2591,9 +2555,21 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     queueCameraFit(1800, { padding: 0.28, duration: 1100, maxZoom: 1.0 })
   }, [systems.length, files.length, infraNodes.length, queueCameraFit])
 
+  // Revealing a node from outside the canvas — search, the agent log, the
+  // detail panel — selects it, exactly as clicking it would.
+  //
+  // This used to paint `selected` straight onto the scene without telling the
+  // authoritative set, so the canvas and the set disagreed from that moment on:
+  // the highlight said one thing, and the next drag acted on another. It also
+  // fired on every change of the pointer, including to null, silently wiping a
+  // multi-selection the user had just made. A null pointer now means "no single
+  // node is current" — a group has no single node — and clears nothing.
   useEffect(() => {
-    setRfNodes(curr => curr.map(n => ({ ...n, selected: n.id === selectedNodeId })))
-  }, [selectedNodeId])
+    if (!selectedNodeId) return
+    const current = selectedIdsRef.current
+    if (current.size === 1 && current.has(selectedNodeId)) return
+    applySelection(singleNodeSelection(selectedNodeId))
+  }, [selectedNodeId, applySelection])
 
   // ── Runtime activity ─────────────────────────────────────────────────────
   // Stamp live runtime state (watch markers, call counts, pulse triggers)
@@ -2952,6 +2928,16 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         })
       }
       if (interaction.length === 0) return
+      if (draggingNodeIdRef.current) {
+        for (const change of interaction) {
+          if (change.type === 'position' && change.positionAbsolute) {
+            dragAbsolutePositionsRef.current.set(change.id, {
+              x: change.positionAbsolute.x,
+              y: change.positionAbsolute.y,
+            })
+          }
+        }
+      }
       const moveTrace = dragTraceRef.current
       if (moveTrace) {
         const viewport = getViewport()
@@ -2988,7 +2974,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       // Planned overlay nodes live in the sheet store, not rfNodes — route
       // their drags there and keep the rest on the normal path.
       if (overlaySheetId) {
-        const geometryChanges = interactionChanges.filter(change => change.type === 'position' || change.type === 'select' ||
+        const geometryChanges = interactionChanges.filter(change => change.type === 'position' ||
           (change.type === 'dimensions' && resizeStartRef.current.size > 0))
         if (geometryChanges.length > 0) {
           setSheetInteractionNodes(nodes => applyNodeChanges(geometryChanges, nodes ?? displayNodesRef.current))
@@ -3004,13 +2990,29 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   )
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
-    commitSelection(singleNodeSelection(node.id))
-    setSelectedNode(node.id)
+    // By the time this runs, the press has ALREADY been turned into a selection
+    // — React Flow applies the platform-standard rule on pointer down (plain
+    // press replaces, modifier press toggles) and those changes have already
+    // flowed through onNodesChange into the authoritative set.
+    //
+    // So this handler adopts that outcome; it must not re-derive it. Computing
+    // the toggle a second time here undid the first one, which is exactly why a
+    // modifier click looked like it did nothing at all. A plain click hid the
+    // problem because replacing a selection twice lands in the same place.
+    //
+    // Re-stamping the same set is not redundant: on a sheet, select changes do
+    // not reach the interaction snapshot, so this is what repaints it.
+    const selection = new Set(selectedIdsRef.current)
+    applySelection(selection)
+    // The store's node pointer follows the selection rather than pinning it: it
+    // is what the detail panel and the agent dialog read, so it should name the
+    // node just acted on, and nothing at all once a group is in play.
+    setSelectedNode(selection.size === 1 ? [...selection][0] : null)
     const target = event.target as HTMLElement | null
     if (!target?.closest('input, textarea, select, button, [contenteditable="true"], [data-node-editable="true"]')) {
       setInspectedNode(null)
     }
-  }, [setSelectedNode, setInspectedNode])
+  }, [applySelection, setSelectedNode, setInspectedNode])
 
   const onNodeDoubleClick = useCallback((event: React.MouseEvent, node: Node) => {
     const target = event.target as HTMLElement | null
@@ -3020,18 +3022,41 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [setSelectedNode, setInspectedNode])
 
   const onPaneClick = useCallback(() => {
-    commitSelection(emptySelection())
+    applySelection(emptySelection())
     setSelectedNode(null)
     setInspectedNode(null)
-  }, [setSelectedNode, setInspectedNode])
+  }, [applySelection, setSelectedNode, setInspectedNode])
 
   // ── Drag visibility override ─────────────────────────────────────────────
   const onNodeDragStart: OnNodeDrag = useCallback((event, node) => {
     if (resizingNodeIdRef.current === node.id) return
     setIsTransitioningLayout(false)
     setIsDraggingScene(true)
+    // Grabbing a node that was not part of the selection makes it the whole
+    // selection, before anything reads the group this gesture will move. A drag
+    // never silently carries along whatever was selected beforehand. React Flow
+    // reaches the same conclusion through its own select changes; committing it
+    // here keeps Axiom's authoritative set from lagging a frame behind them.
+    //
+    // Held modifier means the press was building a selection, not starting a
+    // fresh gesture — including a press that just toggled this node OUT. Reset
+    // it there and the node the user was deselecting snaps back on the smallest
+    // jitter of the mouse.
+    if (!isAdditiveEvent(event) && !selectedIdsRef.current.has(node.id)) {
+      applySelection(selectionAfterDragStart(selectedIdsRef.current, node.id))
+      setSelectedNode(node.id)
+    }
+    // Two renders per gesture, not per frame: the overlay tracks movement
+    // through the node positions it already re-reads, not through this.
+    setDebugDragNodeId(node.id)
     draggingNodeIdRef.current = node.id
     dragPositionRef.current.set(node.id, { x: node.position.x, y: node.position.y })
+    dragAbsolutePositionsRef.current.clear()
+    const startingInternal = getInternalNode(node.id)
+    dragAbsolutePositionsRef.current.set(
+      node.id,
+      startingInternal?.internals.positionAbsolute ?? node.position,
+    )
     // Forcing the dragged node fully visible is drag BEHAVIOR, not
     // instrumentation, so it has to run before the tracing gate below. A
     // semantically faded node keeps `pointerEvents: none`, and a node that
@@ -3101,7 +3126,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         : undefined,
       element: traceState.elements.find(e => (e.systemId ?? e.fileId ?? e.infraId) === node.id),
     })
-  }, [getInternalNode, getViewport, screenToFlowPosition, updateInteractiveNodes])
+  }, [applySelection, getInternalNode, getViewport, screenToFlowPosition, setSelectedNode, updateInteractiveNodes])
 
   const onNodeDrag: OnNodeDrag = useCallback((event, node) => {
     if (resizingNodeIdRef.current === node.id) return
@@ -3194,6 +3219,13 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     // frame it landed in. No barriers, cell snapping, sibling displacement,
     // or DOM nudges.
     dragPositionRef.current.set(node.id, { x: node.position.x, y: node.position.y })
+    const currentInternal = getInternalNode(node.id)
+    if (currentInternal) {
+      dragAbsolutePositionsRef.current.set(node.id, {
+        x: currentInternal.internals.positionAbsolute.x,
+        y: currentInternal.internals.positionAbsolute.y,
+      })
+    }
     const cursor = screenToFlowPosition({ x: clientX, y: clientY })
     const allNodes = displayNodesRef.current
     const parentById = new Map(allNodes.map(candidate => [candidate.id, candidate.parentId ?? null]))
@@ -3306,6 +3338,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }
     // Clear drag state — restore zoom visibility, clear drop highlight
     setIsDraggingScene(false)
+    setDebugDragNodeId(null)
     draggingNodeIdRef.current = null
     const prevTarget = dropTargetRef.current
     dropTargetRef.current = null
@@ -3319,44 +3352,85 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     }
     // Floor drops are one atomic frame transform. They never rewrite semantic
     // system/file ownership.
-    if (!useSheetStore.getState().activeSheetId) {
-      const graph = useGraphStore.getState()
-      const workspaceId = graph.currentProject?.id
-      const all = displayNodesRef.current
-      const absolutePositions = new Map(all.map(candidate => [
-        candidate.id,
-        getInternalNode(candidate.id)?.internals.positionAbsolute ?? candidate.position,
-      ]))
-      const plan = planFloorDrop({
-        workspaceId: workspaceId ?? null,
-        draggedNodeId: node.id,
-        targetNodeId: prevTarget,
-        allNodes: all,
-        absolutePositions,
-        systemIds: new Set(graph.systems.map(system => system.id)),
-        fileIds: new Set(graph.files.map(file => file.id)),
-        infraIds: new Set(graph.infraNodes.map(infra => infra.id)),
-        floorLayouts: graph.floorLayouts,
-      })
+    const sheetState = useSheetStore.getState()
+    const sheetId = sheetState.activeSheetId
+    const graph = useGraphStore.getState()
+    const workspaceId = sheetId ? workspaceIdForOverlay : graph.currentProject?.id
+    const all = displayNodesRef.current
+    const absolutePositions = new Map(all.map(candidate => [
+      candidate.id,
+      getInternalNode(candidate.id)?.internals.positionAbsolute ?? candidate.position,
+    ]))
+    // Position changes are the authoritative gesture output. They can be one
+    // React render ahead of both displayNodesRef and XYFlow's internal store.
+    for (const [id, position] of dragAbsolutePositionsRef.current) {
+      absolutePositions.set(id, position)
+    }
+    // The stop callback owns the primary node's final local position. Derive
+    // its absolute value explicitly so a final pointer move without a committed
+    // onNodesChange sample cannot be lost.
+    const dragged = all.find(candidate => candidate.id === node.id)
+    const parentAbsolute = dragged?.parentId
+      ? absolutePositions.get(dragged.parentId) ?? { x: 0, y: 0 }
+      : { x: 0, y: 0 }
+    absolutePositions.set(node.id, {
+      x: parentAbsolute.x + finalPosition.x,
+      y: parentAbsolute.y + finalPosition.y,
+    })
+    dragAbsolutePositionsRef.current.clear()
 
-      if (workspaceId && plan.updates.length > 0) {
-        // PHASE ONE — land, untransitioned, exactly where the pointer let go,
-        // but already under the new parent. Visually a no-op.
-        //
-        // Committing the reparent and the correction together is what made a
-        // reparenting drop teleport: the node's first rendered frame under its
-        // new parent was already the corrected one, so the CSS transition had
-        // no previous value to interpolate from. A same-parent nudge animated
-        // fine precisely because its "before" was already on screen.
-        setIsDraggingScene(false)
-        setIsTransitioningLayout(false)
+    // This is the only drop engine. A Sheet changes the writable layout layer
+    // and selection boundary; geometry, collision, packing, containment,
+    // size parity, and compression are the live Canvas implementation.
+    const plan = planCanvasDrop({
+      workspaceId: workspaceId ?? null,
+      draggedNodeId: node.id,
+      targetNodeId: prevTarget,
+      allNodes: all,
+      absolutePositions,
+      systemIds: sheetId
+        ? sheetSystemIds
+        : new Set(graph.systems.map(system => system.id)),
+      fileIds: sheetId
+        ? sheetFileIds
+        : new Set(graph.files.map(file => file.id)),
+      infraIds: sheetId
+        ? sheetInfraIds
+        : new Set(graph.infraNodes.map(infra => infra.id)),
+      floorLayouts: sheetId ? sheetEffectiveLayouts : graph.floorLayouts,
+      editableNodeIds: sheetId ? activeNodeIds : undefined,
+    })
+
+    if (workspaceId && plan.updates.length > 0) {
+      setIsTransitioningLayout(false)
+      if (sheetId) {
+        const rollbackLayouts = sheetState.layouts
+        const arrivalMutations = plan.arrivalLayouts.map(({
+          workspaceId: _workspaceId,
+          updatedAt: _updatedAt,
+          ...layout
+        }) => layout)
+        sheetState.previewLayoutsBatch(workspaceId, sheetId, arrivalMutations)
+        // The transient XYFlow interaction snapshot has completed its one job.
+        // Keeping it alive masks the optimistic canonical layouts and made
+        // nodes jump back as soon as selection changed.
+        setSheetInteractionNodes(null)
+        requestAnimationFrame(() => {
+          setIsTransitioningLayout(true)
+          requestAnimationFrame(() => {
+            void sheetState.updateLayoutsBatch(
+              workspaceId,
+              sheetId,
+              plan.updates,
+              rollbackLayouts,
+            ).catch(() => {})
+            window.setTimeout(() => setIsTransitioningLayout(false), LAYOUT_TRANSITION_MS)
+          })
+        })
+      } else {
         useGraphStore.setState(state => ({
           floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.arrivalLayouts, plan.changedKeys),
         }))
-
-        // PHASE TWO — arm the transition a frame later, then move. Two frames
-        // because the class must be on the wrapper in a commit BEFORE the one
-        // that changes geometry; arming and moving together races the paint.
         requestAnimationFrame(() => {
           setIsTransitioningLayout(true)
           requestAnimationFrame(() => {
@@ -3373,51 +3447,27 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           })
         })
       }
-      commitSelection(new Set(plan.selectedIds))
-      // Repacks legitimately move several nodes at once. Label them so the
-      // scene tracer records the event without reporting it as a fault.
-      sceneSourceRef.current = plan.updates.length > 1
-        ? 'floor-drop-repack'
-        : 'floor-drop'
-      updateInteractiveNodes(current => current.map(candidate => ({
-        ...candidate,
-        selected: plan.selectedIds.includes(candidate.id),
-        data: { ...candidate.data, isDropTarget: false, snapPreview: null, previewOffset: null },
-      })))
-      return
     }
 
-    const sheetState = useSheetStore.getState()
-    const sheetId = sheetState.activeSheetId
+    // A drop the layer refused to plan (a sheet node the sheet cannot move) has
+    // no group of its own, and must not be read as "the user selected nothing".
+    if (plan.selectedIds.length > 0) commitSelection(new Set(plan.selectedIds))
+    sceneSourceRef.current = `${sheetId ? 'sheet' : 'floor'}-drop${plan.updates.length > 1 ? '-repack' : ''}`
     if (sheetId) {
-      const all = displayNodesRef.current
-      const absolutePositions = new Map(all.map(candidate => [
-        candidate.id,
-        getInternalNode(candidate.id)?.internals.positionAbsolute ?? candidate.position,
-      ]))
-      const plan = planSheetDrop({
-        draggedNodeId: node.id,
-        targetNodeId: prevTarget,
-        allNodes: all,
-        absolutePositions,
-        activeNodeIds,
-        elements: sheetState.elements,
-        planned: sheetState.planned,
-      })
-      if (plan.mutations.length > 0) {
-        void sheetState.updateLayoutsBatch(workspaceIdForOverlay, sheetId, plan.mutations).catch(() => {})
-      }
-      commitSelection(new Set(plan.selectedIds))
+      // Selection is projected from selectedIdsRef/selectionRevision. Do not
+      // recreate a stale sheetInteractionNodes snapshot merely to clear flags.
       setSheetInteractionNodes(null)
+    } else {
       updateInteractiveNodes(current => current.map(candidate => ({
         ...candidate,
-        selected: plan.selectedIds.includes(candidate.id),
+        selected: plan.selectedIds.length > 0
+          ? plan.selectedIds.includes(candidate.id)
+          : candidate.selected,
         data: { ...candidate.data, isDropTarget: false, snapPreview: null, previewOffset: null },
       })))
-      return
     }
 
-  }, [currentProject, getInternalNode, getViewport, screenToFlowPosition, overlaySheetId, activeElementByNodeId, activePlannedByNodeId, activeNodeIds, workspaceIdForOverlay, updateInteractiveNodes])
+  }, [currentProject, getInternalNode, getViewport, screenToFlowPosition, overlaySheetId, activeElementByNodeId, activePlannedByNodeId, activeNodeIds, workspaceIdForOverlay, updateInteractiveNodes, sheetSystemIds, sheetFileIds, sheetInfraIds, sheetEffectiveLayouts])
 
   const renderedNodes = overlaySheetId
     ? attentionNodes.map(n => activeNodeIds.has(n.id)
@@ -3451,6 +3501,23 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   )
   const renderedNodesRef = useRef(renderedNodes)
   renderedNodesRef.current = renderedNodes
+
+  // The drop target is read back off the nodes rather than off `dropTargetRef`,
+  // because the ref is invisible to rendering. `isDropTarget` is already
+  // committed to node data on both layers by the same drag handler, so the
+  // overlay and the highlighted frame can never disagree.
+  const collisionModel = useMemo(() => {
+    if (!collisionDebug) return null
+    return buildCollisionModel({
+      layer: overlaySheetId ? 'sheet' : 'floor',
+      nodes: renderedNodes,
+      absolutePositions: absolutePositionsFromTree(renderedNodes),
+      draggedNodeId: debugDragNodeId,
+      targetNodeId: renderedNodes.find(node =>
+        (node.data as Record<string, unknown> | undefined)?.isDropTarget)?.id ?? null,
+      editableNodeIds: overlaySheetId ? activeNodeIds : null,
+    })
+  }, [collisionDebug, renderedNodes, debugDragNodeId, overlaySheetId, activeNodeIds])
 
   // Scene-mutation tracer. Diffs what is actually about to be painted, so a
   // frame where geometry jumps is attributed to the path that caused it.
@@ -3669,6 +3736,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         panOnDrag={selectionMode ? [1, 2] : true}
         selectionOnDrag={readOnly ? false : selectionMode}
         selectionMode={selectionMode ? SelectionMode.Partial : SelectionMode.Full}
+        // Must match what the click handler treats as "add to my selection", or
+        // React Flow collapses the selection on the same click Axiom extends it
+        // on, and the highlight disagrees with what the next drag picks up.
+        multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
         nodesDraggable={!readOnly}
         nodesConnectable={!readOnly && !!overlaySheetId}
         deleteKeyCode={null}
@@ -3699,6 +3770,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           nodes={livingDisplayNodes}
           visibilityOptions={livingVisibilityOptions}
         />
+        {collisionModel && (
+          <CollisionDebugOverlay
+            model={collisionModel}
+            onClose={() => setCollisionDebug(false)}
+          />
+        )}
         <Panel position="top-left" className="axiom-canvas-toolbar">
           <button
             type="button"
@@ -3757,6 +3834,21 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
               Focus{focusEnabled ? ' On' : ' Off'}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => setCollisionDebug(value => !value)}
+            title="Draw the boxes the placement engine collides against (Ctrl+Alt+B)"
+            className={collisionDebug
+              ? 'axiom-canvas-command axiom-canvas-command--trace-active'
+              : 'axiom-canvas-command'}
+          >
+            <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="10" height="10" rx="1" />
+              <rect x="11" y="11" width="10" height="10" rx="1" strokeDasharray="3 2" />
+            </svg>
+            Boxes{collisionDebug ? ' On' : ' Off'}
+          </button>
         </Panel>
         <Panel position="bottom-left" className="axiom-canvas-zoom-panel">
           <ZoomIndicator />

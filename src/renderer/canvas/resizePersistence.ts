@@ -1,6 +1,5 @@
 import type { Node } from '@xyflow/react'
 import type { FloorLayout, FloorNodeType } from '../../shared/types'
-import type { PlannedNode, SheetElement, SheetLayoutMutation } from '../store/sheetStore'
 import { childPositionAfterParentResize, toCanonicalResizeGeometry, type NodeResizeParams } from './resizeGeometry.ts'
 
 export interface ResizeSessionStart extends NodeResizeParams {
@@ -9,16 +8,7 @@ export interface ResizeSessionStart extends NodeResizeParams {
 
 export type FloorLayoutWrite = Omit<FloorLayout, 'workspaceId' | 'updatedAt'>
 
-interface SheetResizePlanInput {
-  nodeId: string
-  node: Node
-  start: ResizeSessionStart
-  end: NodeResizeParams
-  elements: SheetElement[]
-  planned: PlannedNode[]
-}
-
-interface FloorResizePlanInput {
+interface CanvasResizePlanInput {
   workspaceId: string
   nodeId: string
   node: Node
@@ -32,7 +22,7 @@ interface FloorResizePlanInput {
   now?: number
 }
 
-export interface FloorResizePersistencePlan {
+export interface CanvasResizePersistencePlan {
   updates: FloorLayoutWrite[]
   changedKeys: Set<string>
   previousLayouts: FloorLayout[]
@@ -72,52 +62,7 @@ function canonicalResize(node: Node, end: NodeResizeParams) {
   }
 }
 
-function sheetMutationFor(
-  renderedId: string,
-  x: number,
-  y: number,
-  parentSystemId: string | null,
-  elements: SheetElement[],
-  planned: PlannedNode[],
-  size?: { width: number; height: number; scale: number },
-): SheetLayoutMutation | null {
-  const member = elements.find(item => (item.systemId ?? item.fileId ?? item.infraId) === renderedId)
-  if (member) return { kind: 'element', id: member.id, x, y, parentSystemId, ...size }
-  const plannedNode = renderedId.startsWith('planned:')
-    ? planned.find(item => item.id === renderedId.slice(8))
-    : undefined
-  return plannedNode ? { kind: 'planned', id: plannedNode.id, x, y, parentSystemId, ...size } : null
-}
-
-export function planSheetResize({
-  nodeId,
-  node,
-  start,
-  end,
-  elements,
-  planned,
-}: SheetResizePlanInput): SheetLayoutMutation[] | null {
-  const { ownScale, worldScale, geometry } = canonicalResize(node, end)
-  const parentMutation = sheetMutationFor(
-    nodeId,
-    geometry.x,
-    geometry.y,
-    node.parentId ?? null,
-    elements,
-    planned,
-    { width: geometry.width, height: geometry.height, scale: ownScale },
-  )
-  if (!parentMutation) return null
-
-  const childMutations = [...start.children].flatMap(([childId, childStart]) => {
-    const position = childPositionAfterParentResize(childStart, start, end, worldScale)
-    const mutation = sheetMutationFor(childId, position.x, position.y, nodeId, elements, planned)
-    return mutation ? [mutation] : []
-  })
-  return [parentMutation, ...childMutations]
-}
-
-export function planFloorResize({
+export function planCanvasResize({
   workspaceId,
   nodeId,
   node,
@@ -129,7 +74,7 @@ export function planFloorResize({
   infraIds,
   floorLayouts,
   now = Date.now(),
-}: FloorResizePlanInput): FloorResizePersistencePlan {
+}: CanvasResizePlanInput): CanvasResizePersistencePlan {
   const { ownScale, worldScale, geometry } = canonicalResize(node, end)
   const nodeType = nodeTypeFor(nodeId, systemIds, fileIds)
   const parentId = node.parentId ?? null

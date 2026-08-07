@@ -4,6 +4,7 @@
   "description": "Live Architectural Intelligence for the AI Development Era",
   "main": "out/main/index.js",
   "scripts": {
+    "predev": "npm run build:archd",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "test:renderer": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.mjs\" \"mcp/**/*.test.mjs\"",
@@ -11,6 +12,7 @@
     "test:e2e": "npm run build && playwright test",
     "test:e2e:update": "npm run build && playwright test --update-snapshots",
     "preview": "electron-vite preview",
+    "prepackage": "npm run build:archd",
     "package": "electron-vite build && electron-builder",
     "postinstall": "electron-rebuild",
     "archd": "node out/main/archd.js",

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { containPointWithin, planFloorDrop, planSheetDrop } from './dropPersistence.ts'
+import { containPointWithin, planCanvasDrop } from './dropPersistence.ts'
 
 const node = (id, overrides = {}) => ({
   id,
@@ -14,7 +14,7 @@ const node = (id, overrides = {}) => ({
 
 test('persists a free root drag at its exact absolute position', () => {
   const dragged = node('database', { selected: true })
-  const plan = planFloorDrop({
+  const plan = planCanvasDrop({
     workspaceId: 'workspace',
     draggedNodeId: 'database',
     targetNodeId: null,
@@ -37,7 +37,7 @@ test('persists a free root drag at its exact absolute position', () => {
 test('reparents into infrastructure using destination-local coordinates', () => {
   const target = node('platform', { type: 'system', style: { width: 1000, height: 800 } })
   const dragged = node('service', { type: 'system', selected: true })
-  const plan = planFloorDrop({
+  const plan = planCanvasDrop({
     workspaceId: 'workspace',
     draggedNodeId: 'service',
     targetNodeId: 'platform',
@@ -61,10 +61,11 @@ test('reparents into infrastructure using destination-local coordinates', () => 
   assert.equal(plan.updates[0].positionY, 100)
 })
 
-test('creates one sheet batch for selected live and planned roots', () => {
+test('the canonical drop planner limits selection without excluding collision residents', () => {
   const live = node('live', { type: 'file', selected: true, style: { width: 220, height: 110 } })
   const planned = node('planned:draft', { type: 'file', selected: true, style: { width: 240, height: 120 } })
-  const plan = planSheetDrop({
+  const plan = planCanvasDrop({
+    workspaceId: 'workspace',
     draggedNodeId: 'live',
     targetNodeId: null,
     allNodes: [live, planned],
@@ -72,20 +73,22 @@ test('creates one sheet batch for selected live and planned roots', () => {
       ['live', { x: 10.5, y: 20.25 }],
       ['planned:draft', { x: 300.75, y: 200.5 }],
     ]),
-    activeNodeIds: new Set(['live', 'planned:draft']),
-    elements: [{ id: 'element-live', systemId: null, fileId: 'live', infraId: null }],
-    planned: [{ id: 'draft' }],
+    editableNodeIds: new Set(['live', 'planned:draft']),
+    systemIds: new Set(),
+    fileIds: new Set(['live', 'planned:draft']),
+    infraIds: new Set(),
+    floorLayouts: [],
   })
 
   assert.deepEqual(plan.selectedIds, ['live', 'planned:draft'])
-  assert.deepEqual(plan.mutations.map(mutation => ({
-    kind: mutation.kind,
-    id: mutation.id,
-    x: mutation.x,
-    y: mutation.y,
+  assert.deepEqual(plan.updates.map(mutation => ({
+    nodeId: mutation.nodeId,
+    nodeType: mutation.nodeType,
+    positionX: mutation.positionX,
+    positionY: mutation.positionY,
   })), [
-    { kind: 'element', id: 'element-live', x: 10.5, y: 20.25 },
-    { kind: 'planned', id: 'draft', x: 300.75, y: 200.5 },
+    { nodeId: 'live', nodeType: 'file', positionX: 10.5, positionY: 20.25 },
+    { nodeId: 'planned:draft', nodeType: 'file', positionX: 300.75, positionY: 200.5 },
   ])
 })
 
@@ -121,7 +124,7 @@ test('a crowded drop slides the newcomer instead of moving the residents', () =>
   residentA.parentId = 'system'
   residentB.parentId = 'system'
 
-  const plan = planFloorDrop({
+  const plan = planCanvasDrop({
     workspaceId: 'workspace',
     draggedNodeId: 'incoming',
     targetNodeId: 'system',
@@ -153,6 +156,99 @@ test('a crowded drop slides the newcomer instead of moving the residents', () =>
   )
 })
 
+test('a same-parent move resolves collisions through the canonical packer', () => {
+  const target = node('system', { type: 'system', style: { width: 900, height: 700 } })
+  const resident = node('resident', {
+    type: 'file',
+    parentId: 'system',
+    style: { width: 220, height: 110 },
+  })
+  const dragged = node('dragged', {
+    type: 'file',
+    parentId: 'system',
+    selected: true,
+    style: { width: 220, height: 110 },
+  })
+  const plan = planCanvasDrop({
+    workspaceId: 'workspace',
+    draggedNodeId: 'dragged',
+    targetNodeId: 'system',
+    allNodes: [target, resident, dragged],
+    absolutePositions: new Map([
+      ['system', { x: 0, y: 0 }],
+      ['resident', { x: 60, y: 100 }],
+      ['dragged', { x: 60, y: 100 }],
+    ]),
+    systemIds: new Set(['system']),
+    fileIds: new Set(['resident', 'dragged']),
+    infraIds: new Set(),
+    floorLayouts: [],
+  })
+
+  const settled = plan.updates.find(update => update.nodeId === 'dragged')
+  assert.ok(settled.positionX !== 60 || settled.positionY !== 100)
+  assert.equal(plan.updates.some(update => update.nodeId === 'system'), false,
+    'an in-place collision must not progressively compress its parent')
+})
+
+test('root nodes use the same collision placement as framed children', () => {
+  const resident = node('resident', { style: { width: 220, height: 110 } })
+  const dragged = node('dragged', {
+    selected: true,
+    style: { width: 220, height: 110 },
+  })
+  const plan = planCanvasDrop({
+    workspaceId: 'workspace',
+    draggedNodeId: 'dragged',
+    targetNodeId: null,
+    allNodes: [resident, dragged],
+    absolutePositions: new Map([
+      ['resident', { x: 100, y: 100 }],
+      ['dragged', { x: 100, y: 100 }],
+    ]),
+    systemIds: new Set(),
+    fileIds: new Set(),
+    infraIds: new Set(['resident', 'dragged']),
+    floorLayouts: [],
+  })
+
+  const settled = plan.updates.find(update => update.nodeId === 'dragged')
+  assert.ok(settled.positionX !== 100 || settled.positionY !== 100)
+  assert.deepEqual(plan.updates.map(update => update.nodeId), ['dragged'])
+})
+
+test('a fragmented same-parent collision performs a deterministic sibling repack', () => {
+  const target = node('frame', { type: 'system', style: { width: 520, height: 320 } })
+  const residentA = node('a', {
+    type: 'file', parentId: 'frame', style: { width: 220, height: 110 },
+  })
+  const residentB = node('b', {
+    type: 'file', parentId: 'frame', style: { width: 220, height: 110 },
+  })
+  const dragged = node('dragged', {
+    type: 'file', parentId: 'frame', selected: true, style: { width: 220, height: 110 },
+  })
+  const plan = planCanvasDrop({
+    workspaceId: 'workspace',
+    draggedNodeId: 'dragged',
+    targetNodeId: 'frame',
+    allNodes: [target, residentA, residentB, dragged],
+    absolutePositions: new Map([
+      ['frame', { x: 0, y: 0 }],
+      ['a', { x: 28, y: 54 }],
+      ['b', { x: 150, y: 150 }],
+      ['dragged', { x: 28, y: 54 }],
+    ]),
+    systemIds: new Set(['frame']),
+    fileIds: new Set(['a', 'b', 'dragged']),
+    infraIds: new Set(),
+    floorLayouts: [],
+  })
+
+  assert.deepEqual(new Set(plan.updates.map(update => update.nodeId)), new Set(['a', 'b', 'dragged']))
+  assert.equal(plan.updates.some(update => update.nodeId === 'frame'), false)
+})
+
 test('a newcomer adopts the size its new siblings already use', () => {
   const target = node('system', { type: 'system', style: { width: 900, height: 700 } })
   const resident = node('a', { style: { width: 110, height: 55 }, data: { worldScale: 0.5 } })
@@ -161,7 +257,7 @@ test('a newcomer adopts the size its new siblings already use', () => {
   target.data = { worldScale: 1 }
   resident.parentId = 'system'
 
-  const plan = planFloorDrop({
+  const plan = planCanvasDrop({
     workspaceId: 'workspace',
     draggedNodeId: 'incoming',
     targetNodeId: 'system',
@@ -180,6 +276,39 @@ test('a newcomer adopts the size its new siblings already use', () => {
   const incoming = plan.updates.find(update => update.nodeId === 'incoming')
   // Sibling world scale 0.5 inside a target of world scale 1.
   assert.equal(incoming.scale, 0.5)
+})
+
+test('invalid projected scales cannot corrupt persisted geometry', () => {
+  const target = node('system', {
+    type: 'system',
+    style: { width: 900, height: 700 },
+    data: { worldScale: Number.NaN, contentScale: 'invalid', interiorScale: 0 },
+  })
+  const dragged = node('incoming', {
+    selected: true,
+    data: { worldScale: 'invalid' },
+  })
+  const plan = planCanvasDrop({
+    workspaceId: 'workspace',
+    draggedNodeId: 'incoming',
+    targetNodeId: 'system',
+    allNodes: [target, dragged],
+    absolutePositions: new Map([
+      ['system', { x: 0, y: 0 }],
+      ['incoming', { x: 100, y: 120 }],
+    ]),
+    systemIds: new Set(['system']),
+    fileIds: new Set(['incoming']),
+    infraIds: new Set(),
+    floorLayouts: [],
+  })
+
+  for (const update of plan.updates) {
+    for (const value of [
+      update.positionX, update.positionY, update.width, update.height,
+      update.scale, update.interiorScale,
+    ]) assert.ok(Number.isFinite(value) && value > 0)
+  }
 })
 
 // --- Case 3: the frame has no room at all -----------------------------------
@@ -204,7 +333,7 @@ const crowdedFrame = () => {
 
 const crowdedPlan = (floorLayouts = []) => {
   const { target, residents, dragged, positions } = crowdedFrame()
-  return planFloorDrop({
+  return planCanvasDrop({
     workspaceId: 'workspace',
     draggedNodeId: 'newcomer',
     targetNodeId: 'frame',
@@ -253,7 +382,7 @@ test('the compressed frame reuses its persisted geometry rather than reprojectin
 test('a drop with room does not touch the container at all', () => {
   const target = node('frame', { type: 'system', style: { width: 620, height: 420 } })
   const dragged = node('newcomer', { type: 'file', selected: true, style: { width: 220, height: 110 } })
-  const plan = planFloorDrop({
+  const plan = planCanvasDrop({
     workspaceId: 'workspace',
     draggedNodeId: 'newcomer',
     targetNodeId: 'frame',
@@ -274,7 +403,7 @@ test('a reparenting drop arrives where it was released, then animates to its slo
   // Released overhanging the frame's left edge, cursor inside — the exact case
   // that used to teleport, because the reparent and the push happened at once.
   const dragged = node('newcomer', { type: 'file', selected: true, style: { width: 220, height: 110 } })
-  const plan = planFloorDrop({
+  const plan = planCanvasDrop({
     workspaceId: 'workspace',
     draggedNodeId: 'newcomer',
     targetNodeId: 'frame',
@@ -306,7 +435,7 @@ test('the size-parity change is animated rather than applied on arrival', () => 
   const resident = node('a', { style: { width: 110, height: 55 }, data: { worldScale: 0.5 } })
   const dragged = node('newcomer', { selected: true, data: { worldScale: 1 } })
   resident.parentId = 'frame'
-  const plan = planFloorDrop({
+  const plan = planCanvasDrop({
     workspaceId: 'workspace',
     draggedNodeId: 'newcomer',
     targetNodeId: 'frame',

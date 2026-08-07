@@ -189,8 +189,28 @@ func GetOpenPlannedNodes(db *sql.DB, workspaceID string) ([]PlannedNode, error) 
 }
 
 func DeletePlannedNode(db *sql.DB, id string) error {
-	_, err := db.Exec(`DELETE FROM planned_nodes WHERE id=?`, id)
-	return err
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var sheetID string
+	if err := tx.QueryRow(`SELECT sheet_id FROM planned_nodes WHERE id=?`, id).Scan(&sheetID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM planned_nodes WHERE id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM sheet_layouts WHERE sheet_id=? AND node_id=?`, sheetID, "planned:"+id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`UPDATE sheets SET revision=revision+1,updated_at=? WHERE id=?`,
+		time.Now().UnixMilli(), sheetID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func SetPlannedApproval(db *sql.DB, id, approval string) (*PlannedNode, error) {
