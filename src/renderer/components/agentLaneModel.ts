@@ -42,8 +42,29 @@ export interface AgentLaneModel {
   collisions: AgentLaneCollision[]
 }
 
-function branchName(branch: string, headCommit: string): string {
-  return branch || `detached@${headCommit.slice(0, 7) || 'unknown'}`
+/** Same transport caveat as `list`: neither string is guaranteed to arrive. */
+function text(value: string | undefined | null): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function branchName(branch: string | undefined, headCommit: string | undefined): string {
+  return text(branch) || `detached@${text(headCommit).slice(0, 7) || 'unknown'}`
+}
+
+const EMPTY: AgentLaneModel = {
+  visible: false, branchCount: 0, agentCount: 0, branches: [], collisions: [],
+}
+
+/**
+ * The snapshot arrives over HTTP, so its type is a promise the compiler cannot
+ * keep. An error body, a truncated response, or an archd built before this
+ * field existed all arrive as objects missing the arrays below — and reading
+ * `.map` off one of them threw inside a `useMemo`, which React escalates into a
+ * render failure that blanks the whole workbench. A panel must never be able to
+ * do that, so every list is treated as absent-until-proven.
+ */
+function list<T>(value: readonly T[] | undefined | null): readonly T[] {
+  return Array.isArray(value) ? value : []
 }
 
 /**
@@ -56,24 +77,22 @@ export function buildAgentLaneModel(
   snapshot: ParallelAgentSnapshot | null,
   deck: ParallelCommandDeckStatus | null = null,
 ): AgentLaneModel {
-  if (!snapshot) {
-    return { visible: false, branchCount: 0, agentCount: 0, branches: [], collisions: [] }
-  }
+  if (!snapshot || !Array.isArray(snapshot.branches)) return EMPTY
 
   const branches = snapshot.branches.map(branch => {
-    const brief = deck?.branches.find(candidate => candidate.rootId === branch.rootId)
-    const files = new Set(branch.unclassifiedFiles)
-    for (const touch of branch.touchedSystems) {
-      for (const file of touch.files) files.add(file)
+    const brief = list(deck?.branches).find(candidate => candidate.rootId === branch.rootId)
+    const files = new Set(list(branch.unclassifiedFiles))
+    for (const touch of list(branch.touchedSystems)) {
+      for (const file of list(touch.files)) files.add(file)
     }
     return {
       rootId: branch.rootId,
       name: branchName(branch.branch, branch.headCommit),
-      head: branch.headCommit.slice(0, 7),
+      head: text(branch.headCommit).slice(0, 7),
       isPrimary: branch.isPrimary,
-      boundaryCount: branch.touchedSystems.length,
+      boundaryCount: list(branch.touchedSystems).length,
       fileCount: files.size,
-      agents: branch.activeWork.map(work => ({
+      agents: list(branch.activeWork).map(work => ({
         id: work.sessionId,
         name: work.agent || 'Agent',
         goal: work.goal,
@@ -86,19 +105,22 @@ export function buildAgentLaneModel(
     }
   })
 
-  const collisions = snapshot.collisions.map(collision => ({
+  const collisions = list(snapshot.collisions).map(collision => ({
     systemId: collision.systemId,
     systemName: collision.systemName,
-    branches: collision.branches.map(branch => ({
-      rootId: branch.rootId,
-      name: branchName(
-        branch.branch,
-        snapshot.branches.find(candidate => candidate.rootId === branch.rootId)?.headCommit ?? '',
-      ),
-      fileCount: branch.files.length,
-      claim: branch.claims.find(claim => !claim.internal)?.title
-        ?? `${branch.files.length} changed file${branch.files.length === 1 ? '' : 's'}`,
-    })),
+    branches: list(collision.branches).map(branch => {
+      const files = list(branch.files)
+      return {
+        rootId: branch.rootId,
+        name: branchName(
+          branch.branch,
+          snapshot.branches.find(candidate => candidate.rootId === branch.rootId)?.headCommit ?? '',
+        ),
+        fileCount: files.length,
+        claim: list(branch.claims).find(claim => !claim.internal)?.title
+          ?? `${files.length} changed file${files.length === 1 ? '' : 's'}`,
+      }
+    }),
   }))
 
   return {

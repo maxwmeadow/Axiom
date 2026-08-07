@@ -80,3 +80,54 @@ test('the per-branch briefing stays with the worktree it describes', () => {
     [['main', 0, 0, 0], ['agent/ui', 4, 2, 1]],
   )
 })
+
+// A snapshot arrives over HTTP, so its type is a promise the compiler cannot
+// keep. Reading .map off a missing array threw inside a useMemo, which React
+// escalates into a render failure — the whole workbench went to a blank
+// "Render Error" screen because one panel got an unexpected response body.
+test('a shapeless response hides the lane instead of blanking the workbench', () => {
+  for (const bad of [{}, { branches: null }, { branches: undefined }]) {
+    const model = buildAgentLaneModel(bad, null)
+    assert.equal(model.visible, false)
+    assert.deepEqual(model.branches, [])
+    assert.deepEqual(model.collisions, [])
+  }
+})
+
+test('a branch missing its optional lists still renders', () => {
+  const model = buildAgentLaneModel({
+    branches: [
+      { rootId: 'a', branch: 'main', headCommit: 'abcdef1234', isPrimary: true },
+      { rootId: 'b', branch: 'feat', headCommit: 'beef567890', isPrimary: false },
+    ],
+  }, null)
+
+  assert.equal(model.visible, true)
+  assert.equal(model.branchCount, 2)
+  assert.equal(model.agentCount, 0)
+  assert.equal(model.branches[0].boundaryCount, 0)
+  assert.equal(model.branches[0].fileCount, 0)
+  assert.equal(model.branches[0].head, 'abcdef1')
+})
+
+test('a branch with no name or commit still gets a readable label', () => {
+  const model = buildAgentLaneModel({
+    branches: [{ rootId: 'a' }, { rootId: 'b' }],
+  }, null)
+
+  assert.equal(model.branches[0].name, 'detached@unknown')
+  assert.equal(model.branches[0].head, '')
+})
+
+test('a malformed collision does not take the lane down with it', () => {
+  const model = buildAgentLaneModel({
+    branches: [
+      { rootId: 'a', branch: 'main', headCommit: 'aaaaaaa', isPrimary: true },
+      { rootId: 'b', branch: 'feat', headCommit: 'bbbbbbb', isPrimary: false },
+    ],
+    collisions: [{ systemId: 's', systemName: 'Payments' }],
+  }, null)
+
+  assert.equal(model.collisions.length, 1)
+  assert.deepEqual(model.collisions[0].branches, [])
+})

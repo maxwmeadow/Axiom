@@ -5653,39 +5653,11 @@ select.axiom-inspector-input {
   font-family: var(--font-mono);
 }
 
-.axiom-delta--collapsed {
-  top: 14px;
-  left: 50%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: calc(100vw - 48px);
-  padding: 9px 10px 9px 12px;
-  transform: translateX(-50%);
-  border-top: 2px solid #4f8279;
-  background: linear-gradient(180deg, #4a5652 0%, #2d3834 100%);
-}
-
-.axiom-delta__collapsed-text {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.axiom-delta__collapsed-text strong {
-  color: #fffdf5;
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-
-.axiom-delta__collapsed-text span {
-  color: #b3c2bc;
-  font-size: 11px;
-  white-space: nowrap;
-}
+/* The collapsed "delta waiting" strip lived here, absolutely positioned at
+   top-centre. It is gone: the invitation is now a tenant of the interruption
+   lane (styles/spine.css), which owns that space exclusively. Re-adding a
+   surface at top:14px/left:50% recreates the exact collision the lane was
+   built to end. */
 
 /* ── Expanded review rail ────────────────────────────────────────────────── */
 .axiom-delta--panel {

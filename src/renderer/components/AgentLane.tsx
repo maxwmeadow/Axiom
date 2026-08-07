@@ -44,13 +44,23 @@ export function AgentLane() {
     }
     const refreshWhenVisible = () => { if (!document.hidden) refresh() }
 
-    refresh()
+    // Deferred, not immediate. Resolving these two fetches during the canvas's
+    // first paint lands a render inside React Flow's initial fitView window and
+    // moves the camera — the Floor came up framed differently depending on how
+    // busy the main thread happened to be. This panel is background context;
+    // it is never needed in the first frame, and the 4s refresh below makes one
+    // deferred load free.
+    const idle = window.requestIdleCallback
+      ? window.requestIdleCallback(() => refresh(), { timeout: 1000 })
+      : window.setTimeout(refresh, 250)
     const interval = window.setInterval(refreshWhenVisible, REFRESH_MS)
     window.addEventListener('focus', refresh)
     document.addEventListener('visibilitychange', refreshWhenVisible)
     return () => {
       disposed = true
       request?.abort()
+      if (window.cancelIdleCallback) window.cancelIdleCallback(idle)
+      else window.clearTimeout(idle)
       window.clearInterval(interval)
       window.removeEventListener('focus', refresh)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
