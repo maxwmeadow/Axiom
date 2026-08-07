@@ -5,6 +5,7 @@ import {
   raiseInvitation,
   raiseNotice,
   resolveInterruption,
+  useInterruptionStore,
 } from '../store/interruptionStore.ts'
 
 /**
@@ -27,27 +28,43 @@ export function AgentConnectBanner() {
     workspaceId: state.currentProject?.id ?? '',
   })))
 
-  // Re-invite once per project. Dismissing is a judgement about this codebase,
-  // not a global preference, so opening a different one asks again.
-  const invitedFor = useRef<string | null>(null)
+  // What we last put on screen, so the count can be corrected without the
+  // invitation being raised twice for the same facts. Dismissing is a judgement
+  // about this codebase, not a global preference, so opening a different one
+  // asks again.
+  const invited = useRef<{ workspace: string; count: number } | null>(null)
   useEffect(() => {
-    invitedFor.current = null
+    invited.current = null
   }, [workspaceId])
+
+  // Whether the invitation is currently on screen. Re-raising blindly on every
+  // file change would resurrect a dismissed invitation on the agent's next
+  // keystroke; never re-raising froze the count at whatever it was when the
+  // agent started, so it still read "48 files" with three left. Refresh only
+  // while it is genuinely still showing.
+  const showing = useInterruptionStore(
+    state => state.items.some(item => item.id === ID),
+  )
 
   useEffect(() => {
     if (isIndexing || unclassified === 0 || !workspaceId) {
       // The condition resolved — an agent classified the files, or indexing
       // restarted. Retire the invitation rather than leaving it stale.
-      if (invitedFor.current !== null) {
+      if (invited.current !== null) {
         resolveInterruption(ID)
-        invitedFor.current = null
+        invited.current = null
       }
       return
     }
-    // Raising again on every file change would resurrect a dismissed
-    // invitation on the next keystroke an agent makes.
-    if (invitedFor.current === workspaceId) return
-    invitedFor.current = workspaceId
+    // Re-raise only to correct a count the user can still see. Raising because
+    // it merely became visible would fire twice for one set of facts; never
+    // re-raising froze "48 files" while three remained; and re-raising after a
+    // dismissal would resurrect it on the agent's next keystroke.
+    const prior = invited.current
+    if (prior?.workspace === workspaceId && (!showing || prior.count === unclassified)) {
+      return
+    }
+    invited.current = { workspace: workspaceId, count: unclassified }
 
     raiseInvitation(
       ID,

@@ -13,6 +13,10 @@ import {
   type DeltaReview,
 } from '../canvas/deltaReview.ts'
 import type { DeltaClaim } from '../../shared/types'
+import { raiseInvitation, resolveInterruption } from '../store/interruptionStore.ts'
+
+/** One id, so a refreshed delta replaces its invitation instead of stacking. */
+const DELTA_INVITATION = 'delta-review'
 
 /**
  * Morning Delta review panel.
@@ -196,36 +200,30 @@ export function DeltaPanel() {
     node?.scrollIntoView({ block: 'nearest' })
   }, [reviewing, active])
 
-  if (!delta || review.empty) return null
-
-  // Set aside with "Later": the delta is still unreviewed in archd, but it has
-  // stopped asking. The status bar carries the way back in.
-  if (!reviewing && deferredUntil === delta.until) return null
-
-  // Collapsed: a single quiet line. It states what is waiting and gets out of
-  // the way — an unreviewed delta should invite, never block.
-  if (!reviewing) {
-    return (
-      <aside className="axiom-delta axiom-delta--collapsed" aria-label="Changes since your last review">
-        <span className="axiom-delta__mode">Delta</span>
-        <div className="axiom-delta__collapsed-text">
-          <strong>{deltaHeadline(review)}</strong>
-          <span>{deltaWindow(delta.since, delta.until)} · {deltaAttribution(delta.counts)}</span>
-        </div>
-        <button type="button" className="axiom-delta__button axiom-delta__button--primary" onClick={startReview}>
-          Review
-        </button>
-        <button
-          type="button"
-          className="axiom-delta__button"
-          title="Set aside — stays unreviewed, reopen from the status bar"
-          onClick={deferDelta}
-        >
-          Later
-        </button>
-      </aside>
+  // The invitation to review lives in the interruption lane, not beside it.
+  // It used to be a strip at top-centre — the same coordinates the lane now
+  // occupies, so the two covered each other exactly like the banners this was
+  // supposed to have fixed. One surface owns that space; this is a tenant.
+  const pending = Boolean(delta) && !review.empty && !reviewing &&
+    deferredUntil !== delta?.until
+  useEffect(() => {
+    if (!pending || !delta) {
+      resolveInterruption(DELTA_INVITATION)
+      return
+    }
+    raiseInvitation(
+      DELTA_INVITATION,
+      deltaHeadline(review),
+      `${deltaWindow(delta.since, delta.until)} · ${deltaAttribution(delta.counts)}`,
+      [
+        { label: 'Review', primary: true, run: startReview },
+        { label: 'Later', run: deferDelta },
+      ],
     )
-  }
+  }, [pending, delta, review, startReview, deferDelta])
+
+  // Only the expanded review renders here now; the invitation is a lane tenant.
+  if (!delta || review.empty || !reviewing) return null
 
   return (
     <aside className="axiom-delta axiom-delta--panel" aria-label="Reviewing changes">

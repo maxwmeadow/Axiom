@@ -3,8 +3,8 @@ import { useShallow } from 'zustand/react/shallow'
 import {
   isDismissible,
   laneState,
-  nextExpiry,
   type Interruption,
+  type InterruptionAction,
 } from '../../shared/interruptions.ts'
 import { useInterruptionStore } from '../store/interruptionStore.ts'
 
@@ -33,21 +33,36 @@ export function InterruptionLane() {
     dismiss: state.dismiss,
   })))
 
-  // Expiry is wall-clock, so the lane needs to re-read when a notice lapses.
-  // One timer aimed at the next expiry beats an interval: an idle workbench
-  // with no expiring entries schedules nothing at all.
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const due = nextExpiry(items, Date.now())
-    if (due === null) return
-    const timer = setTimeout(() => setTick(value => value + 1), Math.max(due - Date.now(), 0))
-    return () => clearTimeout(timer)
-  }, [items])
-
+  // Expiry is the store's job — each entry owns a timer that removes it, so
+  // `items` changing is the only thing that can change what is rendered.
   const { current, waiting } = laneState(items, Date.now())
+
+  // An action that talks to the daemon takes time, and a second click during
+  // that window sends a second request: the first answer succeeds, the second
+  // gets a 409, and the user is told the agent is still waiting when it is not.
+  const [running, setRunning] = useState<string | null>(null)
+  useEffect(() => {
+    // A new question is a new decision to make, even if the last one is still
+    // settling. Never leave the replacement stuck behind a stale guard.
+    setRunning(null)
+  }, [current?.id])
+
   if (!current) return null
 
   const dismissible = isDismissible(current)
+  const busy = running === current.id
+
+  const runAction = async (action: InterruptionAction) => {
+    if (busy) return
+    setRunning(current.id)
+    try {
+      await action.run()
+    } finally {
+      // The entry is normally gone by now; this only matters when the action
+      // failed and left the question on screen to be answered again.
+      setRunning(value => (value === current.id ? null : value))
+    }
+  }
 
   return (
     <aside
@@ -74,7 +89,8 @@ export function InterruptionLane() {
                 ? 'axiom-lane__button axiom-lane__button--primary'
                 : 'axiom-lane__button'
             }
-            onClick={() => void action.run()}
+            disabled={busy}
+            onClick={() => void runAction(action)}
           >
             {action.label}
           </button>

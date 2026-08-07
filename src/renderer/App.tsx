@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 
 import { AxiomCanvas } from './canvas/AxiomCanvas'
@@ -92,6 +92,9 @@ export default function App() {
   // Gates the launcher until the resume decision is known, so a resuming
   // launch never flashes the project list on its way into the workbench.
   const [resumeChecked, setResumeChecked] = useState(E2E_MODE)
+  // A project created through New Project is deliberately an empty folder, so
+  // it must never be diagnosed as misconfigured for being empty.
+  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null)
   const enterOnboardingProject = useOnboardingStore(s => s.enterProject)
 
   const { applySnapshot, setConnectionStatus, setCurrentProject: setStoreProject } = useGraphStore(
@@ -163,8 +166,23 @@ export default function App() {
     setReviewActive(!isCompleted)
 
     if (window.axiom) {
-      // Save to recent projects list via IPC
-      await window.axiom.openProject(config)
+      // Save to recent projects list via IPC. Failing here used to leave the
+      // workbench mounted against a project that never actually opened, so the
+      // user got an empty canvas with no way to tell it had failed.
+      try {
+        await window.axiom.openProject(config)
+      } catch (err) {
+        console.error('[openProject] could not record the project:', err)
+        forgetOpenProject()
+        setCurrentProject(null)
+        setStoreProject(null)
+        raiseFailure(
+          'project-open',
+          `Could not open ${config.name}`,
+          err instanceof Error ? err.message : String(err),
+        )
+        return
+      }
       // Connect to archd WebSocket for real-time graph updates
       connectToArchd('ws://127.0.0.1:7744/ws')
       // Register workspace with archd and start indexing
@@ -232,7 +250,26 @@ export default function App() {
           )
         }
         void pull()
-      }).catch(err => console.error('[openProject] archd workspace error:', err))
+      }).catch(err => {
+        console.error('[openProject] archd workspace error:', err)
+        // The retry above only exists once the workspace POST resolves. When
+        // the POST itself rejects — archd not listening, port taken, refused
+        // — nothing downstream ever runs, so this was the path that actually
+        // produced the silent blank canvas.
+        raiseFailure(
+          'workspace-register',
+          'Could not reach archd to open this project',
+          `${err instanceof Error ? err.message : String(err)} — your code is untouched; this is the map, not the repository.`,
+          [{
+            label: 'Retry',
+            primary: true,
+            run: () => {
+              useInterruptionStore.getState().resolve('workspace-register')
+              void openProjectRef.current?.(config)
+            },
+          }],
+        )
+      })
     } else {
       // Browser demo: load fake data
       setConnectionStatus('connected')
@@ -240,7 +277,12 @@ export default function App() {
         applySnapshot(demoSnapshot)
       }, 800)
     }
-  }, [applySnapshot, setConnectionStatus])
+  }, [applySnapshot, setConnectionStatus, setStoreProject])
+
+  // Lets a Retry action re-run the open without making openProject depend on
+  // itself, which useCallback cannot express.
+  const openProjectRef = useRef(openProject)
+  useEffect(() => { openProjectRef.current = openProject }, [openProject])
 
   const routeProjectBySourceBoundaryState = useCallback(async (config: ProjectConfig) => {
     if (sourceBoundariesAreComplete(config)) {
@@ -358,6 +400,7 @@ export default function App() {
           // directly on the live Floor so files materialize as they're built.
           const completed = completeSourceBoundaries(config, [])
           localStorage.setItem(`review_completed_${completed.id}`, 'true')
+          setCreatedProjectId(completed.id)
           openProject(completed)
         }}
       />
@@ -431,7 +474,11 @@ export default function App() {
           <InjectConfirmBanner />
 
           {/* Recovers the "indexed nothing, blank Floor, nothing to click" trap */}
-          <EmptyIndexNotice onReconfigure={() => setPendingSetup(currentProject)} />
+          <EmptyIndexNotice
+            onReconfigure={() => setPendingSetup(currentProject)}
+            hasExclusions={(currentProject.ignoredPaths?.length ?? 0) > 0}
+            suppress={createdProjectId === currentProject.id}
+          />
 
           {/* Agent activity log — everything the agent is doing, live */}
           {agentLogOpen && <AgentLogPanel onClose={() => setAgentLogOpen(false)} />}
