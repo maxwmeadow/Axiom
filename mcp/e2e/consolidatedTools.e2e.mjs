@@ -173,6 +173,7 @@ test('the work session lifecycle runs through two tools', async () => {
     goal: 'Exercise the consolidated surface', agent: 'harness',
   })
   assert.equal(started.isError, false, started.text)
+  assert.equal(started.payload.rootId, harness.snapshot.files[0].rootId)
 
   const noted = await client.callTool('update_work', { note: 'halfway through' })
   assert.equal(noted.isError, false, noted.text)
@@ -208,6 +209,7 @@ test('agent actions are logged with targets the canvas can light up', async () =
   const architecture = actions.find(action => action.tool === 'get_architecture')
   assert.ok(architecture, `expected a get_architecture entry, got: ${
     actions.map(a => a.tool).join(', ')}`)
+  assert.equal(architecture.rootId, harness.snapshot.files[0].rootId)
   assert.equal(architecture.kind, 'read')
   assert.ok(
     architecture.targets.includes(files[0].id),

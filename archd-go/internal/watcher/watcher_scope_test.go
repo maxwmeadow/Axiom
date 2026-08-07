@@ -3,6 +3,8 @@ package watcher
 import (
 	"path/filepath"
 	"testing"
+
+	"axiom.local/archd/internal/db"
 )
 
 func TestIgnoredSourceBoundaryCoversDescendantsOnly(t *testing.T) {
@@ -21,5 +23,16 @@ func TestIgnoredSourceBoundaryCoversDescendantsOnly(t *testing.T) {
 	}
 	if isIgnoredPath(filepath.Join(root, "src", "source.py"), patterns) {
 		t.Fatal("included source directory was incorrectly ignored")
+	}
+}
+
+func TestUpdateRootRefreshesResolvedGitIdentity(t *testing.T) {
+	rootPath := t.TempDir()
+	w := &Watcher{roots: []db.Root{{ID: "root", Path: rootPath, Branch: "old", HeadCommit: "aaa"}}}
+	w.UpdateRoot(db.Root{ID: "root", Path: rootPath, Branch: "new", HeadCommit: "bbb"})
+
+	resolved := w.rootFor(filepath.Join(rootPath, "file.go"))
+	if resolved == nil || resolved.Branch != "new" || resolved.HeadCommit != "bbb" {
+		t.Fatalf("resolved root = %#v", resolved)
 	}
 }

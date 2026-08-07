@@ -579,3 +579,80 @@ export interface DeltaClaim {
 // Worktree, branch, and cross-branch types belong below this line. Keeping them
 // in one appended block means the parallel-agents worktree and the workbench-
 // spine worktree can both touch this file without colliding in its middle.
+
+export interface DeltaWorkSession {
+  rootId?: string
+  branch?: string
+}
+
+export interface DeltaSummary {
+  rootId?: string
+  branch?: string
+}
+
+export interface AgentAction {
+  rootId?: string
+  branch?: string
+}
+
+export interface BranchSystemTouch {
+  systemId: string
+  systemName: string
+  files: string[]
+  claims: DeltaClaim[]
+}
+
+export interface ActiveBranch {
+  rootId: string
+  branch: string
+  headCommit: string
+  isPrimary: boolean
+  touchedSystems: BranchSystemTouch[]
+  unclassifiedFiles: string[]
+  errors?: string[]
+  activeWork: Array<{
+    sessionId: string
+    agent?: string
+    goal: string
+    startedAt: number
+  }>
+}
+
+export interface CollisionBranch {
+  rootId: string
+  branch: string
+  files: string[]
+  claims: DeltaClaim[]
+}
+
+export interface BranchCollision {
+  systemId: string
+  systemName: string
+  branches: CollisionBranch[]
+}
+
+export interface ParallelAgentSnapshot {
+  workspaceId: string
+  generatedAt: number
+  branches: ActiveBranch[]
+  collisions: BranchCollision[]
+}
+
+export interface CommandDeckBranchStatus {
+  rootId: string
+  branch: string
+  headCommit: string
+  isPrimary: boolean
+  files: number
+  systems: number
+  unreviewedClaims: number
+  unexplained: number
+  unexpected: number
+  activeWork: DeltaWorkSession[]
+  lastActivityAt: number
+}
+
+export interface ParallelCommandDeckStatus {
+  workspaceId: string
+  branches: CommandDeckBranchStatus[]
+}

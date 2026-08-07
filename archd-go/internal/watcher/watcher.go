@@ -40,6 +40,7 @@ type Watcher struct {
 	fw               *fsnotify.Watcher
 	sqlDB            *sql.DB
 	h                *hub.Hub
+	rootsMu          sync.RWMutex
 	roots            []db.Root
 	pendingMu        sync.Mutex
 	pendingChanges   map[string]*time.Timer
@@ -47,6 +48,20 @@ type Watcher struct {
 	classifications  map[string]*time.Timer
 	reclusterMu      sync.Mutex
 	closed           atomic.Bool
+}
+
+// UpdateRoot refreshes branch/HEAD metadata without tearing down filesystem
+// watches. Scheduled callbacks take a copy, so each event is stamped with the
+// newest identity available when its path is resolved.
+func (w *Watcher) UpdateRoot(updated db.Root) {
+	w.rootsMu.Lock()
+	defer w.rootsMu.Unlock()
+	for index := range w.roots {
+		if w.roots[index].ID == updated.ID {
+			w.roots[index] = updated
+			return
+		}
+	}
 }
 
 // New creates a Watcher and adds all root paths recursively.
@@ -264,12 +279,15 @@ func (w *Watcher) watchNewDir(dir string) {
 }
 
 func (w *Watcher) rootFor(absPath string) *db.Root {
+	w.rootsMu.RLock()
+	defer w.rootsMu.RUnlock()
 	for i, r := range w.roots {
 		if strings.HasPrefix(absPath, filepath.Clean(r.Path)+string(filepath.Separator)) {
 			if isIgnoredPath(absPath, r.IgnoredPaths) {
 				return nil
 			}
-			return &w.roots[i]
+			root := w.roots[i]
+			return &root
 		}
 	}
 	return nil

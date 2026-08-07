@@ -25,21 +25,35 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	var body db.AgentAction
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	var request struct {
+		db.AgentAction
+		Cwd string `json:"cwd"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		jsonError(w, "invalid body", 400)
 		return
 	}
+	body := request.AgentAction
 	sqlDB, err := s.dbFor(body.WorkspaceID)
 	if err != nil {
 		jsonError(w, err.Error(), 404)
 		return
 	}
+	if body.RootID == "" && request.Cwd != "" {
+		if root, matched, resolveErr := resolveWorkspaceRootForCwd(
+			sqlDB, body.WorkspaceID, request.Cwd,
+		); resolveErr != nil {
+			jsonError(w, resolveErr.Error(), http.StatusInternalServerError)
+			return
+		} else if matched {
+			body.RootID, body.Branch = root.ID, root.Branch
+		}
+	}
 
 	// Attribute the action to whatever work the agent declared it was doing,
 	// so the log groups into tasks rather than reading as a flat firehose.
 	if body.SessionID == "" {
-		body.SessionID = db.ActiveWorkSessionID(sqlDB, body.WorkspaceID)
+		body.SessionID = db.ActiveWorkSessionIDForRoot(sqlDB, body.WorkspaceID, body.RootID)
 	}
 	activity.MarkAgent(body.WorkspaceID)
 

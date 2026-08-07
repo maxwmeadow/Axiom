@@ -182,6 +182,7 @@ export async function startHarness() {
     }))
 
     const mcp = spawn(process.execPath, [MCP_ENTRY], {
+      cwd: projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {
         ...process.env,

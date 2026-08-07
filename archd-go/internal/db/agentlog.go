@@ -35,14 +35,16 @@ const agentLogRetentionMs = 7 * 24 * 60 * 60 * 1000
 // AgentAction is one thing an agent did, with the canvas nodes it touched so
 // the map can show it happening.
 type AgentAction struct {
-	ID          int64    `json:"id"`
-	WorkspaceID string   `json:"workspaceId"`
-	TS          int64    `json:"ts"`
-	SessionID   string   `json:"sessionId,omitempty"`
-	Agent       string   `json:"agent,omitempty"`
-	Tool        string   `json:"tool"`
-	Kind        string   `json:"kind"`
-	Summary     string   `json:"summary"`
+	ID          int64  `json:"id"`
+	WorkspaceID string `json:"workspaceId"`
+	RootID      string `json:"rootId"`
+	Branch      string `json:"branch"`
+	TS          int64  `json:"ts"`
+	SessionID   string `json:"sessionId,omitempty"`
+	Agent       string `json:"agent,omitempty"`
+	Tool        string `json:"tool"`
+	Kind        string `json:"kind"`
+	Summary     string `json:"summary"`
 	// Targets are canvas node IDs (files, systems, infra) this action touched.
 	// They are what lets the renderer light up the right part of the map.
 	Targets    []string `json:"targets"`
@@ -63,16 +65,27 @@ func RecordAgentAction(db *sql.DB, action AgentAction) (AgentAction, error) {
 	if action.Targets == nil {
 		action.Targets = []string{}
 	}
+	if action.RootID == "" && action.SessionID != "" {
+		if session, sessionErr := GetWorkSession(db, action.WorkspaceID, action.SessionID); sessionErr == nil {
+			action.RootID = session.RootID
+			action.Branch = session.Branch
+		}
+	}
+	action.RootID, action.Branch = completeHistoryIdentity(
+		db, action.WorkspaceID, action.RootID, action.Branch,
+	)
 	targets, err := json.Marshal(action.Targets)
 	if err != nil {
 		return action, err
 	}
 	res, err := db.Exec(`
 		INSERT INTO agent_actions
-			(workspace_id, ts, session_id, agent, tool, kind, summary,
+			(workspace_id, root_id, branch, ts, session_id, agent, tool, kind, summary,
 			 targets, detail, duration_ms, status, error)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		action.WorkspaceID, action.TS, action.SessionID, action.Agent,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		action.WorkspaceID,
+		nullableHistoryIdentity(action.RootID), nullableHistoryIdentity(action.Branch),
+		action.TS, action.SessionID, action.Agent,
 		action.Tool, action.Kind, action.Summary, string(targets),
 		action.Detail, action.DurationMs, action.Status, action.Error)
 	if err != nil {
@@ -91,11 +104,20 @@ func GetAgentActions(db *sql.DB, workspaceID string, since int64, limit int) ([]
 		limit = 200
 	}
 	rows, err := db.Query(`
-		SELECT id, workspace_id, ts, session_id, agent, tool, kind, summary,
+		SELECT aa.id, aa.workspace_id,
+		       COALESCE(aa.root_id, (
+		           SELECT r.id FROM roots r WHERE r.workspace_id=aa.workspace_id
+		           ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		       ), ''),
+		       COALESCE(aa.branch, (
+		           SELECT r.branch FROM roots r WHERE r.workspace_id=aa.workspace_id
+		           ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		       ), ''),
+		       aa.ts, aa.session_id, aa.agent, aa.tool, aa.kind, aa.summary,
 		       targets, detail, duration_ms, status, error
-		FROM agent_actions
-		WHERE workspace_id = ? AND ts > ?
-		ORDER BY ts DESC, id DESC
+		FROM agent_actions aa
+		WHERE aa.workspace_id = ? AND aa.ts > ?
+		ORDER BY aa.ts DESC, aa.id DESC
 		LIMIT ?`, workspaceID, since, limit)
 	if err != nil {
 		return nil, err
@@ -107,7 +129,8 @@ func GetAgentActions(db *sql.DB, workspaceID string, since int64, limit int) ([]
 		var action AgentAction
 		var targets string
 		if err := rows.Scan(
-			&action.ID, &action.WorkspaceID, &action.TS, &action.SessionID,
+			&action.ID, &action.WorkspaceID, &action.RootID, &action.Branch,
+			&action.TS, &action.SessionID,
 			&action.Agent, &action.Tool, &action.Kind, &action.Summary,
 			&targets, &action.Detail, &action.DurationMs,
 			&action.Status, &action.Error,

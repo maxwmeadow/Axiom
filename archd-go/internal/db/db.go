@@ -13,6 +13,14 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+const (
+	// SQLite still permits a single writer, but WAL mode lets readers continue
+	// while that writer is active. A bounded pool prevents watcher writes from
+	// occupying the only connection and stalling API reads behind them.
+	maxOpenConnections = 8
+	busyTimeoutMillis  = 5000
+)
+
 // Open creates (or opens) the SQLite database at the given path and runs
 // all schema migrations. Returns a ready-to-use *sql.DB.
 func Open(dataDir string) (*sql.DB, error) {
@@ -21,12 +29,18 @@ func Open(dataDir string) (*sql.DB, error) {
 	}
 
 	dbPath := filepath.Join(dataDir, "axiom.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL")
+	dsn := fmt.Sprintf(
+		"%s?_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=%d&_txlock=immediate",
+		dbPath,
+		busyTimeoutMillis,
+	)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	db.SetMaxOpenConns(1) // SQLite is not safe for concurrent writes
+	db.SetMaxOpenConns(maxOpenConnections)
+	db.SetMaxIdleConns(maxOpenConnections)
 
 	if err := migrate(db); err != nil {
 		db.Close()
@@ -73,10 +87,15 @@ func migrate(db *sql.DB) error {
 		id            TEXT PRIMARY KEY,
 		workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
 		path          TEXT NOT NULL,
+		branch        TEXT NOT NULL DEFAULT '',
+		head_commit   TEXT NOT NULL DEFAULT '',
+		is_primary   INTEGER NOT NULL DEFAULT 0,
+		is_active    INTEGER NOT NULL DEFAULT 1,
 		indexed_at    INTEGER,
 		classifier_version INTEGER NOT NULL DEFAULT 0,
 		ignored_paths_json TEXT NOT NULL DEFAULT '[]',
-		source_boundaries_reviewed_at INTEGER
+		source_boundaries_reviewed_at INTEGER,
+		delta_reviewed_at INTEGER
 	);
 
 	-- ─── Systems ──────────────────────────────────────────────────────────────
@@ -362,6 +381,8 @@ func migrate(db *sql.DB) error {
 	CREATE TABLE IF NOT EXISTS structural_events (
 		id            INTEGER PRIMARY KEY AUTOINCREMENT,
 		workspace_id  TEXT NOT NULL,
+		root_id       TEXT,
+		branch        TEXT,
 		ts            INTEGER NOT NULL,               -- ms epoch
 		actor         TEXT NOT NULL DEFAULT 'human',  -- 'human'|'agent'
 		trace_id      TEXT NOT NULL DEFAULT '',       -- correlates one save's events
@@ -384,6 +405,17 @@ func migrate(db *sql.DB) error {
 		PRIMARY KEY(workspace_id, at)
 	);
 	CREATE INDEX IF NOT EXISTS delta_snapshots_ws ON delta_snapshots(workspace_id, at);
+	-- Branch-local snapshots are additive. Legacy workspace snapshots remain
+	-- readable as the primary root's fallback at pre-migration watermarks.
+	CREATE TABLE IF NOT EXISTS root_delta_snapshots (
+		root_id   TEXT NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+		branch    TEXT NOT NULL,
+		at        INTEGER NOT NULL,
+		snapshot  TEXT NOT NULL,
+		PRIMARY KEY(root_id, branch, at)
+	);
+	CREATE INDEX IF NOT EXISTS root_delta_snapshots_root
+		ON root_delta_snapshots(root_id, branch, at);
 
 	-- An agent's own account of what it set out to do. Structural facts are
 	-- true but thin; narration is how the agent writes intent INTO the map so
@@ -391,6 +423,8 @@ func migrate(db *sql.DB) error {
 	CREATE TABLE IF NOT EXISTS work_sessions (
 		id            TEXT PRIMARY KEY,
 		workspace_id  TEXT NOT NULL,
+		root_id       TEXT,
+		branch        TEXT,
 		owner_key     TEXT NOT NULL DEFAULT '',
 		agent         TEXT NOT NULL DEFAULT '',
 		goal          TEXT NOT NULL,
@@ -410,6 +444,8 @@ func migrate(db *sql.DB) error {
 	CREATE TABLE IF NOT EXISTS agent_actions (
 		id            INTEGER PRIMARY KEY AUTOINCREMENT,
 		workspace_id  TEXT NOT NULL,
+		root_id       TEXT,
+		branch        TEXT,
 		ts            INTEGER NOT NULL,
 		session_id    TEXT NOT NULL DEFAULT '',
 		agent         TEXT NOT NULL DEFAULT '',
@@ -563,6 +599,23 @@ func migrate(db *sql.DB) error {
 		// An empty JSON array is a valid completed "include everything" choice.
 		`ALTER TABLE roots ADD COLUMN ignored_paths_json TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE roots ADD COLUMN source_boundaries_reviewed_at INTEGER`,
+		// Git worktrees are live roots. Existing roots stay active by default and
+		// are identified as primary on the next workspace reconciliation.
+		`ALTER TABLE roots ADD COLUMN branch TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE roots ADD COLUMN head_commit TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE roots ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE roots ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1`,
+		// The primary root falls back to the legacy workspace watermark while
+		// this remains NULL; no existing acknowledgement is rewritten.
+		`ALTER TABLE roots ADD COLUMN delta_reviewed_at INTEGER`,
+		// Parallel-agent history is stamped at write time. NULL deliberately
+		// remains the legacy representation and resolves to the primary root.
+		`ALTER TABLE structural_events ADD COLUMN root_id TEXT`,
+		`ALTER TABLE structural_events ADD COLUMN branch TEXT`,
+		`ALTER TABLE work_sessions ADD COLUMN root_id TEXT`,
+		`ALTER TABLE work_sessions ADD COLUMN branch TEXT`,
+		`ALTER TABLE agent_actions ADD COLUMN root_id TEXT`,
+		`ALTER TABLE agent_actions ADD COLUMN branch TEXT`,
 		// Planned UML authoring: semantic shape + user color (REVISION 2 UX)
 		`ALTER TABLE planned_nodes ADD COLUMN shape TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE planned_nodes ADD COLUMN color TEXT NOT NULL DEFAULT ''`,
@@ -601,6 +654,13 @@ func migrate(db *sql.DB) error {
 	}
 	if err := BackfillSheetLayouts(db); err != nil {
 		return err
+	}
+	if _, err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS structural_events_root ON structural_events(workspace_id, root_id, ts);
+		CREATE INDEX IF NOT EXISTS work_sessions_root ON work_sessions(workspace_id, root_id, started_at);
+		CREATE INDEX IF NOT EXISTS agent_actions_root ON agent_actions(workspace_id, root_id, ts);
+	`); err != nil {
+		return fmt.Errorf("create branch-history indexes: %w", err)
 	}
 
 	// 2026-07: filename-based cylinder/hexagon shape guessing was removed

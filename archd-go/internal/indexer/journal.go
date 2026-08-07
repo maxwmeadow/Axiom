@@ -102,13 +102,20 @@ func recordEvent(sqlDB *sql.DB, ev db.StructuralEvent) {
 				}
 			}
 		}
-		ev.SessionID = db.ActiveWorkSessionIDForEntities(
-			sqlDB, ev.WorkspaceID, entityIDs...,
+		ev.SessionID = db.ActiveWorkSessionIDForRootEntities(
+			sqlDB, ev.WorkspaceID, ev.RootID, entityIDs...,
 		)
 	}
 	if err := db.RecordStructuralEvent(sqlDB, ev); err != nil {
 		log.Printf("journal: record %s %s: %v", ev.Kind, ev.SubjectLabel, err)
 	}
+}
+
+func recordRootEvent(sqlDB *sql.DB, root db.Root, ev db.StructuralEvent) {
+	ev.WorkspaceID = root.WorkspaceID
+	ev.RootID = root.ID
+	ev.Branch = root.Branch
+	recordEvent(sqlDB, ev)
 }
 
 // journalFileChange records one file's net change for the Morning Delta.
@@ -117,8 +124,7 @@ func journalFileChange(
 	file *db.File, kind, actor, traceID string,
 ) {
 	systemID, systemName := labeler.systemOf(file.ID)
-	recordEvent(sqlDB, db.StructuralEvent{
-		WorkspaceID:  root.WorkspaceID,
+	recordRootEvent(sqlDB, root, db.StructuralEvent{
 		Actor:        actor,
 		TraceID:      traceID,
 		Kind:         kind,
@@ -138,8 +144,7 @@ func journalFileDeleted(
 	sqlDB *sql.DB, root db.Root, systemID, systemName string,
 	file *db.File, actor, traceID string,
 ) {
-	recordEvent(sqlDB, db.StructuralEvent{
-		WorkspaceID:  root.WorkspaceID,
+	recordRootEvent(sqlDB, root, db.StructuralEvent{
 		Actor:        actor,
 		TraceID:      traceID,
 		Kind:         db.EventFileDeleted,
@@ -170,8 +175,7 @@ func journalSystemPlan(
 		if _, known := existing[system.ID]; known {
 			continue
 		}
-		recordEvent(sqlDB, db.StructuralEvent{
-			WorkspaceID:  root.WorkspaceID,
+		recordRootEvent(sqlDB, root, db.StructuralEvent{
 			Actor:        actor,
 			Kind:         db.EventSystemCreated,
 			SubjectID:    system.ID,
@@ -183,8 +187,7 @@ func journalSystemPlan(
 		if !known {
 			continue
 		}
-		recordEvent(sqlDB, db.StructuralEvent{
-			WorkspaceID:  root.WorkspaceID,
+		recordRootEvent(sqlDB, root, db.StructuralEvent{
 			Actor:        actor,
 			Kind:         db.EventSystemDeleted,
 			SubjectID:    system.ID,
@@ -212,8 +215,7 @@ func journalRelationships(
 		}
 		srcSystem, srcSystemName := labeler.systemOf(relationship.Src)
 		dstSystem, dstSystemName := labeler.systemOf(relationship.Dst)
-		recordEvent(sqlDB, db.StructuralEvent{
-			WorkspaceID:  root.WorkspaceID,
+		recordRootEvent(sqlDB, root, db.StructuralEvent{
 			Actor:        actor,
 			TraceID:      traceID,
 			Kind:         kind,

@@ -1,4 +1,11 @@
-import type { AgentAction, DbSystem, DeltaSummary, FloorLayout } from '../../shared/types'
+import type {
+  AgentAction,
+  DbSystem,
+  DeltaSummary,
+  FloorLayout,
+  ParallelAgentSnapshot,
+  ParallelCommandDeckStatus,
+} from '../../shared/types'
 
 const BASE = 'http://127.0.0.1:7744'
 
@@ -7,7 +14,19 @@ const BASE = 'http://127.0.0.1:7744'
  * apiAckDelta, so closing Axiom mid-review leaves the delta waiting.
  */
 export async function apiGetDelta(workspaceId: string, signal?: AbortSignal): Promise<DeltaSummary> {
-  const res = await fetch(`${BASE}/api/delta?workspace=${encodeURIComponent(workspaceId)}`, { signal })
+  return apiGetDeltaForRoot(workspaceId, undefined, undefined, signal)
+}
+
+export async function apiGetDeltaForRoot(
+  workspaceId: string,
+  rootId?: string,
+  branch?: string,
+  signal?: AbortSignal,
+): Promise<DeltaSummary> {
+  const params = new URLSearchParams({ workspace: workspaceId })
+  if (rootId) params.set('root', rootId)
+  if (branch) params.set('branch', branch)
+  const res = await fetch(`${BASE}/api/delta?${params}`, { signal })
   if (!res.ok) throw new Error(await res.text() || `Unable to load delta (${res.status})`)
   return res.json() as Promise<DeltaSummary>
 }
@@ -18,12 +37,41 @@ export async function apiGetDelta(workspaceId: string, signal?: AbortSignal): Pr
  * delta instead of being silently swallowed.
  */
 export async function apiAckDelta(workspaceId: string, until: number): Promise<void> {
+  return apiAckDeltaForRoot(workspaceId, until)
+}
+
+export async function apiAckDeltaForRoot(
+  workspaceId: string,
+  until: number,
+  rootId?: string,
+  branch?: string,
+): Promise<void> {
   const res = await fetch(`${BASE}/api/delta/ack`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspaceId, until }),
+    body: JSON.stringify({ workspaceId, rootId, branch, until }),
   })
   if (!res.ok) throw new Error(await res.text() || `Unable to acknowledge delta (${res.status})`)
+}
+
+export async function apiGetBranchCollisions(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<ParallelAgentSnapshot> {
+  const params = new URLSearchParams({ workspace: workspaceId })
+  const res = await fetch(`${BASE}/api/collisions?${params}`, { signal })
+  if (!res.ok) throw new Error(await res.text() || `Unable to load branch collisions (${res.status})`)
+  return res.json() as Promise<ParallelAgentSnapshot>
+}
+
+export async function apiGetParallelCommandDeck(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<ParallelCommandDeckStatus> {
+  const params = new URLSearchParams({ workspace: workspaceId })
+  const res = await fetch(`${BASE}/api/command-deck?${params}`, { signal })
+  if (!res.ok) throw new Error(await res.text() || `Unable to load branch briefing (${res.status})`)
+  return res.json() as Promise<ParallelCommandDeckStatus>
 }
 
 export interface FileSource {

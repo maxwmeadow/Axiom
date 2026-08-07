@@ -8,3 +8,317 @@
 
    Loaded from src/renderer/main.tsx after global.css, so these rules win ties
    against it without needing !important. */
+
+.axiom-agent-lane {
+  --agent-lane-paper: color-mix(in srgb, var(--bg-surface) 94%, transparent);
+  --agent-lane-rule: color-mix(in srgb, var(--text-dim) 52%, transparent);
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  z-index: 700;
+  width: min(430px, calc(100% - 28px));
+  overflow: hidden;
+  border: 1px solid var(--agent-lane-rule);
+  border-radius: 3px;
+  background: var(--agent-lane-paper);
+  box-shadow: 3px 3px 0 rgba(7, 12, 11, 0.3), 0 12px 34px rgba(0, 0, 0, 0.2);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  backdrop-filter: blur(12px);
+}
+
+.axiom-agent-lane[data-colliding] {
+  border-color: #a56c4a;
+  box-shadow: 3px 3px 0 rgba(67, 31, 15, 0.35), 0 12px 34px rgba(0, 0, 0, 0.22);
+}
+
+.axiom-agent-lane__toggle {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 0;
+  background: color-mix(in srgb, var(--bg-raised) 92%, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.axiom-agent-lane__toggle:hover { background: var(--bg-overlay); }
+
+.axiom-agent-lane__toggle:focus-visible,
+.axiom-agent-collision:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.axiom-agent-lane__signal {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #60a38e;
+  box-shadow: 0 0 0 3px rgba(96, 163, 142, 0.15);
+  animation: axiom-agent-lane-pulse 2.4s ease-out infinite;
+}
+
+.axiom-agent-lane[data-colliding] .axiom-agent-lane__signal {
+  background: #d18452;
+  box-shadow: 0 0 0 3px rgba(209, 132, 82, 0.18);
+}
+
+.axiom-agent-lane__heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.axiom-agent-lane__heading strong {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.axiom-agent-lane__heading span {
+  color: var(--text-secondary);
+  font-size: 9px;
+}
+
+.axiom-agent-lane__collision-count {
+  padding: 3px 6px;
+  border: 1px solid rgba(209, 132, 82, 0.58);
+  border-radius: 2px;
+  background: rgba(209, 132, 82, 0.14);
+  color: #d99467;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.axiom-agent-lane__chevron {
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.axiom-agent-lane__body {
+  max-height: min(520px, 58vh);
+  overflow: auto;
+  border-top: 1px solid var(--agent-lane-rule);
+}
+
+.axiom-agent-lane__section { padding: 10px; }
+.axiom-agent-lane__section + .axiom-agent-lane__section { border-top: 1px solid var(--agent-lane-rule); }
+
+.axiom-agent-lane__section h2 {
+  margin: 0 0 7px;
+  color: var(--text-dim);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.axiom-agent-lane__branches {
+  display: grid;
+  gap: 6px;
+}
+
+.axiom-agent-branch {
+  padding: 7px 8px;
+  border: 1px solid var(--agent-lane-rule);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--bg-deep) 45%, transparent);
+}
+
+.axiom-agent-branch header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.axiom-agent-branch__name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-agent-branch__primary {
+  padding: 2px 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 2px;
+  color: var(--accent);
+  font-size: 7px;
+  text-transform: uppercase;
+}
+
+.axiom-agent-branch code {
+  margin-left: auto;
+  color: var(--text-dim);
+  font: 8px/1 var(--font-mono);
+}
+
+.axiom-agent-branch__work {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.axiom-agent-branch__agent {
+  display: grid;
+  grid-template-columns: 6px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.axiom-agent-branch__agent > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #60a38e;
+}
+
+.axiom-agent-branch__agent strong {
+  color: var(--text-primary);
+  font-size: 8px;
+}
+
+.axiom-agent-branch__agent p {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-agent-branch__idle {
+  color: var(--text-dim);
+  font-size: 8px;
+  font-style: italic;
+}
+
+.axiom-agent-branch footer {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 7px;
+}
+
+.axiom-agent-branch__warning {
+  margin-left: auto;
+  color: #d18452;
+}
+
+.axiom-agent-branch__brief {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.axiom-agent-branch__brief span {
+  padding: 2px 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--accent);
+  font-size: 7px;
+}
+
+.axiom-agent-branch__brief span[data-warning] {
+  background: rgba(209, 132, 82, 0.12);
+  color: #d18452;
+}
+
+.axiom-agent-branch__brief span[data-danger] {
+  background: rgba(185, 78, 68, 0.13);
+  color: #c96a60;
+}
+
+.axiom-agent-lane__clear {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 8px;
+}
+
+.axiom-agent-collision {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 3px 8px;
+  padding: 7px 8px;
+  border: 1px solid rgba(209, 132, 82, 0.5);
+  border-left: 3px solid #d18452;
+  border-radius: 2px;
+  background: rgba(209, 132, 82, 0.08);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.axiom-agent-collision + .axiom-agent-collision { margin-top: 6px; }
+.axiom-agent-collision:hover { background: rgba(209, 132, 82, 0.15); }
+
+.axiom-agent-collision__system {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-agent-collision__route {
+  overflow: hidden;
+  color: #d18452;
+  font-size: 8px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-agent-collision__details {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: 7px;
+  line-height: 1.35;
+}
+
+.axiom-agent-collision__details > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-agent-collision__details strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+@keyframes axiom-agent-lane-pulse {
+  0%, 45% { transform: scale(1); opacity: 1; }
+  70% { transform: scale(1.35); opacity: 0.72; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axiom-agent-lane__signal { animation: none; }
+}
+
+@media (max-width: 680px) {
+  .axiom-agent-lane { bottom: 8px; left: 8px; width: calc(100% - 16px); }
+  .axiom-agent-lane__body { max-height: 46vh; }
+}

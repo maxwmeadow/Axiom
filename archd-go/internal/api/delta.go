@@ -22,7 +22,7 @@ import (
 // false and useless.
 const firstReviewLookbackMs = 12 * 60 * 60 * 1000
 
-// GET /api/delta?workspace=&since=
+// GET /api/delta?workspace=&root=&branch=&since=
 //
 // Returns the net architectural diff since the caller's watermark. This is the
 // Morning Delta: the answer to "what did my agents do while I wasn't looking?"
@@ -39,9 +39,20 @@ func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 404)
 		return
 	}
+	rootID := r.URL.Query().Get("root")
+	if rootID == "" {
+		rootID = r.URL.Query().Get("rootId")
+	}
+	root, err := resolveWorkspaceRoot(
+		sqlDB, workspaceID, rootID, r.URL.Query().Get("branch"),
+	)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusNotFound)
+		return
+	}
 
 	now := time.Now().UnixMilli()
-	since, err := db.GetDeltaReviewedAt(sqlDB, workspaceID)
+	since, err := db.GetDeltaReviewedAtForRoot(sqlDB, workspaceID, root.ID)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
@@ -61,23 +72,31 @@ func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 	if err := db.PruneStructuralEvents(sqlDB, workspaceID, now); err != nil {
 		log.Printf("api: prune journal for %s: %v", workspaceID, err)
 	}
-	if err := db.PruneDeltaSnapshots(sqlDB, workspaceID, now); err != nil {
-		log.Printf("api: prune delta snapshots for %s: %v", workspaceID, err)
+	if err := db.PruneDeltaSnapshotsForRoot(sqlDB, workspaceID, root.ID, now); err != nil {
+		log.Printf("api: prune delta snapshots for %s/%s: %v", workspaceID, root.ID, err)
 	}
-	events, err := db.GetStructuralEvents(sqlDB, workspaceID, since)
+	events, err := db.GetStructuralEventsForRoot(
+		sqlDB, workspaceID, root.ID, root.Branch, since,
+	)
 	if err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
 
 	summary := delta.Aggregate(events, since, now)
-	after, snapshotErr := s.saveDeltaSnapshot(sqlDB, workspaceID, now)
+	summary.RootID = root.ID
+	summary.Branch = root.Branch
+	after, snapshotErr := s.saveDeltaSnapshotForRoot(sqlDB, root, now)
 	if snapshotErr != nil {
 		log.Printf("api: save delta snapshot for %s: %v", workspaceID, snapshotErr)
-		summary.Claims = delta.BuildClaims(summary, s.systemTopology(sqlDB, workspaceID))
+		summary.Claims = delta.BuildClaims(
+			summary, s.systemTopologyForRoot(sqlDB, workspaceID, root.ID),
+		)
 	} else {
 		var before *delta.ArchitectureSnapshot
-		if encoded, loadErr := db.GetDeltaSnapshot(sqlDB, workspaceID, since); loadErr != nil {
+		if encoded, loadErr := db.GetDeltaSnapshotForRoot(
+			sqlDB, workspaceID, root.ID, root.Branch, since,
+		); loadErr != nil {
 			log.Printf("api: load delta snapshot for %s at %d: %v", workspaceID, since, loadErr)
 		} else if encoded != "" {
 			var decoded delta.ArchitectureSnapshot
@@ -93,7 +112,9 @@ func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 		summary.Claims,
 		dispatchedIntents(sqlDB, workspaceID),
 	)
-	if sessions, err := db.GetWorkSessions(sqlDB, workspaceID, since); err == nil {
+	if sessions, err := db.GetWorkSessionsForRoot(
+		sqlDB, workspaceID, root.ID, root.Branch, since,
+	); err == nil {
 		summary.Sessions = sessions
 	} else {
 		log.Printf("api: work sessions for %s: %v", workspaceID, err)
@@ -175,6 +196,9 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		WorkspaceID    string   `json:"workspaceId"`
+		RootID         string   `json:"rootId"`
+		Branch         string   `json:"branch"`
+		Cwd            string   `json:"cwd"`
 		SessionID      string   `json:"sessionId"`
 		OwnerKey       string   `json:"ownerKey"`
 		Agent          string   `json:"agent"`
@@ -200,9 +224,30 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "goal is required", 400)
 			return
 		}
+		rootID, branch := body.RootID, body.Branch
+		if rootID == "" && body.Cwd != "" {
+			if root, matched, resolveErr := resolveWorkspaceRootForCwd(
+				sqlDB, body.WorkspaceID, body.Cwd,
+			); resolveErr != nil {
+				jsonError(w, resolveErr.Error(), http.StatusInternalServerError)
+				return
+			} else if matched {
+				rootID, branch = root.ID, root.Branch
+			}
+		}
+		if rootID != "" {
+			root, resolveErr := resolveWorkspaceRoot(sqlDB, body.WorkspaceID, rootID, branch)
+			if resolveErr != nil {
+				jsonError(w, resolveErr.Error(), http.StatusBadRequest)
+				return
+			}
+			rootID, branch = root.ID, root.Branch
+		}
 		session, err := db.StartWorkSession(sqlDB, db.WorkSession{
 			ID:             uuid.NewString(),
 			WorkspaceID:    body.WorkspaceID,
+			RootID:         rootID,
+			Branch:         branch,
 			OwnerKey:       body.OwnerKey,
 			Agent:          body.Agent,
 			Goal:           body.Goal,
@@ -214,6 +259,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		activity.MarkAgent(body.WorkspaceID)
+		s.invalidateCollisionCache(body.WorkspaceID)
 		s.hub.Broadcast("work:session", session)
 		jsonOK(w, session)
 
@@ -254,6 +300,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.hub.Broadcast("work:session", session)
+		s.invalidateCollisionCache(body.WorkspaceID)
 		jsonOK(w, session)
 
 	default:
@@ -273,15 +320,38 @@ func (s *Server) systemTopology(sqlDB *sql.DB, workspaceID string) delta.SystemT
 	return snapshot.Topology
 }
 
+func (s *Server) systemTopologyForRoot(
+	sqlDB *sql.DB,
+	workspaceID, rootID string,
+) delta.SystemTopology {
+	snapshot, err := s.architectureSnapshotForRoot(sqlDB, workspaceID, rootID)
+	if err != nil {
+		return nil
+	}
+	return snapshot.Topology
+}
+
 func (s *Server) architectureSnapshot(
 	sqlDB *sql.DB,
 	workspaceID string,
+) (*delta.ArchitectureSnapshot, error) {
+	return s.architectureSnapshotForRoot(sqlDB, workspaceID, "")
+}
+
+func (s *Server) architectureSnapshotForRoot(
+	sqlDB *sql.DB,
+	workspaceID, rootID string,
 ) (*delta.ArchitectureSnapshot, error) {
 	systems, err := db.GetSystems(sqlDB, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	files, err := db.GetFiles(sqlDB, workspaceID)
+	var files []db.File
+	if rootID == "" {
+		files, err = db.GetFiles(sqlDB, workspaceID)
+	} else {
+		files, err = db.GetFilesByRoot(sqlDB, rootID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -315,12 +385,19 @@ func (s *Server) architectureSnapshot(
 	for _, dep := range dependencies {
 		addEdge(dep.Src, dep.Dst)
 	}
-	roots, err := db.GetRoots(sqlDB, workspaceID)
-	if err != nil {
-		return nil, err
+	rootIDs := []string{rootID}
+	if rootID == "" {
+		roots, rootsErr := db.GetRoots(sqlDB, workspaceID)
+		if rootsErr != nil {
+			return nil, rootsErr
+		}
+		rootIDs = rootIDs[:0]
+		for _, root := range roots {
+			rootIDs = append(rootIDs, root.ID)
+		}
 	}
-	for _, root := range roots {
-		calls, callErr := db.GetCallEdgesByRoot(sqlDB, root.ID)
+	for _, callRootID := range rootIDs {
+		calls, callErr := db.GetCallEdgesByRoot(sqlDB, callRootID)
 		if callErr != nil {
 			return nil, callErr
 		}
@@ -350,7 +427,28 @@ func (s *Server) saveDeltaSnapshot(
 	return snapshot, nil
 }
 
-// POST /api/delta/ack {workspaceId, until}
+func (s *Server) saveDeltaSnapshotForRoot(
+	sqlDB *sql.DB,
+	root db.Root,
+	at int64,
+) (*delta.ArchitectureSnapshot, error) {
+	snapshot, err := s.architectureSnapshotForRoot(sqlDB, root.WorkspaceID, root.ID)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.SaveDeltaSnapshotForRoot(
+		sqlDB, root.WorkspaceID, root.ID, root.Branch, at, string(encoded),
+	); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+// POST /api/delta/ack {workspaceId, rootId?, branch?, until}
 //
 // Marks the delta reviewed up to a point in time. The renderer sends back the
 // Until it was actually shown, never "now", so events that landed while the
@@ -363,6 +461,8 @@ func (s *Server) handleDeltaAck(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		WorkspaceID string `json:"workspaceId"`
+		RootID      string `json:"rootId"`
+		Branch      string `json:"branch"`
 		Until       int64  `json:"until"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -374,12 +474,21 @@ func (s *Server) handleDeltaAck(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 404)
 		return
 	}
+	root, err := resolveWorkspaceRoot(sqlDB, body.WorkspaceID, body.RootID, body.Branch)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusNotFound)
+		return
+	}
 	if body.Until <= 0 {
 		body.Until = time.Now().UnixMilli()
 	}
-	if err := db.SetDeltaReviewedAt(sqlDB, body.WorkspaceID, body.Until); err != nil {
+	if err := db.SetDeltaReviewedAtForRoot(
+		sqlDB, body.WorkspaceID, root.ID, body.Until,
+	); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	jsonOK(w, map[string]any{"reviewedAt": body.Until})
+	jsonOK(w, map[string]any{
+		"rootId": root.ID, "branch": root.Branch, "reviewedAt": body.Until,
+	})
 }

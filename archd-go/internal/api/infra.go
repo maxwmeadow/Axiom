@@ -29,7 +29,16 @@ func (s *Server) reloadRegistry() {
 		paths = append(paths, r.Path)
 	}
 	s.mu.RUnlock()
-	s.registry = registry.Load(paths)
+	loaded := registry.Load(paths)
+	s.mu.Lock()
+	s.registry = loaded
+	s.mu.Unlock()
+}
+
+func (s *Server) currentRegistry() *registry.Registry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.registry
 }
 
 func (s *Server) handleRegistryServices(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +48,7 @@ func (s *Server) handleRegistryServices(w http.ResponseWriter, r *http.Request) 
 	}
 	jsonOK(w, map[string]any{
 		"categories": registry.CategoryList(),
-		"services":   s.registry.All(),
+		"services":   s.currentRegistry().All(),
 	})
 }
 
@@ -47,8 +56,9 @@ func (s *Server) handleRegistryServices(w http.ResponseWriter, r *http.Request) 
 // entry so callers only need to send a service id. Explicit fields win when
 // no service is set (unassigned generic nodes).
 func (s *Server) applyService(n *db.InfraNode) error {
+	services := s.currentRegistry()
 	if n.Service != "" {
-		svc, ok := s.registry.Get(n.Service)
+		svc, ok := services.Get(n.Service)
 		if !ok {
 			return fmt.Errorf("unknown service %q — see GET /api/registry/services", n.Service)
 		}

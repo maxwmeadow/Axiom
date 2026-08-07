@@ -121,6 +121,8 @@ type Counts struct {
 // they are what marks the canvas and what any future consumer (MCP, export)
 // would want unaggregated.
 type Summary struct {
+	RootID  string         `json:"rootId,omitempty"`
+	Branch  string         `json:"branch,omitempty"`
 	Since   int64          `json:"since"`
 	Until   int64          `json:"until"`
 	Files   []FileChange   `json:"files"`
