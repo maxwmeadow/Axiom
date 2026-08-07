@@ -229,14 +229,14 @@ func (s *Server) launchRootSync(sqlDB *sql.DB, root db.Root, fullIndex bool) {
 				log.Printf("api: index root %s: %v", root.Path, err)
 				return
 			}
-			if root.IsPrimary {
-				baselineAt := time.Now().UnixMilli()
-				if err := db.SetDeltaReviewedAt(sqlDB, root.WorkspaceID, baselineAt); err != nil {
-					log.Printf("api: baseline delta watermark for %s: %v", root.WorkspaceID, err)
-				}
-				if _, err := s.saveDeltaSnapshot(sqlDB, root.WorkspaceID, baselineAt); err != nil {
-					log.Printf("api: baseline delta snapshot for %s: %v", root.WorkspaceID, err)
-				}
+			baselineAt := time.Now().UnixMilli()
+			if err := db.SetDeltaReviewedAtForRoot(
+				sqlDB, root.WorkspaceID, root.ID, baselineAt,
+			); err != nil {
+				log.Printf("api: baseline delta watermark for %s/%s: %v", root.WorkspaceID, root.ID, err)
+			}
+			if _, err := s.saveDeltaSnapshotForRoot(sqlDB, root, baselineAt); err != nil {
+				log.Printf("api: baseline delta snapshot for %s/%s: %v", root.WorkspaceID, root.ID, err)
 			}
 		} else {
 			if _, err := indexer.ReconcileRoot(sqlDB, s.hub, root, root.IgnoredPaths); err != nil {
@@ -256,7 +256,11 @@ func (s *Server) launchRootSync(sqlDB *sql.DB, root db.Root, fullIndex bool) {
 		if snapshot != nil {
 			s.hub.BroadcastSnapshot(snapshot)
 		}
-		s.hub.Broadcast("delta:ready", map[string]any{"workspaceId": root.WorkspaceID})
+		s.hub.Broadcast("delta:ready", map[string]any{
+			"workspaceId": root.WorkspaceID,
+			"rootId":      root.ID,
+			"branch":      root.Branch,
+		})
 	}()
 }
 

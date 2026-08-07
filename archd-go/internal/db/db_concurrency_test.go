@@ -144,7 +144,8 @@ func TestOpenAddsWorktreeMetadataToLegacyRootWithoutReindex(t *testing.T) {
 		CREATE TABLE workspaces (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
-			opened_at INTEGER NOT NULL
+			opened_at INTEGER NOT NULL,
+			delta_reviewed_at INTEGER NOT NULL DEFAULT 0
 		);
 		CREATE TABLE roots (
 			id TEXT PRIMARY KEY,
@@ -198,7 +199,8 @@ func TestOpenAddsWorktreeMetadataToLegacyRootWithoutReindex(t *testing.T) {
 			status TEXT NOT NULL DEFAULT 'ok',
 			error TEXT NOT NULL DEFAULT ''
 		);
-		INSERT INTO workspaces (id, name, opened_at) VALUES ('ws', 'legacy', 1);
+		INSERT INTO workspaces (id, name, opened_at, delta_reviewed_at)
+		VALUES ('ws', 'legacy', 1, 321);
 		INSERT INTO roots (
 			id, workspace_id, path, indexed_at, classifier_version,
 			ignored_paths_json, source_boundaries_reviewed_at
@@ -224,6 +226,10 @@ func TestOpenAddsWorktreeMetadataToLegacyRootWithoutReindex(t *testing.T) {
 	}
 	if len(roots) != 1 || roots[0].IndexedAt == nil || *roots[0].IndexedAt != 123 || !roots[0].IsActive {
 		t.Fatalf("legacy root migration = %#v", roots)
+	}
+	reviewedAt, err := GetDeltaReviewedAtForRoot(migrated, "ws", "root")
+	if err != nil || reviewedAt != 321 {
+		t.Fatalf("legacy primary watermark = %d, err = %v", reviewedAt, err)
 	}
 	events, err := GetStructuralEvents(migrated, "ws", 0)
 	if err != nil || len(events) != 1 || events[0].RootID != "root" || events[0].Branch != "" {

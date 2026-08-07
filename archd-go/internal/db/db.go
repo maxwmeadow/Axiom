@@ -94,7 +94,8 @@ func migrate(db *sql.DB) error {
 		indexed_at    INTEGER,
 		classifier_version INTEGER NOT NULL DEFAULT 0,
 		ignored_paths_json TEXT NOT NULL DEFAULT '[]',
-		source_boundaries_reviewed_at INTEGER
+		source_boundaries_reviewed_at INTEGER,
+		delta_reviewed_at INTEGER
 	);
 
 	-- ─── Systems ──────────────────────────────────────────────────────────────
@@ -404,6 +405,17 @@ func migrate(db *sql.DB) error {
 		PRIMARY KEY(workspace_id, at)
 	);
 	CREATE INDEX IF NOT EXISTS delta_snapshots_ws ON delta_snapshots(workspace_id, at);
+	-- Branch-local snapshots are additive. Legacy workspace snapshots remain
+	-- readable as the primary root's fallback at pre-migration watermarks.
+	CREATE TABLE IF NOT EXISTS root_delta_snapshots (
+		root_id   TEXT NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
+		branch    TEXT NOT NULL,
+		at        INTEGER NOT NULL,
+		snapshot  TEXT NOT NULL,
+		PRIMARY KEY(root_id, branch, at)
+	);
+	CREATE INDEX IF NOT EXISTS root_delta_snapshots_root
+		ON root_delta_snapshots(root_id, branch, at);
 
 	-- An agent's own account of what it set out to do. Structural facts are
 	-- true but thin; narration is how the agent writes intent INTO the map so
@@ -593,6 +605,9 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE roots ADD COLUMN head_commit TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE roots ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE roots ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1`,
+		// The primary root falls back to the legacy workspace watermark while
+		// this remains NULL; no existing acknowledgement is rewritten.
+		`ALTER TABLE roots ADD COLUMN delta_reviewed_at INTEGER`,
 		// Parallel-agent history is stamped at write time. NULL deliberately
 		// remains the legacy representation and resolves to the primary root.
 		`ALTER TABLE structural_events ADD COLUMN root_id TEXT`,

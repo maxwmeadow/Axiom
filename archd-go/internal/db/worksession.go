@@ -270,6 +270,24 @@ func GetWorkSessions(db *sql.DB, workspaceID string, since int64) ([]WorkSession
 		workspace_id = ? AND (ended_at = 0 OR ended_at > ?)`, workspaceID, since)
 }
 
+func GetWorkSessionsForRoot(
+	db *sql.DB,
+	workspaceID, rootID, branch string,
+	since int64,
+) ([]WorkSession, error) {
+	rootID, branch = completeHistoryIdentity(db, workspaceID, rootID, branch)
+	return getWorkSessions(db, workspaceID, `
+		workspace_id = ? AND (ended_at = 0 OR ended_at > ?)
+		AND COALESCE(root_id, (
+			SELECT r.id FROM roots r WHERE r.workspace_id=work_sessions.workspace_id
+			ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		), '') = ?
+		AND COALESCE(branch, (
+			SELECT r.branch FROM roots r WHERE r.workspace_id=work_sessions.workspace_id
+			ORDER BY r.is_primary DESC, r.is_active DESC, r.path LIMIT 1
+		), '') = ?`, workspaceID, since, rootID, branch)
+}
+
 func getWorkSessions(db *sql.DB, workspaceID, where string, args ...any) ([]WorkSession, error) {
 	rows, err := db.Query(`
 		SELECT `+workSessionColumns+`

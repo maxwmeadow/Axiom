@@ -579,3 +579,18 @@ export interface DeltaClaim {
 // Worktree, branch, and cross-branch types belong below this line. Keeping them
 // in one appended block means the parallel-agents worktree and the workbench-
 // spine worktree can both touch this file without colliding in its middle.
+
+export interface DeltaWorkSession {
+  rootId?: string
+  branch?: string
+}
+
+export interface DeltaSummary {
+  rootId?: string
+  branch?: string
+}
+
+export interface AgentAction {
+  rootId?: string
+  branch?: string
+}

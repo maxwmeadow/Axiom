@@ -144,3 +144,76 @@ func TestNewUnscopedHistoryStampsPrimaryRoot(t *testing.T) {
 		t.Fatalf("unscoped action identity = %#v", action)
 	}
 }
+
+func TestDeltaWatermarksAreIndependentByRoot(t *testing.T) {
+	sqlDB := branchHistoryTestDB(t)
+	if _, err := sqlDB.Exec(`UPDATE workspaces SET delta_reviewed_at=50 WHERE id='ws'`); err != nil {
+		t.Fatal(err)
+	}
+	primary, err := GetDeltaReviewedAtForRoot(sqlDB, "ws", "primary")
+	if err != nil || primary != 50 {
+		t.Fatalf("primary legacy watermark = %d, err = %v", primary, err)
+	}
+	branch, err := GetDeltaReviewedAtForRoot(sqlDB, "ws", "branch")
+	if err != nil || branch != 0 {
+		t.Fatalf("new branch inherited workspace watermark = %d, err = %v", branch, err)
+	}
+	if err := SetDeltaReviewedAtForRoot(sqlDB, "ws", "primary", 40); err != nil {
+		t.Fatal(err)
+	}
+	primary, _ = GetDeltaReviewedAtForRoot(sqlDB, "ws", "primary")
+	if primary != 50 {
+		t.Fatalf("late primary acknowledgement moved legacy watermark backwards to %d", primary)
+	}
+	if err := SetDeltaReviewedAtForRoot(sqlDB, "ws", "primary", 75); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDeltaReviewedAtForRoot(sqlDB, "ws", "branch", 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDeltaReviewedAtForRoot(sqlDB, "ws", "branch", 90); err != nil {
+		t.Fatal(err)
+	}
+	primary, _ = GetDeltaReviewedAtForRoot(sqlDB, "ws", "primary")
+	branch, _ = GetDeltaReviewedAtForRoot(sqlDB, "ws", "branch")
+	if primary != 75 || branch != 100 {
+		t.Fatalf("independent watermarks = primary:%d branch:%d", primary, branch)
+	}
+	var legacy int64
+	if err := sqlDB.QueryRow(`SELECT delta_reviewed_at FROM workspaces WHERE id='ws'`).Scan(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy != 50 {
+		t.Fatalf("per-root acknowledgement rewrote legacy workspace watermark to %d", legacy)
+	}
+}
+
+func TestRootDeltaSnapshotsAreBranchIsolatedWithLegacyPrimaryFallback(t *testing.T) {
+	sqlDB := branchHistoryTestDB(t)
+	if err := SaveDeltaSnapshot(sqlDB, "ws", 50, `{"legacy":true}`); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := GetDeltaSnapshotForRoot(sqlDB, "ws", "primary", "main", 50)
+	if err != nil || legacy != `{"legacy":true}` {
+		t.Fatalf("primary legacy snapshot = %q, err = %v", legacy, err)
+	}
+	if err := SaveDeltaSnapshotForRoot(
+		sqlDB, "ws", "branch", "feature/agents", 100, `{"branch":"agents"}`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveDeltaSnapshotForRoot(
+		sqlDB, "ws", "branch", "feature/renamed", 100, `{"branch":"renamed"}`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for branch, want := range map[string]string{
+		"feature/agents":  `{"branch":"agents"}`,
+		"feature/renamed": `{"branch":"renamed"}`,
+	} {
+		got, getErr := GetDeltaSnapshotForRoot(sqlDB, "ws", "branch", branch, 100)
+		if getErr != nil || got != want {
+			t.Fatalf("snapshot for %s = %q, err = %v", branch, got, getErr)
+		}
+	}
+}
