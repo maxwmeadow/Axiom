@@ -13,6 +13,14 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+const (
+	// SQLite still permits a single writer, but WAL mode lets readers continue
+	// while that writer is active. A bounded pool prevents watcher writes from
+	// occupying the only connection and stalling API reads behind them.
+	maxOpenConnections = 8
+	busyTimeoutMillis  = 5000
+)
+
 // Open creates (or opens) the SQLite database at the given path and runs
 // all schema migrations. Returns a ready-to-use *sql.DB.
 func Open(dataDir string) (*sql.DB, error) {
@@ -21,12 +29,18 @@ func Open(dataDir string) (*sql.DB, error) {
 	}
 
 	dbPath := filepath.Join(dataDir, "axiom.db")
-	db, err := sql.Open("sqlite3", dbPath+"?_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL")
+	dsn := fmt.Sprintf(
+		"%s?_foreign_keys=on&_journal_mode=WAL&_synchronous=NORMAL&_busy_timeout=%d&_txlock=immediate",
+		dbPath,
+		busyTimeoutMillis,
+	)
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	db.SetMaxOpenConns(1) // SQLite is not safe for concurrent writes
+	db.SetMaxOpenConns(maxOpenConnections)
+	db.SetMaxIdleConns(maxOpenConnections)
 
 	if err := migrate(db); err != nil {
 		db.Close()

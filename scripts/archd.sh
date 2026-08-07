@@ -17,7 +17,9 @@
 # the mingw64 toolchain is not interchangeable here.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[[ "$SCRIPT_DIR" == "${BASH_SOURCE[0]}" ]] && SCRIPT_DIR="."
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT/archd-go"
 
 export PATH="/mingw64/bin:/mingw64/lib/go/bin:$PATH"

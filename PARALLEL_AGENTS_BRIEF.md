@@ -113,6 +113,16 @@ The alternative — stamping `branch_id` everywhere and raising the connection
 limit — means auditing every write path for concurrency safety. That is a much
 larger surface to get wrong.
 
+**Implemented decision:** retain the existing per-workspace database, WAL mode,
+and on-disk path, but replace the single-connection bottleneck with a bounded
+connection pool, a busy timeout, and immediate write transactions. A database
+per root would split workspace-owned authored state (systems, layouts, sheets,
+plans, and proposals) or require a second control database plus federation
+across nearly every API. The graph is already root-scoped at its file boundary,
+so additive root stamps on branch-specific history are the smaller and safer
+migration. Concurrency tests require UI-style reads to complete while a writer
+is active and exercise parallel writes without lock failures.
+
 Whichever you pick, the per-workspace DB layout on disk must stay
 backward-compatible: an existing project must open without re-indexing.
 
