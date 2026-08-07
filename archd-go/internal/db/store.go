@@ -26,6 +26,10 @@ type Root struct {
 	ID                         string   `json:"id"`
 	WorkspaceID                string   `json:"workspaceId"`
 	Path                       string   `json:"path"`
+	Branch                     string   `json:"branch"`
+	HeadCommit                 string   `json:"headCommit"`
+	IsPrimary                  bool     `json:"isPrimary"`
+	IsActive                   bool     `json:"isActive"`
 	IndexedAt                  *int64   `json:"indexedAt"`
 	ClassifierVersion          int      `json:"classifierVersion"`
 	IgnoredPaths               []string `json:"ignoredPaths"`
@@ -158,32 +162,43 @@ func GetWorkspace(db *sql.DB, id string) (*Workspace, error) {
 // ─── Roots ────────────────────────────────────────────────────────────────────
 
 func UpsertRoot(db *sql.DB, r Root) error {
+	// UpsertRoot registers a live filesystem root. Deactivation is an explicit
+	// lifecycle operation so legacy callers that predate IsActive stay active.
+	r.IsActive = true
 	ignoredJSON, err := json.Marshal(r.IgnoredPaths)
 	if err != nil {
 		return fmt.Errorf("encode ignored paths: %w", err)
 	}
 	_, err = db.Exec(`
 		INSERT INTO roots
-			(id, workspace_id, path, indexed_at, classifier_version,
+			(id, workspace_id, path, branch, head_commit, is_primary, is_active,
+			 indexed_at, classifier_version,
 			 ignored_paths_json, source_boundaries_reviewed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			path=excluded.path,
+			branch=excluded.branch,
+			head_commit=excluded.head_commit,
+			is_primary=excluded.is_primary,
+			is_active=excluded.is_active,
 			ignored_paths_json=excluded.ignored_paths_json,
 			source_boundaries_reviewed_at=COALESCE(
 				excluded.source_boundaries_reviewed_at,
 				roots.source_boundaries_reviewed_at
 			)`,
-		r.ID, r.WorkspaceID, r.Path, r.IndexedAt, r.ClassifierVersion,
+		r.ID, r.WorkspaceID, r.Path, r.Branch, r.HeadCommit, r.IsPrimary, r.IsActive,
+		r.IndexedAt, r.ClassifierVersion,
 		string(ignoredJSON), r.SourceBoundariesReviewedAt)
 	return err
 }
 
 func GetRoots(db *sql.DB, workspaceID string) ([]Root, error) {
 	rows, err := db.Query(`
-		SELECT id, workspace_id, path, indexed_at, classifier_version,
+		SELECT id, workspace_id, path, branch, head_commit, is_primary, is_active,
+		       indexed_at, classifier_version,
 		       ignored_paths_json, source_boundaries_reviewed_at
-		FROM roots WHERE workspace_id = ?`, workspaceID)
+		FROM roots WHERE workspace_id = ?
+		ORDER BY is_primary DESC, is_active DESC, path`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +208,8 @@ func GetRoots(db *sql.DB, workspaceID string) ([]Root, error) {
 		var r Root
 		var ignoredJSON string
 		if err := rows.Scan(
-			&r.ID, &r.WorkspaceID, &r.Path, &r.IndexedAt, &r.ClassifierVersion,
+			&r.ID, &r.WorkspaceID, &r.Path, &r.Branch, &r.HeadCommit,
+			&r.IsPrimary, &r.IsActive, &r.IndexedAt, &r.ClassifierVersion,
 			&ignoredJSON, &r.SourceBoundariesReviewedAt,
 		); err != nil {
 			return nil, err
@@ -204,6 +220,37 @@ func GetRoots(db *sql.DB, workspaceID string) ([]Root, error) {
 		roots = append(roots, r)
 	}
 	return roots, rows.Err()
+}
+
+func GetActiveRoots(db *sql.DB, workspaceID string) ([]Root, error) {
+	roots, err := GetRoots(db, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	active := make([]Root, 0, len(roots))
+	for _, root := range roots {
+		if root.IsActive {
+			active = append(active, root)
+		}
+	}
+	return active, nil
+}
+
+// DeactivateRoot removes its current graph projection while preserving the
+// root row and denormalized history for a later re-add or historical review.
+func DeactivateRoot(db *sql.DB, rootID string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`DELETE FROM files WHERE root_id=?`, rootID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE roots SET is_active=0, indexed_at=NULL WHERE id=?`, rootID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func MarkRootIndexed(db *sql.DB, rootID string, classifierVersion int) error {
@@ -410,7 +457,8 @@ func ApplyClusterPlan(
 	for _, id := range staleSystemIDs {
 		result, deleteErr := tx.Exec(`
 			DELETE FROM systems
-			WHERE id=? AND workspace_id=? AND source IN ('cluster','directory')`,
+			WHERE id=? AND workspace_id=? AND source IN ('cluster','directory')
+			  AND NOT EXISTS (SELECT 1 FROM files WHERE system_id=systems.id)`,
 			id, workspaceID,
 		)
 		if deleteErr != nil {

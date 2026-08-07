@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -129,5 +131,52 @@ func TestOpenPreservesIndexedWorkspaceAtLegacyDatabasePath(t *testing.T) {
 	}
 	if len(roots) != 1 || roots[0].IndexedAt == nil || *roots[0].IndexedAt == 0 {
 		t.Fatalf("reopened root lost its indexed state: %#v", roots)
+	}
+}
+
+func TestOpenAddsWorktreeMetadataToLegacyRootWithoutReindex(t *testing.T) {
+	dataDir := t.TempDir()
+	legacy, err := sql.Open("sqlite3", filepath.Join(dataDir, "axiom.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`
+		CREATE TABLE workspaces (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			opened_at INTEGER NOT NULL
+		);
+		CREATE TABLE roots (
+			id TEXT PRIMARY KEY,
+			workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+			path TEXT NOT NULL,
+			indexed_at INTEGER,
+			classifier_version INTEGER NOT NULL DEFAULT 0,
+			ignored_paths_json TEXT NOT NULL DEFAULT '[]',
+			source_boundaries_reviewed_at INTEGER
+		);
+		INSERT INTO workspaces (id, name, opened_at) VALUES ('ws', 'legacy', 1);
+		INSERT INTO roots (
+			id, workspace_id, path, indexed_at, classifier_version,
+			ignored_paths_json, source_boundaries_reviewed_at
+		) VALUES ('root', 'ws', 'C:/legacy', 123, 3, '[]', NULL);
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = migrated.Close() })
+	roots, err := GetRoots(migrated, "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(roots) != 1 || roots[0].IndexedAt == nil || *roots[0].IndexedAt != 123 || !roots[0].IsActive {
+		t.Fatalf("legacy root migration = %#v", roots)
 	}
 }

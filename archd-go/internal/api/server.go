@@ -19,9 +19,7 @@
 package api
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -38,8 +36,8 @@ import (
 
 	"axiom.local/archd/internal/activity"
 	"axiom.local/archd/internal/db"
+	"axiom.local/archd/internal/gitworktree"
 	"axiom.local/archd/internal/hub"
-	"axiom.local/archd/internal/indexer"
 	"axiom.local/archd/internal/registry"
 	"axiom.local/archd/internal/runtime"
 	"axiom.local/archd/internal/watcher"
@@ -66,17 +64,29 @@ type Server struct {
 	// re-index and feed the activity engine. Keyed by root ID; closed on
 	// workspace close.
 	watchers map[string]*watcher.Watcher
+	// worktree discovery is polled because linked-worktree metadata lives in
+	// Git's shared administration directory, outside the watched source roots.
+	discoverWorktrees func(string) ([]gitworktree.Worktree, error)
+	worktreeRefresh   time.Duration
+	worktreeMonitors  map[string]worktreeMonitor
+	rootSyncing       map[string]bool
+	rootSyncPending   map[string]pendingRootSync
 }
 
 func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
 	s := &Server{
-		dataDir:  dataDir,
-		dbs:      make(map[string]*sql.DB),
-		hub:      h,
-		roots:    make(map[string]db.Root),
-		runtime:  rt,
-		registry: registry.Load(nil),
-		watchers: make(map[string]*watcher.Watcher),
+		dataDir:           dataDir,
+		dbs:               make(map[string]*sql.DB),
+		hub:               h,
+		roots:             make(map[string]db.Root),
+		runtime:           rt,
+		registry:          registry.Load(nil),
+		watchers:          make(map[string]*watcher.Watcher),
+		discoverWorktrees: gitworktree.Discover,
+		worktreeRefresh:   2 * time.Second,
+		worktreeMonitors:  make(map[string]worktreeMonitor),
+		rootSyncing:       make(map[string]bool),
+		rootSyncPending:   make(map[string]pendingRootSync),
 	}
 	// Adapters started outside the launcher (PYTHONPATH opt-in) have no
 	// AXIOM_WORKSPACE_ID; map them to a workspace by their working directory.
@@ -143,19 +153,36 @@ func (s *Server) dbFor(workspaceID string) (*sql.DB, error) {
 // project directory so the file lock is released (important on Windows).
 func (s *Server) closeDB(workspaceID string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	monitor, hasMonitor := s.worktreeMonitors[workspaceID]
+	if hasMonitor {
+		monitor.cancel()
+		delete(s.worktreeMonitors, workspaceID)
+	}
+	s.mu.Unlock()
+	if hasMonitor {
+		<-monitor.done
+	}
+
+	s.mu.Lock()
+	watchers := make([]*watcher.Watcher, 0)
 	for rootID, r := range s.roots {
 		if r.WorkspaceID == workspaceID {
 			if w, ok := s.watchers[rootID]; ok {
-				w.Close()
+				watchers = append(watchers, w)
 				delete(s.watchers, rootID)
 			}
 			delete(s.roots, rootID)
+			delete(s.rootSyncPending, rootID)
 		}
 	}
-	if d, ok := s.dbs[workspaceID]; ok {
-		d.Close()
-		delete(s.dbs, workspaceID)
+	d := s.dbs[workspaceID]
+	delete(s.dbs, workspaceID)
+	s.mu.Unlock()
+	for _, w := range watchers {
+		_ = w.Close()
+	}
+	if d != nil {
+		_ = d.Close()
 	}
 }
 
@@ -164,18 +191,41 @@ func (s *Server) closeDB(workspaceID string) {
 // Idempotent per root — re-opening a workspace reuses the running watcher.
 func (s *Server) startWatcher(sqlDB *sql.DB, root db.Root) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.watchers[root.ID]; ok {
+	s.roots[root.ID] = root
+	if existing, ok := s.watchers[root.ID]; ok {
+		existing.UpdateRoot(root)
+		s.mu.Unlock()
 		return
 	}
+	s.mu.Unlock()
 	w, err := watcher.New(sqlDB, s.hub, []db.Root{root})
 	if err != nil {
 		log.Printf("api: start watcher for %s: %v", root.Path, err)
 		return
 	}
+	s.mu.Lock()
+	if existing, ok := s.watchers[root.ID]; ok {
+		s.mu.Unlock()
+		_ = w.Close()
+		existing.UpdateRoot(root)
+		return
+	}
 	s.watchers[root.ID] = w
+	s.roots[root.ID] = root
+	s.mu.Unlock()
 	go w.Run()
 	log.Printf("api: watcher attached to %s", root.Path)
+}
+
+func (s *Server) stopWatcher(rootID string) {
+	s.mu.Lock()
+	w := s.watchers[rootID]
+	delete(s.watchers, rootID)
+	delete(s.roots, rootID)
+	s.mu.Unlock()
+	if w != nil {
+		_ = w.Close()
+	}
 }
 
 // RegisterRoutes wires all API endpoints onto mux.
@@ -185,6 +235,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/workspace-scope/", s.handleWorkspaceScope)
 	mux.HandleFunc("/api/workspace/", s.handleWorkspaceByID)
 	mux.HandleFunc("/api/workspace", s.handleWorkspace)
+	mux.HandleFunc("/api/roots", s.handleRoots)
 	mux.HandleFunc("/api/systems", s.handleSystems)
 	mux.HandleFunc("/api/systems/", s.handleSystemByID)
 	mux.HandleFunc("/api/files/", s.handleFileByID)
@@ -324,106 +375,29 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, err.Error(), 500)
 		return
 	}
-	// Use a stable root ID derived from workspace+path so re-opens reuse the same row.
-	h := sha256.Sum256([]byte(wsID + "|" + req.RootPath))
-	rootID := hex.EncodeToString(h[:])[:32]
-	root := db.Root{
-		ID:                         rootID,
-		WorkspaceID:                wsID,
-		Path:                       req.RootPath,
+	worktrees, isGitWorkspace := s.discoverInitialWorktrees(req.RootPath)
+	options := rootOpenOptions{
 		IgnoredPaths:               req.IgnoredPaths,
 		SourceBoundariesReviewedAt: req.SourceBoundariesReviewedAt,
 	}
-	// Check if this root has been successfully indexed before.
-	// On first open: wipe any stale data and do a full index.
-	// On re-open: skip the wipe — indexer upserts only what changed.
-	alreadyIndexed := false
-	classifierVersion := 0
-	if existing, err := db.GetRoots(sqlDB, wsID); err == nil {
-		for _, r := range existing {
-			if r.ID == rootID {
-				if root.SourceBoundariesReviewedAt == nil && r.SourceBoundariesReviewedAt != nil {
-					root.IgnoredPaths = r.IgnoredPaths
-					root.SourceBoundariesReviewedAt = r.SourceBoundariesReviewedAt
-				}
-				if r.IndexedAt != nil && *r.IndexedAt > 0 {
-					alreadyIndexed = true
-					classifierVersion = r.ClassifierVersion
-				}
-				break
-			}
-		}
-	}
-	if !alreadyIndexed {
-		if err := db.DeleteFilesByWorkspace(sqlDB, wsID); err != nil {
-			log.Printf("api: clear files for workspace %s: %v", wsID, err)
-		}
-		if err := db.DeleteDirectorySystemsByWorkspace(sqlDB, wsID); err != nil {
-			log.Printf("api: clear directory systems for workspace %s: %v", wsID, err)
-		}
-	}
-	log.Printf("[api] workspace %s alreadyIndexed=%v", wsID, alreadyIndexed)
-	if err := db.UpsertRoot(sqlDB, root); err != nil {
-		jsonError(w, err.Error(), 500)
+	rootID, err := s.syncWorkspaceWorktrees(
+		sqlDB, wsID, req.RootPath, worktrees, options, true, true,
+	)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.roots[root.ID] = root
-	s.reloadRegistry() // pick up the workspace's .axiom/services/ layer
-	s.startWatcher(sqlDB, root)
+	if isGitWorkspace {
+		monitorOptions := options
+		monitorOptions.IgnoredPaths = ignoredPathsForWorktree(
+			options.IgnoredPaths,
+			req.RootPath,
+			worktrees[0].Path,
+		)
+		s.startWorktreeMonitor(sqlDB, wsID, worktrees[0].Path, monitorOptions)
+	}
 
-	// Kick off indexing in the background.
-	// On first open: full index + cluster. On re-open: skip re-indexing to preserve
-	// user-arranged positions — the watcher handles live file changes.
-	// Run a cluster-only pass when systems are absent or the persisted classifier
-	// contract is stale. This migrates inferred boundaries without reparsing files.
-	go func() {
-		if !alreadyIndexed {
-			if err := indexer.IndexRoot(sqlDB, s.hub, root, root.IgnoredPaths); err != nil {
-				log.Printf("api: index root %s: %v", root.Path, err)
-				return
-			}
-			// The initial index journals the whole codebase. That is the
-			// project's baseline, not a delta — presenting it as "what changed
-			// while you were away" would be false. Mark it reviewed.
-			baselineAt := time.Now().UnixMilli()
-			if err := db.SetDeltaReviewedAt(sqlDB, wsID, baselineAt); err != nil {
-				log.Printf("api: baseline delta watermark for %s: %v", wsID, err)
-			}
-			if _, err := s.saveDeltaSnapshot(sqlDB, wsID, baselineAt); err != nil {
-				log.Printf("api: baseline delta snapshot for %s: %v", wsID, err)
-			}
-		} else {
-			// Catch the graph up with whatever happened while Axiom was not
-			// running. This is what makes the Morning Delta true for its
-			// headline case: agents worked overnight with the app closed.
-			if _, err := indexer.ReconcileRoot(sqlDB, s.hub, root, root.IgnoredPaths); err != nil {
-				log.Printf("api: reconcile %s: %v", root.Path, err)
-			}
-			snap, _ := db.GetCanvasSnapshot(sqlDB, wsID)
-			needsCluster := snap != nil && len(snap.Files) > 0 &&
-				(len(snap.Systems) == 0 || classifierVersion < indexer.ClassifierVersion)
-			if needsCluster {
-				reason := "classifier contract is stale"
-				if len(snap.Systems) == 0 {
-					reason = "no inferred systems exist"
-				}
-				log.Printf("[api] workspace %s: already indexed but %s; rebuilding semantic evidence and systems", wsID, reason)
-				if err := indexer.ClusterOnly(sqlDB, root); err != nil {
-					log.Printf("api: cluster-only %s: %v", root.Path, err)
-				}
-			}
-		}
-		snap, _ := db.GetCanvasSnapshot(sqlDB, wsID)
-		if snap != nil {
-			s.hub.BroadcastSnapshot(snap)
-		}
-		// Only now is the journal settled: baseline, reconciliation, and any
-		// migration have all finished. Telling the renderer explicitly avoids
-		// it racing the catch-up pass and reading an empty delta.
-		s.hub.Broadcast("delta:ready", map[string]any{"workspaceId": wsID})
-	}()
-
-	jsonOK(w, map[string]any{"workspaceId": wsID, "rootId": root.ID})
+	jsonOK(w, map[string]any{"workspaceId": wsID, "rootId": rootID})
 }
 
 // handleWorkspaceByID handles DELETE /api/workspace/:id.

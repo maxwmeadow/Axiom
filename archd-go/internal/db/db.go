@@ -87,6 +87,10 @@ func migrate(db *sql.DB) error {
 		id            TEXT PRIMARY KEY,
 		workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
 		path          TEXT NOT NULL,
+		branch        TEXT NOT NULL DEFAULT '',
+		head_commit   TEXT NOT NULL DEFAULT '',
+		is_primary   INTEGER NOT NULL DEFAULT 0,
+		is_active    INTEGER NOT NULL DEFAULT 1,
 		indexed_at    INTEGER,
 		classifier_version INTEGER NOT NULL DEFAULT 0,
 		ignored_paths_json TEXT NOT NULL DEFAULT '[]',
@@ -577,6 +581,12 @@ func migrate(db *sql.DB) error {
 		// An empty JSON array is a valid completed "include everything" choice.
 		`ALTER TABLE roots ADD COLUMN ignored_paths_json TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE roots ADD COLUMN source_boundaries_reviewed_at INTEGER`,
+		// Git worktrees are live roots. Existing roots stay active by default and
+		// are identified as primary on the next workspace reconciliation.
+		`ALTER TABLE roots ADD COLUMN branch TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE roots ADD COLUMN head_commit TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE roots ADD COLUMN is_primary INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE roots ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1`,
 		// Planned UML authoring: semantic shape + user color (REVISION 2 UX)
 		`ALTER TABLE planned_nodes ADD COLUMN shape TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE planned_nodes ADD COLUMN color TEXT NOT NULL DEFAULT ''`,
