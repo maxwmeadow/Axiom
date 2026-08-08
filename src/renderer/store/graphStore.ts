@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { shouldAnimateIndividualClassification } from '../canvas/canvasPerformance.ts'
 import type {
   AgentAction,
   ProjectConfig,
@@ -282,6 +283,7 @@ interface GraphState {
   setInspectedNode: (id: string | null) => void
   setInfraPickerNode: (id: string | null) => void
   setIndexingProgress: (progress: { indexed: number; total: number } | null) => void
+  beginIndexing: () => void
   setIndexingComplete: () => void
   setConnectionStatus: (s: 'disconnected' | 'connecting' | 'connected') => void
   setSelectionMode: (active: boolean) => void
@@ -599,6 +601,8 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       infraNodes: [],
       dependencies: [],
       floorLayouts: [],
+      indexingProgress: null,
+      isIndexing: false,
       expandedSystemIds: new Set<string>(),
       selectedNodeId: null,
       inspectedNodeId: null,
@@ -640,6 +644,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
       .filter(dependency => !pendingDeletionIds.has(dependency.src) && !pendingDeletionIds.has(dependency.dst))
     const nextFloorLayouts = (snap.floorLayouts ?? state.floorLayouts)
       .filter(layout => !(layout.nodeType === 'file' && pendingDeletionIds.has(layout.nodeId)))
+    const classificationMoveCount = nextFiles.reduce((count, file) => {
+      const previous = previousFiles.get(file.id)
+      return count + (previous && previous.systemId !== file.systemId ? 1 : 0)
+    }, 0)
+    const animateIndividualFiles = shouldAnimateIndividualClassification(classificationMoveCount)
 
     for (const system of snap.systems ?? []) {
       if (previousSystems.has(system.id)) continue
@@ -651,6 +660,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     for (const file of nextFiles) {
       const previous = previousFiles.get(file.id)
       if (!previous || previous.systemId === file.systemId) continue
+      // A baseline reconciliation can move hundreds of files at once. Their
+      // new systems still receive the enter choreography above, but revealing
+      // every hidden file for its own settle animation defeats semantic-zoom
+      // virtualization during the most expensive frame of project startup.
+      if (!animateIndividualFiles) continue
       // Do not cut off the stronger green creation signal when classification
       // lands during the same write burst.
       if (nextFx[file.id]?.kind === 'enter') continue
@@ -995,6 +1009,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     isIndexing: progress !== null,
   }),
 
+  // Project registration starts indexing before the first progress event can
+  // arrive. Mark that boundary explicitly so a large raw snapshot cannot be
+  // painted as a temporary file-only Floor in the gap.
+  beginIndexing: () => set({ indexingProgress: null, isIndexing: true }),
+
   setIndexingComplete: () => set({ indexingProgress: null, isIndexing: false }),
 
   setConnectionStatus: (s) => set({ connectionStatus: s }),
@@ -1324,6 +1343,10 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
     // archd has finished baseline/reconciliation, so the journal is settled
     // and the Morning Delta can be read without racing the catch-up pass.
     case 'delta:ready':
+      // Existing projects reconcile instead of running the full indexer, so
+      // they do not emit indexing:complete. delta:ready is the shared terminal
+      // event for both paths and closes the explicit beginIndexing boundary.
+      store.setIndexingComplete()
       void store.loadDelta()
       break
     case 'agent:action':

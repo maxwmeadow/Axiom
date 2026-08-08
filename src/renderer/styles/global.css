@@ -2885,6 +2885,49 @@ select.axiom-inspector-input {
   margin: 12px !important;
 }
 
+.axiom-canvas-materializing {
+  margin-top: 14px !important;
+  pointer-events: none;
+}
+
+.axiom-canvas-materializing > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 310px;
+  padding: 10px 14px;
+  border: 1px solid #6f7b76;
+  border-radius: 2px;
+  background: linear-gradient(#efede5, #d3d3ca);
+  box-shadow: 3px 3px 0 rgba(29, 35, 32, 0.38), inset 0 1px #fff;
+  color: #263d38;
+}
+
+.axiom-canvas-materializing span {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 9px;
+  border: 1px solid #315e58;
+  background: #6ca49b;
+}
+
+.axiom-canvas-materializing strong,
+.axiom-canvas-materializing small {
+  display: block;
+}
+
+.axiom-canvas-materializing strong {
+  font: 700 10px/1.3 var(--font-mono);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.axiom-canvas-materializing small {
+  margin-top: 2px;
+  color: #5f6b66;
+  font: 500 9px/1.35 var(--font-sans);
+}
+
 .axiom-canvas-command {
   display: flex;
   align-items: center;

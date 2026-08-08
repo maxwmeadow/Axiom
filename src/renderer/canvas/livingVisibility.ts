@@ -198,6 +198,11 @@ export function surfaceLivingNodeFx(
     }
     return {
       ...node,
+      // Semantic zoom normally removes hidden descendants from React Flow's
+      // render set. A live edit intentionally reveals its exact authored node
+      // for the duration of the signal, then the base projection hides it
+      // again when the signal expires.
+      hidden: reveal ? false : node.hidden,
       zIndex: reveal ? Math.max(node.zIndex ?? 0, 9500) : node.zIndex,
       style: reveal
         ? {

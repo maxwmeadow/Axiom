@@ -74,7 +74,7 @@ import {
   stampSelection,
 } from './selectionController'
 import { planCanvasDrop } from './dropPersistence'
-import { applyZoomVisibility, makeFullyVisible } from './semanticZoom'
+import { applyZoomVisibility, makeFullyVisible, revealNodePath } from './semanticZoom'
 import { livingVisibilityIndex, surfaceLivingNodeFx } from './livingVisibility'
 import { applyDeltaMarks, buildDeltaReview, claimFocusTargets, clampClaimCursor } from './deltaReview'
 import { applyAgentAttention, surfaceAgentAttention } from './agentAttentionProjection'
@@ -88,6 +88,7 @@ import { routeWheelEvent, wheelScrollStep } from './wheelRouting'
 import { rectContainsRect } from './selectionResize'
 import { sheetEditableNodeIds } from './sheetEditability'
 import { advanceSceneMeasurement, sceneMeasurementIsSettled } from './initialCameraFit'
+import { LARGE_SCENE_NODE_COUNT, shouldDeferCanvasMaterialization } from './canvasPerformance'
 import {
   diffScene,
   recordSceneMutation,
@@ -1259,7 +1260,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const {
     systems, files, infraNodes, dependencies, floorLayouts,
     selectedNodeId, infraPickerNodeId, selectionMode, activeTrace, runtimeNodes, dataFlow, nodeFx, relationshipFx,
-    delta, activeWorkSessions, deltaReviewing, deltaCursor, agentAttention,
+    delta, activeWorkSessions, deltaReviewing, deltaCursor, agentAttention, isIndexing,
   } = useGraphStore(useShallow(s => ({
     agentAttention:  s.agentAttention,
     delta:           s.delta,
@@ -1279,6 +1280,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     dataFlow:        s.dataFlow,
     nodeFx:          s.nodeFx,
     relationshipFx:  s.relationshipFx,
+    isIndexing:       s.isIndexing,
   })))
 
   const { setSelectedNode, setInspectedNode, setInfraPickerNode, setSelectionMode } = useGraphStore(
@@ -1291,7 +1293,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   )
   const currentProject = useGraphStore(s => s.currentProject)
   const { fitView, getViewport, setViewport, getInternalNode, screenToFlowPosition } = useReactFlow()
-  const nodesInitialized = useNodesInitialized({ includeHiddenNodes: true })
+  // Semantically hidden descendants are intentionally not mounted. Camera
+  // readiness therefore tracks the visible render set rather than waiting for
+  // measurements that hidden nodes should never produce.
+  const nodesInitialized = useNodesInitialized()
   const livingVisibilityOptions = useMemo(() => {
     const semanticParentById = new Map<string, string | null>()
     const labelById = new Map<string, string>()
@@ -1319,6 +1324,17 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   ]), [systems, files, infraNodes])
   const canonicalNodeCount = canonicalNodeIds.size
   const sceneProjectId = currentProject?.id ?? 'demo'
+  const classifiedFileCount = useMemo(
+    () => files.reduce((count, file) => count + (file.systemId ? 1 : 0), 0),
+    [files],
+  )
+  const deferCanvasMaterialization = shouldDeferCanvasMaterialization({
+    isIndexing,
+    fileCount: files.length,
+    classifiedFileCount,
+    systemCount: systems.length,
+    floorLayoutCount: floorLayouts.length,
+  })
   // Memoized because this object is an effect dependency. Rebuilding it every
   // render restarts the debounce on the blank-canvas recovery below, which can
   // starve that recovery indefinitely during exactly the render storms (a save
@@ -1328,7 +1344,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     [candidateRfNodes, canonicalNodeCount, canonicalNodeIds],
   )
   const lastHealthySceneRef = useRef<{ projectId: string; nodes: Node[] } | null>(null)
-  if (candidateSceneIntegrity.valid && candidateRfNodes.length > 0) {
+  if (!deferCanvasMaterialization && candidateSceneIntegrity.valid && candidateRfNodes.length > 0) {
     lastHealthySceneRef.current = { projectId: sceneProjectId, nodes: candidateRfNodes }
   }
   const retainedCandidate = lastHealthySceneRef.current?.projectId === sceneProjectId
@@ -1342,10 +1358,13 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     retainedCandidate.every(node => canonicalNodeIds.has(node.id))
     ? retainedCandidate
     : null
-  const rfNodes = !candidateSceneIntegrity.valid && retainedScene?.length
-    ? retainedScene
-    : candidateRfNodes
+  const rfNodes = deferCanvasMaterialization
+    ? []
+    : !candidateSceneIntegrity.valid && retainedScene?.length
+      ? retainedScene
+      : candidateRfNodes
   useLayoutEffect(() => {
+    if (deferCanvasMaterialization) return
     if (candidateSceneIntegrity.valid || !retainedScene?.length) return
     console.error('[scene-integrity] rejected invalid Floor projection', {
       projectId: sceneProjectId,
@@ -1367,6 +1386,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     canonicalNodeCount,
     retainedScene,
     sceneProjectId,
+    deferCanvasMaterialization,
   ])
   // Sheet composition also needs the current zoom, so this ref must be
   // initialized before its memoized layout runs.
@@ -1385,6 +1405,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const lastUserMoveAtRef = useRef(0)
   const cameraFitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingInitialFitProjectRef = useRef<string | null>(null)
+  const runningInitialFitProjectRef = useRef<string | null>(null)
   const canvasRootRef = useRef<HTMLDivElement>(null)
   const domSceneRecoveryRef = useRef('')
   const cursorTraceSignatureRef = useRef('')
@@ -1858,6 +1879,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const displayNodes = sheetInteractionNodes ?? composedNodes
   const displayNodesRef = useRef<Node[]>(displayNodes)
   displayNodesRef.current = displayNodes
+  const navigableDisplayNodes = useMemo(
+    () => revealNodePath(displayNodes, selectedNodeId),
+    [displayNodes, selectedNodeId],
+  )
 
   /**
    * Record a new selection and repaint the scene from it in one step.
@@ -1886,12 +1911,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   // overwrite an in-flight edit signal in rfNodes.
   const livingDisplayNodes = useMemo(
     () => surfaceLivingNodeFx(
-      stampAgentPresence(displayNodes, activeWorkSessions),
+      stampAgentPresence(navigableDisplayNodes, activeWorkSessions),
       nodeFx,
       livingVisibilityOptions,
       livingRevealIds,
     ),
-    [displayNodes, activeWorkSessions, nodeFx, livingVisibilityOptions, livingRevealIds],
+    [navigableDisplayNodes, activeWorkSessions, nodeFx, livingVisibilityOptions, livingRevealIds],
   )
 
   // ── Morning Delta review ────────────────────────────────────────────────
@@ -2399,6 +2424,12 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   }, [workspaceIdForOverlay, sheetSystemIds, sheetFileIds, sheetInfraIds, sheetEffectiveLayouts])
 
   useEffect(() => {
+    if (deferCanvasMaterialization) {
+      pendingInitialFitProjectRef.current = null
+      setRfNodes(current => current.length === 0 ? current : [])
+      setRfEdges(current => current.length === 0 ? current : [])
+      return
+    }
     // The map must always show every file. A fresh project (agent building into
     // an empty folder) has files before any system exists — render them at the
     // top level rather than an empty Floor; live classification groups them into
@@ -2530,7 +2561,14 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         onResizeEnd: readOnly ? undefined : (params: NodeResizeParams) => onNodeResizeEnd(n.id, params),
       },
     }))
-    const withZoom = applyZoomVisibility(layoutWithCallbacks, currentZoomRef.current)
+    // A large first projection is about to be fitted to an overview. Starting
+    // its semantic tier at the default 0.5x would briefly mount every child of
+    // a large root before fitView reaches the real overview zoom — exactly the
+    // expensive flash this path is meant to prevent.
+    const visibilityZoom = isFirstLayout && layout.length > LARGE_SCENE_NODE_COUNT
+      ? MIN_CANVAS_ZOOM
+      : currentZoomRef.current
+    const withZoom = applyZoomVisibility(layoutWithCallbacks, visibilityZoom)
     const fixed = stampSelection(withZoom, selectedIdsRef.current)
     sceneSourceRef.current = isFirstLayout ? 'layout-build' : 'layout-rebuild'
     setRfNodes(fixed)
@@ -2543,7 +2581,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       layoutBuiltRef.current = projectId
       pendingInitialFitProjectRef.current = projectId
     }
-  }, [systems, files, infraNodes, floorLayouts, dependencies, onNodeResizeEnd, armResizeEndFallback])
+  }, [systems, files, infraNodes, floorLayouts, dependencies, onNodeResizeEnd, armResizeEndFallback, deferCanvasMaterialization])
 
   // The first camera used to be an 80ms guess after setRfNodes. That raced both
   // React Flow measurement and the immediate persisted-layout reprojection, so
@@ -2551,7 +2589,8 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   // the complete internal scene until its absolute measured geometry is stable
   // across consecutive frames, then fit exactly once for this project.
   useEffect(() => {
-    if (!nodesInitialized || pendingInitialFitProjectRef.current !== sceneProjectId || rfNodes.length === 0) {
+    const fitNodes = rfNodes.filter(node => !node.hidden)
+    if (!nodesInitialized || pendingInitialFitProjectRef.current !== sceneProjectId || fitNodes.length === 0) {
       return
     }
 
@@ -2561,7 +2600,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       if (pendingInitialFitProjectRef.current !== sceneProjectId) return
 
       const parts: string[] = []
-      for (const node of rfNodes) {
+      for (const node of fitNodes) {
         const internal = getInternalNode(node.id)
         const width = internal?.measured.width
         const height = internal?.measured.height
@@ -2580,20 +2619,32 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         return
       }
 
-      pendingInitialFitProjectRef.current = null
+      if (runningInitialFitProjectRef.current === sceneProjectId) return
+      runningInitialFitProjectRef.current = sceneProjectId
       // maxZoom keeps a sparse Floor from filling the viewport. The short
       // authored entrance completes well before the canvas is interactive.
       void fitView({
-        nodes: rfNodes.map(node => ({ id: node.id })),
+        nodes: fitNodes.map(node => ({ id: node.id })),
         padding: 0.25,
         duration: 400,
         maxZoom: 1.0,
+      }).finally(() => {
+        if (runningInitialFitProjectRef.current === sceneProjectId) {
+          runningInitialFitProjectRef.current = null
+        }
+        if (pendingInitialFitProjectRef.current !== sceneProjectId) return
+        pendingInitialFitProjectRef.current = null
+        const settledZoom = getViewport().zoom
+        currentZoomRef.current = settledZoom
+        lastVisibilityZoomRef.current = settledZoom
+        sceneSourceRef.current = 'initial-fit-visibility'
+        setRfNodes(current => applyZoomVisibility(current, settledZoom))
       })
     }
 
     frame = requestAnimationFrame(sampleMeasuredScene)
     return () => cancelAnimationFrame(frame)
-  }, [fitView, getInternalNode, nodesInitialized, rfNodes, sceneProjectId])
+  }, [fitView, getInternalNode, getViewport, nodesInitialized, rfNodes, sceneProjectId])
 
   // Live reframing — as files stream in from the watcher, gently fit the growing
   // graph so new nodes come into view at a sensible zoom, instead of leaving the
@@ -2603,9 +2654,10 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
     const count = systems.length + files.length + infraNodes.length
     const prev = liveNodeCountRef.current
     liveNodeCountRef.current = count
+    if (deferCanvasMaterialization) return
     if (prev === 0 || count <= prev) return
     queueCameraFit(1800, { padding: 0.28, duration: 1100, maxZoom: 1.0 })
-  }, [systems.length, files.length, infraNodes.length, queueCameraFit])
+  }, [systems.length, files.length, infraNodes.length, queueCameraFit, deferCanvasMaterialization])
 
   // Revealing a node from outside the canvas — search, the agent log, the
   // detail panel — selects it, exactly as clicking it would.
@@ -2922,6 +2974,11 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
   const onMove: OnMove = useCallback((event, viewport) => {
     const zoom = viewport.zoom
     currentZoomRef.current = zoom
+    // Keep the conservative overview tier throughout the entrance animation.
+    // Once fitView settles, its completion handler applies the final zoom once.
+    const visibilityZoom = pendingInitialFitProjectRef.current
+      ? MIN_CANVAS_ZOOM
+      : zoom
 
     // A sheet interaction snapshot must never outlive the geometry mutation
     // that created it, or it freezes semantic zoom on stale node styles.
@@ -2946,11 +3003,11 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
       // Panning (zoom unchanged) never alters semantic visibility. Restamping
       // every node on each pan frame is what made panning feel janky — skip it
       // unless the zoom actually changed (or a node is being dragged).
-      if (!draggingId && Math.abs(zoom - lastVisibilityZoomRef.current) < 1e-4) return
-      lastVisibilityZoomRef.current = zoom
+      if (!draggingId && Math.abs(visibilityZoom - lastVisibilityZoomRef.current) < 1e-4) return
+      lastVisibilityZoomRef.current = visibilityZoom
       sceneSourceRef.current = 'zoom-visibility'
       setRfNodes(curr => {
-        let updated = applyZoomVisibility(curr, zoom)
+        let updated = applyZoomVisibility(curr, visibilityZoom)
         if (draggingId) {
           updated = updated.map(n => n.id === draggingId ? makeFullyVisible(n) : n)
         }
@@ -3799,7 +3856,7 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
         snapToGrid={false}
         // Large graphs: skip rendering off-screen nodes. Kept off for small
         // graphs where the per-move visibility recompute isn't worth it.
-        onlyRenderVisibleElements={rfNodes.length > 150}
+        onlyRenderVisibleElements={rfNodes.length > LARGE_SCENE_NODE_COUNT}
       >
         {/* Pattern color transparent — the drafting line grid is painted by
             .react-flow__background CSS; this component just provides the element. */}
@@ -3822,6 +3879,17 @@ export function AxiomCanvas({ readOnly = false }: AxiomCanvasProps = {}) {
           nodes={livingDisplayNodes}
           visibilityOptions={livingVisibilityOptions}
         />
+        {deferCanvasMaterialization && (
+          <Panel position="top-center" className="axiom-canvas-materializing">
+            <div role="status" aria-live="polite">
+              <span aria-hidden="true" />
+              <div>
+                <strong>Organizing {files.length.toLocaleString()} files</strong>
+                <small>Building stable architecture before drawing the Floor</small>
+              </div>
+            </div>
+          </Panel>
+        )}
         {collisionModel && (
           <CollisionDebugOverlay
             model={collisionModel}

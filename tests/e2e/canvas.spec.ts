@@ -19,6 +19,20 @@ async function expectResizeChrome(nodeId: string) {
 
 async function revealFileNode(nodeId: string) {
   const node = page.locator(`.react-flow__node[data-id="${nodeId}"]`)
+  if (await node.count() === 0) {
+    const relPath = await page.evaluate(id => {
+      const graphStore = (window as unknown as {
+        __axiomGraphStore: { getState: () => { files: Array<{ id: string; relPath: string }> } }
+      }).__axiomGraphStore
+      return graphStore.getState().files.find(file => file.id === id)?.relPath ?? null
+    }, nodeId)
+    expect(relPath, `missing E2E file ${nodeId}`).not.toBeNull()
+    await page.keyboard.press('Control+K')
+    const search = page.getByRole('textbox', { name: 'Search project files' })
+    await search.fill(relPath!)
+    await page.getByRole('option').first().click()
+    await expect(node).toBeAttached()
+  }
   const box = await node.boundingBox()
   expect(box).not.toBeNull()
   if (!box) return node
@@ -32,7 +46,7 @@ async function revealFileNode(nodeId: string) {
   // Wheel zoom is smoothed with requestAnimationFrame. The semantic class can
   // flip before the camera reaches its target, so interaction measurements
   // must wait for that final frame.
-  await page.waitForTimeout(500)
+  await page.waitForTimeout(900)
   return node
 }
 
@@ -166,7 +180,7 @@ test.beforeEach(async () => {
   // deterministic and cannot race a refused localhost request.
   await page.reload()
   await expect(page.getByText('Axiom Canvas Fixture')).toBeVisible()
-  await expect(page.locator('.react-flow__node[data-id="file_canvas"]')).toBeVisible()
+  await expect(page.locator('.react-flow__node').first()).toBeVisible()
   await expect(page.locator('.axiom-zoom-indicator')).toBeVisible()
   // Initial sheet chrome and fitView animations run for 500ms and 400ms.
   // Measure interactions only after both have reached their authored frame.
@@ -180,6 +194,69 @@ test.afterEach(async () => {
 
 test('renders the deterministic Floor baseline', async () => {
   await expect(page.locator('.react-flow')).toHaveScreenshot('floor-baseline.png')
+})
+
+test('defers and virtualizes an 805-file fresh-project overview', async () => {
+  const fixture = await page.evaluate(() => {
+    const graphStore = (window as any).__axiomGraphStore
+    const state = graphStore.getState()
+    const baseProject = state.currentProject
+    const fileTemplate = state.files[0]
+    const systemTemplate = state.systems[0]
+    const files = Array.from({ length: 805 }, (_, index) => ({
+      ...fileTemplate,
+      id: `perf-file-${index}`,
+      rootId: 'perf-root',
+      relPath: `src/group-${index % 24}/file-${index}.ts`,
+      path: `src/group-${index % 24}/file-${index}.ts`,
+      systemId: null,
+      positionX: 0,
+      positionY: 0,
+    }))
+    const systems = Array.from({ length: 24 }, (_, index) => ({
+      ...systemTemplate,
+      id: `perf-system-${index}`,
+      workspaceId: 'perf-large',
+      name: `Group ${index}`,
+      parentId: null,
+      positionX: 0,
+      positionY: 0,
+    }))
+
+    state.setCurrentProject({ ...baseProject, id: 'perf-large', name: 'Large Fixture' })
+    state.beginIndexing()
+    state.applySnapshot({ systems: [], files, infraNodes: [], dependencies: [], floorLayouts: [] })
+    return { systems, files }
+  })
+
+  await expect(page.getByRole('status')).toContainText('Organizing 805 files')
+  await expect(page.locator('.react-flow__node')).toHaveCount(0)
+
+  await page.evaluate(({ systems, files }) => {
+    const state = (window as any).__axiomGraphStore.getState()
+    state.applyClassification({
+      systems,
+      files: files.map((file: any, index: number) => ({
+        ...file,
+        systemId: `perf-system-${index % systems.length}`,
+      })),
+      infraNodes: [],
+      dependencies: [],
+      floorLayouts: [],
+    })
+  }, fixture)
+
+  await expect(page.getByRole('status')).toHaveCount(0)
+  await expect(page.locator('.react-flow__node[data-id="perf-system-0"]')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => {
+    const state = (window as any).__axiomGraphStore.getState()
+    return state.files.length
+  })).toBe(805)
+  await expect.poll(() => page.locator('.react-flow__node').count()).toBeLessThanOrEqual(24)
+  await expect.poll(async () => {
+    const label = await page.locator('.axiom-zoom-indicator').getAttribute('aria-label')
+    return Number(label?.match(/[\d.]+/)?.[0] ?? Number.POSITIVE_INFINITY)
+  }).toBeLessThanOrEqual(0.12)
 })
 
 test('keeps repeated hidden-node flows above every canvas node without clearing the scene', async () => {
@@ -289,7 +366,11 @@ test('keeps repeated hidden-node flows above every canvas node without clearing 
       const target = document.querySelector<HTMLElement>(
         '.react-flow__node[data-id="file_filenode"]',
       )
-      if (!target) throw new Error('living flow target is missing')
+      // A semantically hidden target is deliberately absent from the DOM. The
+      // overlay still routes to its canonical geometry; unit geometry tests
+      // cover that boundary exactly, while this E2E verifies the live route
+      // remains painted and identifies the virtualized target.
+      if (!target) return { virtualized: true, edgeDistance: null, projectsOntoBoundary: false }
       const rect = target.getBoundingClientRect()
       const edgeDistance = Math.min(
         Math.abs(screenEndpoint.x - rect.left),
@@ -300,10 +381,12 @@ test('keeps repeated hidden-node flows above every canvas node without clearing 
       const projectsOntoBoundary =
         (screenEndpoint.x >= rect.left - 1 && screenEndpoint.x <= rect.right + 1) ||
         (screenEndpoint.y >= rect.top - 1 && screenEndpoint.y <= rect.bottom + 1)
-      return { edgeDistance, projectsOntoBoundary }
+      return { virtualized: false, edgeDistance, projectsOntoBoundary }
     })
-    expect(renderedBoundaryHit.edgeDistance).toBeLessThanOrEqual(1)
-    expect(renderedBoundaryHit.projectsOntoBoundary).toBe(true)
+    if (!renderedBoundaryHit.virtualized) {
+      expect(renderedBoundaryHit.edgeDistance).toBeLessThanOrEqual(1)
+      expect(renderedBoundaryHit.projectsOntoBoundary).toBe(true)
+    }
     await expect.poll(() => flow.locator('.axiom-living-flow__pulse').evaluate(path =>
       getComputedStyle(path).animationTimingFunction
     )).toBe('linear')
@@ -328,7 +411,7 @@ test('keeps repeated hidden-node flows above every canvas node without clearing 
       paintStarts: 1,
       attempts: [1],
     })
-    await expect.poll(() => page.locator('.react-flow__node').count()).toBe(baselineNodeCount)
+    await expect.poll(() => page.locator('.react-flow__node').count()).toBeGreaterThanOrEqual(baselineNodeCount)
     await expect(page.getByText('Render Error')).toHaveCount(0)
     expect(pageErrors, `page errors after ${traceId}`).toEqual([])
   }
@@ -906,15 +989,23 @@ test('preserves sheet rail hierarchy, layer visibility, and Floor navigation', a
 })
 
 test('uses the shared workbench dialog system without dropping form behavior', async () => {
-  // Files begin behind collapsed semantic-zoom containers. Reveal their level,
-  // then use the product's actual partial-lasso path to create a multi-file
-  // selection; ordinary node clicks intentionally replace the selection.
-  await revealFileNode('file_canvas')
-  await page.getByRole('button', { name: 'Lasso Select' }).click()
-  await page.mouse.move(1100, 850)
-  await page.mouse.down()
-  await page.mouse.move(180, 260, { steps: 16 })
-  await page.mouse.up()
+  // Files begin behind collapsed semantic-zoom containers. Navigate to their
+  // shared system through the product search path, then create a deliberate
+  // multi-file selection without depending on overview DOM materialization.
+  const canvasFile = await revealFileNode('file_canvas')
+  const storeFile = await revealFileNode('file_store')
+  await canvasFile.click()
+  const storeBox = await storeFile.boundingBox()
+  expect(storeBox).not.toBeNull()
+  if (!storeBox) return
+  const viewport = page.viewportSize()!
+  const storePoint = {
+    x: Math.max(1, Math.min(viewport.width - 1, storeBox.x + Math.min(20, storeBox.width / 2))),
+    y: Math.max(1, Math.min(viewport.height - 1, storeBox.y + Math.min(20, storeBox.height / 2))),
+  }
+  await page.keyboard.down('Control')
+  await page.mouse.click(storePoint.x, storePoint.y)
+  await page.keyboard.up('Control')
 
   const selectionActions = page.locator('.axiom-selection-actions')
   await expect(selectionActions).toBeVisible()
@@ -1064,7 +1155,7 @@ test('opens the workbench properties inspector without changing canvas selection
 })
 
 test('opens source symbols in the workbench code preview without losing syntax context', async () => {
-  const node = page.locator('.react-flow__node[data-id="file_canvas"]')
+  const node = await revealFileNode('file_canvas')
   const box = await node.boundingBox()
   expect(box).not.toBeNull()
   if (!box) return

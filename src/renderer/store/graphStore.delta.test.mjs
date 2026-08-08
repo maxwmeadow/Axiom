@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { useGraphStore } from './graphStore.ts'
+import { handleWsMessage, useGraphStore } from './graphStore.ts'
 
 function project(id) {
   return {
@@ -53,6 +53,23 @@ test('overlapping delta refreshes share one request', async () => {
     release()
     await Promise.all([first, second])
     assert.equal(useGraphStore.getState().delta.workspaceId, 'alpha')
+  } finally {
+    useGraphStore.getState().setCurrentProject(null)
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('delta readiness closes the indexing boundary for reconcile-only opens', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = () => Promise.resolve(jsonResponse(summary('alpha', 10)))
+
+  try {
+    useGraphStore.getState().setCurrentProject(project('alpha'))
+    useGraphStore.getState().beginIndexing()
+    assert.equal(useGraphStore.getState().isIndexing, true)
+
+    handleWsMessage({ type: 'delta:ready', payload: { workspaceId: 'alpha' } })
+    assert.equal(useGraphStore.getState().isIndexing, false)
   } finally {
     useGraphStore.getState().setCurrentProject(null)
     globalThis.fetch = originalFetch

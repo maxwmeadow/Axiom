@@ -5,6 +5,7 @@ import {
   REVEAL_CONTAINER_PX,
   applyZoomVisibility,
   makeFullyVisible,
+  revealNodePath,
 } from './semanticZoom.ts'
 
 const node = (id, width, height, options = {}) => ({
@@ -30,6 +31,7 @@ test('a child cannot become visible before its parent reveals children', () => {
   const result = applyZoomVisibility([child, parent], 1)
 
   assert.equal(result[0].style.opacity, 0)
+  assert.equal(result[0].hidden, true)
   assert.equal(result[0].style.pointerEvents, 'none')
   assert.equal(result[0].data.childrenVisible, 0)
 })
@@ -50,6 +52,7 @@ test('makeFullyVisible overrides temporary semantic-zoom hiding', () => {
   const visible = makeFullyVisible(hidden)
 
   assert.equal(visible.style.opacity, 1)
+  assert.equal(visible.hidden, false)
   assert.equal(visible.style.pointerEvents, 'all')
   assert.equal(visible.data.selfScale, 1)
   assert.equal(visible.data.selfBlur, 0)
@@ -67,13 +70,45 @@ test('a zoom change that alters nothing reuses the exact same node objects', () 
   ]
   const first = applyZoomVisibility(nodes, 1)
   const again = applyZoomVisibility(first, 1)
+  assert.equal(again, first)
   assert.equal(again[0], first[0])
   assert.equal(again[1], first[1])
 
   // A tiny easing step that crosses no threshold must also change nothing.
   const nudged = applyZoomVisibility(first, 1.0001)
+  assert.equal(nudged, first)
   assert.equal(nudged[0], first[0])
   assert.equal(nudged[1], first[1])
+})
+
+test('a zoomed-out large scene keeps only its semantic root in the render set', () => {
+  const root = node('root', 2_000, 1_200)
+  const files = Array.from({ length: 805 }, (_, index) =>
+    node(`file-${index}`, 220, 110, { depth: 1, parentId: 'root' }))
+  const projected = applyZoomVisibility([root, ...files], 0.06)
+
+  assert.equal(projected.filter(item => !item.hidden).length, 1)
+  assert.equal(projected[0].hidden, false)
+  assert.equal(projected[1].hidden, true)
+
+  // Panning or a tiny smooth-zoom step inside the same semantic tier must not
+  // create a new 806-item controlled array.
+  assert.equal(applyZoomVisibility(projected, 0.06001), projected)
+})
+
+test('explicit navigation reveals only the target path, not its hidden siblings', () => {
+  const projected = applyZoomVisibility([
+    node('root', 100, 100),
+    node('system', 100, 100, { depth: 1, parentId: 'root' }),
+    node('target', 20, 20, { depth: 2, parentId: 'system' }),
+    node('sibling', 20, 20, { depth: 2, parentId: 'system' }),
+  ], 0.05)
+  const revealed = revealNodePath(projected, 'target')
+
+  assert.equal(revealed.find(item => item.id === 'root').hidden, false)
+  assert.equal(revealed.find(item => item.id === 'system').hidden, false)
+  assert.equal(revealed.find(item => item.id === 'target').hidden, false)
+  assert.equal(revealed.find(item => item.id === 'sibling').hidden, true)
 })
 
 test('crossing the detail threshold does produce new node objects', () => {
@@ -107,6 +142,7 @@ test('a semantically hidden node cannot be grabbed', () => {
   const [hiddenParent, hiddenChild] = applyZoomVisibility([parent, child], 0.05)
 
   assert.equal(hiddenChild.style.opacity, 0)
+  assert.equal(hiddenChild.hidden, true)
   assert.equal(hiddenChild.style.pointerEvents, 'none')
   assert.equal(hiddenChild.draggable, false)
   // And genuinely click-through, so the pointer reaches the visible node it
@@ -125,6 +161,7 @@ test('a semantically hidden node cannot be grabbed', () => {
     1,
   )[1]
   assert.equal(revealed.draggable, true)
+  assert.equal(revealed.hidden, false)
 
   // A dragged node is forced interactive even while faded.
   assert.equal(makeFullyVisible(hiddenChild).draggable, true)

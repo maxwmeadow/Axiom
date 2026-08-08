@@ -97,11 +97,19 @@ export default function App() {
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null)
   const enterOnboardingProject = useOnboardingStore(s => s.enterProject)
 
-  const { applySnapshot, setConnectionStatus, setCurrentProject: setStoreProject } = useGraphStore(
+  const {
+    applySnapshot,
+    beginIndexing,
+    setConnectionStatus,
+    setCurrentProject: setStoreProject,
+    setIndexingComplete,
+  } = useGraphStore(
     useShallow(s => ({
       applySnapshot: s.applySnapshot,
+      beginIndexing: s.beginIndexing,
       setConnectionStatus: s.setConnectionStatus,
       setCurrentProject: s.setCurrentProject,
+      setIndexingComplete: s.setIndexingComplete,
     }))
   )
 
@@ -166,6 +174,7 @@ export default function App() {
     setReviewActive(!isCompleted)
 
     if (window.axiom) {
+      beginIndexing()
       // Save to recent projects list via IPC. Failing here used to leave the
       // workbench mounted against a project that never actually opened, so the
       // user got an empty canvas with no way to tell it had failed.
@@ -251,6 +260,7 @@ export default function App() {
         }
         void pull()
       }).catch(err => {
+        setIndexingComplete()
         console.error('[openProject] archd workspace error:', err)
         // The retry above only exists once the workspace POST resolves. When
         // the POST itself rejects — archd not listening, port taken, refused
@@ -277,7 +287,7 @@ export default function App() {
         applySnapshot(demoSnapshot)
       }, 800)
     }
-  }, [applySnapshot, setConnectionStatus, setStoreProject])
+  }, [applySnapshot, beginIndexing, setConnectionStatus, setIndexingComplete, setStoreProject])
 
   // Lets a Retry action re-run the open without making openProject depend on
   // itself, which useCallback cannot express.

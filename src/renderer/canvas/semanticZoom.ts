@@ -16,6 +16,7 @@ export const HIDDEN_NODE_CLASS = 'axiom-node-hidden'
 export const DETAIL_REVEAL_EFFECTIVE_ZOOM = (0.95 + 1.2) / 2
 
 function sameVisibility(node: Node, next: {
+  hidden: boolean
   opacity: number
   pointerEvents: 'all' | 'none'
   childrenVisible: number
@@ -26,7 +27,8 @@ function sameVisibility(node: Node, next: {
   const style = node.style ?? {}
   const data = node.data as Record<string, unknown>
   const interactive = next.pointerEvents === 'all'
-  return style.opacity === next.opacity &&
+  return node.hidden === next.hidden &&
+    style.opacity === next.opacity &&
     style.pointerEvents === next.pointerEvents &&
     style.transition === undefined &&
     node.draggable === interactive &&
@@ -61,6 +63,11 @@ export function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
     childrenVisibleByNode.set(node.id, childrenVisibility)
 
     const next = {
+      // React Flow uses `hidden` as a true render boundary: hidden nodes are
+      // omitted from the DOM, viewport culling, and minimap. Opacity alone
+      // left every descendant mounted and made a zoomed-out large project pay
+      // the full layout/paint cost for hundreds of invisible file cards.
+      hidden: selfVisibility <= 0.1,
       opacity: selfVisibility,
       pointerEvents: selfVisibility > 0.1 ? ('all' as const) : ('none' as const),
       childrenVisible: childrenVisibility,
@@ -77,6 +84,7 @@ export function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
 
     return {
       ...node,
+      hidden: next.hidden,
       // CSS alone cannot make a hidden node untouchable: `pointer-events: none`
       // on the wrapper is overridden by any descendant that sets `auto`, and
       // file nodes do for their editable chrome. So an invisible child stayed
@@ -111,16 +119,53 @@ export function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
   })
 
   const updatedById = new Map(updatedNodes.map(node => [node.id, node]))
-  return nodes.map(node => updatedById.get(node.id) ?? node)
+  let changed = false
+  const inOriginalOrder = nodes.map(node => {
+    const updated = updatedById.get(node.id) ?? node
+    if (updated !== node) changed = true
+    return updated
+  })
+  // A smooth zoom has many animation frames but only a handful of semantic
+  // thresholds. Returning the input array between thresholds lets React and
+  // React Flow bail out instead of reconciling the entire scene every frame.
+  return changed ? inOriginalOrder : nodes
 }
 
 export function makeFullyVisible(node: Node): Node {
   return {
     ...node,
+    hidden: false,
     draggable: true,
     selectable: true,
     className: '',
     style: { ...node.style, opacity: 1, pointerEvents: 'all' as const },
     data: { ...node.data, selfScale: 1, selfBlur: 0, childrenVisible: 1 },
   }
+}
+
+/**
+ * Explicit navigation (search, activity log, inspector links) may target a
+ * node below the current semantic tier. Materialize only that node and its
+ * ancestor path so React Flow can focus it without restoring every hidden
+ * sibling to the DOM.
+ */
+export function revealNodePath(nodes: Node[], nodeId: string | null): Node[] {
+  if (!nodeId) return nodes
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  if (!byId.has(nodeId)) return nodes
+
+  const path = new Set<string>()
+  let currentId: string | undefined = nodeId
+  while (currentId && !path.has(currentId)) {
+    path.add(currentId)
+    currentId = byId.get(currentId)?.parentId
+  }
+
+  let changed = false
+  const revealed = nodes.map(node => {
+    if (!path.has(node.id) || !node.hidden) return node
+    changed = true
+    return makeFullyVisible(node)
+  })
+  return changed ? revealed : nodes
 }

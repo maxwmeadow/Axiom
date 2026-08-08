@@ -28,6 +28,7 @@ test('hidden activity reveals the real node at its authored geometry', () => {
     key: 7,
   })
   assert.equal(file.data.livingReveal, true)
+  assert.equal(file.hidden, false)
   assert.equal(file.style.opacity, 1)
   assert.equal(file.style.pointerEvents, 'none')
   assert.equal(projected.find(node => node.id === 'outer').data.fx, null)
