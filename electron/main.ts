@@ -230,6 +230,7 @@ function createWindow(): void {
     const showOnce = (source: string) => {
       if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
         console.log(`[main] showing window (${source})`)
+        mainWindow.maximize()
         mainWindow.show()
       }
     }
