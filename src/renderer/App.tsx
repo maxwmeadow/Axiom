@@ -438,7 +438,6 @@ export default function App() {
         {/* Top toolbar */}
         <Toolbar
           onSearch={() => setSearchOpen(true)}
-          onOpenProject={openProjectDialog}
           onCloseProject={closeProject}
           projectName={currentProject.name}
           agentLogOpen={agentLogOpen}
