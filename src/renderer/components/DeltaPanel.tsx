@@ -211,14 +211,17 @@ export function DeltaPanel() {
       resolveInterruption(DELTA_INVITATION)
       return
     }
+    // No "Later" button: the × beside it already means exactly that, and two
+    // controls for one gesture invited the reading that they differ. Dismissal
+    // now records the deferral, which is what keeps the delta unreviewed in
+    // archd and puts the way back into the status bar.
     raiseInvitation(
       DELTA_INVITATION,
       deltaHeadline(review),
       `${deltaWindow(delta.since, delta.until)} · ${deltaAttribution(delta.counts)}`,
-      [
-        { label: 'Review', primary: true, run: startReview },
-        { label: 'Later', run: deferDelta },
-      ],
+      [{ label: 'Review', primary: true, run: startReview }],
+      deferDelta,
+      'Set aside — stays unreviewed, reopen from the status bar',
     )
   }, [pending, delta, review, startReview, deferDelta])
 

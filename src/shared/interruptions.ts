@@ -60,6 +60,22 @@ export interface Interruption {
    * dismissible: something is genuinely waiting on the reply.
    */
   dismissible?: boolean
+  /**
+   * What dismissal *means* to whoever raised this.
+   *
+   * Without it, dismissing only removes the entry from the queue — which is
+   * wrong for anything whose "not now" has to be remembered. The delta needs
+   * to record that it was set aside so the status bar can offer it back, and
+   * so it does not immediately reappear on the next file change. Raisers that
+   * need nothing beyond removal simply omit this.
+   */
+  onDismiss?: () => void | Promise<void>
+  /**
+   * What the × promises, when "Dismiss" undersells it. The delta's dismissal
+   * keeps the changes unreviewed and reachable, which the user has no way to
+   * guess from an unlabelled ×.
+   */
+  dismissHint?: string
 }
 
 /** A decision is blocking by definition, whatever the caller passed. */

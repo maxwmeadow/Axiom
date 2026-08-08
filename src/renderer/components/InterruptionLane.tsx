@@ -106,9 +106,15 @@ export function InterruptionLane() {
           <button
             type="button"
             className="axiom-lane__dismiss"
-            onClick={() => dismiss(current.id)}
-            aria-label={`Dismiss: ${current.title}`}
-            title="Dismiss"
+            onClick={() => {
+              // Dismissal is the raiser's to define. Removing the entry without
+              // telling them means a "not now" that is neither remembered nor
+              // recoverable — and one that reappears on the next update.
+              void current.onDismiss?.()
+              dismiss(current.id)
+            }}
+            aria-label={current.dismissHint ?? `Dismiss: ${current.title}`}
+            title={current.dismissHint ?? 'Dismiss'}
           >
             ×
           </button>

@@ -117,15 +117,23 @@ export function raiseFailure(
   })
 }
 
-/** An offer to act. Valuable, never urgent, always dismissible. */
+/**
+ * An offer to act. Valuable, never urgent, always dismissible.
+ *
+ * `onDismiss` is how an invitation makes "not now" mean something durable —
+ * see Interruption.onDismiss. Pass it rather than adding a second button that
+ * duplicates the × sitting right beside it.
+ */
 export function raiseInvitation(
   id: string,
   title: string,
   body?: string,
   actions?: InterruptionAction[],
+  onDismiss?: () => void | Promise<void>,
+  dismissHint?: string,
 ) {
   useInterruptionStore.getState().raise({
-    id, kind: 'invitation', title, body, actions,
+    id, kind: 'invitation', title, body, actions, onDismiss, dismissHint,
     createdAt: Date.now(),
   })
 }
