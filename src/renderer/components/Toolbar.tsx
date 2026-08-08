@@ -10,12 +10,16 @@ import { InvestigationsMenu } from './InvestigationsMenu'
 interface ToolbarProps {
   onSearch: () => void
   onOpenProject: () => void
+  /** Return to the project launcher, leaving this project open in archd. */
+  onCloseProject: () => void
   projectName?: string
   agentLogOpen: boolean
   onToggleAgentLog: () => void
 }
 
-export function Toolbar({ onSearch, onOpenProject, projectName, agentLogOpen, onToggleAgentLog }: ToolbarProps) {
+export function Toolbar({
+  onSearch, onOpenProject, onCloseProject, projectName, agentLogOpen, onToggleAgentLog,
+}: ToolbarProps) {
   const { fitView } = useReactFlow()
   const isIndexing = useGraphStore(s => s.isIndexing)
   const selectionMode = useGraphStore(s => s.selectionMode)
@@ -124,6 +128,16 @@ export function Toolbar({ onSearch, onOpenProject, projectName, agentLogOpen, on
         <div className="axiom-command-spacer" />
 
         <div className="axiom-command-group axiom-command-group--navigation">
+          {/* The way out. Until this existed, opening a project was one-way:
+              the only route back to the launcher was the baseline review's
+              Back button, which is gone once review is finished — and since
+              launch now resumes the last project, quitting stopped being an
+              escape too. */}
+          <ChromeButton onClick={onCloseProject} label="All projects" visualLabel="Projects">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 5h7v6H3zM14 5h7v6h-7zM3 13h7v6H3zM14 13h7v6h-7z"/>
+            </svg>
+          </ChromeButton>
           <ChromeButton onClick={onSearch} label="Search" visualLabel="Search indexed files…" shortcut="Ctrl+K">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>

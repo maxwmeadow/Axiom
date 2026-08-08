@@ -352,6 +352,17 @@ export default function App() {
     return () => { active = false }
   }, [resumeChecked, openProject])
 
+  // Leaving a project. Deliberate, so the next launch honours it rather than
+  // resuming straight back into what was just left. archd keeps the project
+  // indexed; this closes the view, not the workspace.
+  const closeProject = useCallback(() => {
+    forgetOpenProject()
+    useInterruptionStore.getState().clear()
+    setCurrentProject(null)
+    setStoreProject(null)
+    setReviewActive(false)
+  }, [setStoreProject])
+
   const openProjectDialog = useCallback(async () => {
     if (window.axiom) {
       const config = await window.axiom.openProjectDialog()
@@ -416,15 +427,7 @@ export default function App() {
           localStorage.setItem(`review_completed_${currentProject.id}`, 'true')
           setReviewActive(false)
         }}
-        onBack={() => {
-          // Leaving for the launcher is a choice, so the next launch honours
-          // it instead of dragging you back into what you just left.
-          forgetOpenProject()
-          useInterruptionStore.getState().clear()
-          setCurrentProject(null)
-          setStoreProject(null)
-          setReviewActive(false)
-        }}
+        onBack={closeProject}
       />
     )
   }
@@ -436,6 +439,7 @@ export default function App() {
         <Toolbar
           onSearch={() => setSearchOpen(true)}
           onOpenProject={openProjectDialog}
+          onCloseProject={closeProject}
           projectName={currentProject.name}
           agentLogOpen={agentLogOpen}
           onToggleAgentLog={() => setAgentLogOpen(open => !open)}
