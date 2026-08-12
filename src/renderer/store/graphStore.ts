@@ -298,6 +298,20 @@ let deltaLoadInFlight: { workspaceId: string; token: number; promise: Promise<vo
 let deltaAckInFlight: { workspaceId: string; promise: Promise<void> } | null = null
 let deltaRefreshPending = false
 
+
+/**
+ * Systems a human or an agent deliberately named. A system whose source is
+ * `cluster` or `directory` was inferred, not decided, and is withheld from the
+ * canvas until the architecture has been authored — at which point the authored
+ * systems are what there is to show anyway.
+ */
+function keepAuthoredSystems<T extends { source?: string | null }>(systems: T[]): T[] {
+  const authored = systems.filter(
+    system => system.source === 'user' || system.source === 'agent',
+  )
+  return authored.length > 0 ? authored : []
+}
+
 export const useGraphStore = create<GraphState>((set, get) => ({
   currentProject: null,
   recentProjects: [],
@@ -620,7 +634,17 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   setRecentProjects: (ps) => set({ recentProjects: ps }),
 
   applySnapshot: (snap) => set({
-    systems: snap.systems ?? [],
+    // Inferred groupings never reach the canvas. The indexer clusters files by
+    // import topology and names each pile after its most frequent symbol, which
+    // produces boxes called Bar, Lane, Phase and Cochange — words that are real
+    // and describe nothing. Drawing those as your architecture teaches people to
+    // distrust the map before an agent has had a chance to make it true, and the
+    // confusion costs more than the empty space it fills.
+    //
+    // Until someone authors the architecture, the Floor shows the files
+    // themselves. Clustering still runs and its output still serves layout and
+    // evidence; it simply no longer claims to be the answer.
+    systems: keepAuthoredSystems(snap.systems ?? []),
     files: snap.files ?? [],
     infraNodes: snap.infraNodes ?? [],
     dependencies: snap.dependencies ?? [],

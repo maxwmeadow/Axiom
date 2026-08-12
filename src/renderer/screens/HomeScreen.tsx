@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ProjectConfig } from '../../shared/types'
+import { clearProjectLocalState } from '../projectLocalState'
 import { AxiomMark, WorkbenchTitleBar } from '../components/ui/WorkbenchTitleBar'
 
 interface HomeScreenProps {
@@ -79,6 +80,10 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
   const removeProject = async (projectId: string) => {
     if (!window.axiom) return
     await window.axiom.removeProject(projectId)
+    // Deleting is deleting. The database goes with the project; so does every
+    // local hint keyed to it, or reopening the same folder later inherits
+    // "you already reviewed this" from a workspace that no longer exists.
+    clearProjectLocalState(projectId)
     setRecentProjects(previous => previous.filter(project => project.id !== projectId))
   }
 

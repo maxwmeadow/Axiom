@@ -7,7 +7,6 @@ import { Toolbar } from './components/Toolbar'
 import { StatusBar } from './components/StatusBar'
 import { DetailPanel } from './components/DetailPanel'
 import { SearchBar } from './components/SearchBar'
-import { AgentConnectBanner } from './components/AgentConnectBanner'
 import { InjectConfirmBanner } from './components/InjectConfirmBanner'
 import { AgentLogPanel } from './components/AgentLogPanel'
 import { PaperTextureDefs } from './canvas/nodes/PaperTexture'
@@ -21,6 +20,8 @@ import { EmptyIndexNotice } from './components/EmptyIndexNotice'
 import { HomeScreen } from './screens/HomeScreen'
 import { ProjectSetupScreen } from './screens/ProjectSetupScreen'
 import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
+import { ConnectAgentScreen } from './screens/ConnectAgentScreen'
+import { readAuthorship } from './canvas/architectureAuthorship.ts'
 
 import { useGraphStore, connectToArchd } from './store/graphStore'
 import { useOnboardingStore } from './store/onboardingStore'
@@ -97,6 +98,26 @@ export default function App() {
   // it must never be diagnosed as misconfigured for being empty.
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null)
   const enterOnboardingProject = useOnboardingStore(s => s.enterProject)
+
+  // Whether this codebase has an architecture anyone chose. Gated on that and
+  // NOT on any "seen the onboarding" flag: those live in local storage, outlive
+  // every reset of the workspace data, and had the effect of hiding the setup a
+  // user needed because some earlier journey had once been completed here.
+  const { files: graphFiles, systems: graphSystems, isIndexing: graphIndexing } =
+    useGraphStore(useShallow(s => ({
+      files: s.files,
+      systems: s.systems,
+      isIndexing: s.isIndexing,
+    })))
+  const [browsingWithoutAgent, setBrowsingWithoutAgent] = useState<string | null>(null)
+  // Authored, not "unnamed": a project mid-index has no files yet, and asking
+  // whether its map is guesswork answers "no" for the wrong reason — there is
+  // nothing there to be guesswork. What matters is whether anyone has decided
+  // what this codebase's parts are, which is false until they have.
+  const architectureIsAuthored = readAuthorship({
+    systems: graphSystems,
+    files: graphFiles,
+  }).authored > 0
 
   const {
     applySnapshot,
@@ -429,6 +450,21 @@ export default function App() {
     )
   }
 
+  // A codebase nobody has mapped starts here. Everything the map can say is
+  // downstream of an agent having read it, so this is the work rather than a
+  // detour from it.
+  if (currentProject && !architectureIsAuthored && browsingWithoutAgent !== currentProject.id) {
+    return (
+      <ConnectAgentScreen
+        project={currentProject}
+        fileCount={graphFiles.length}
+        indexing={graphIndexing}
+        onContinue={() => setBrowsingWithoutAgent(currentProject.id)}
+        onBack={closeProject}
+      />
+    )
+  }
+
   // Review screen for project indexing review phase
   if (currentProject && reviewActive) {
     return (
@@ -484,8 +520,6 @@ export default function App() {
               Everything below raises into it and renders nothing itself. */}
           <InterruptionLane />
 
-          {/* Raises an invitation when indexed files have no system */}
-          <AgentConnectBanner />
 
           {/* Raises a decision when an agent asks to override a runtime value */}
           <InjectConfirmBanner />
