@@ -757,27 +757,59 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           `Proposing an architecture: ${proposed.length} systems`,
           'info',
         )
+        // Depth is derived here rather than asked for. An agent that has to
+        // keep a depth counter consistent with its own parent keys will
+        // eventually disagree with itself, and the tree it drew is the truth.
+        const keyOf = (system: any) => system.systemKey ?? system.key ?? system.name
+        const parentKeyOf = (system: any) => system.parentKey ?? null
+        const byKey = new Map(proposed.map((system: any) => [keyOf(system), system]))
+        const depthOf = (system: any): number => {
+          let depth = 0
+          const seen = new Set<string>([keyOf(system)])
+          let parent = parentKeyOf(system)
+          while (parent && byKey.has(parent) && !seen.has(parent)) {
+            seen.add(parent)
+            depth += 1
+            parent = parentKeyOf(byKey.get(parent))
+          }
+          return depth
+        }
+
+        // Membership travels as repository-relative paths, because that is what
+        // an agent has after reading a repository. The daemon resolves them and
+        // aborts the whole proposal if any path is missing or ambiguous — a
+        // half-resolved architecture is not reviewable.
+        const memberships = proposed.flatMap((system: any) =>
+          (system.files ?? []).map((filePath: string) => ({
+            filePath,
+            targetSystemKey: keyOf(system),
+            disposition: 'assign',
+          })),
+        )
+
         const res = await fetch(`${API_BASE}/api/architecture-proposals`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             workspaceId: project.workspaceId,
-            rationale: args.rationale ?? null,
-            evidenceSummary: args.evidenceSummary ?? null,
+            parentScopeType: 'workspace',
             createdBy: 'agent',
-            systems: proposed.map((system: any) => ({
-              systemKey: system.systemKey ?? system.key ?? system.name,
-              name: system.name,
-              description: system.description ?? null,
-              parentRefType: system.parentKey
-                ? 'proposed_system'
-                : system.parentSystemId ? 'live_system' : 'scope',
-              parentRefId: system.parentKey ?? system.parentSystemId ?? null,
-              // Membership arrives as paths because that is what an agent has
-              // after reading a repository. The daemon resolves them to file
-              // ids and reports back anything it could not place.
-              files: system.files ?? [],
-            })),
+            round: {
+              rationale: args.rationale ?? null,
+              evidenceSummary: args.evidenceSummary ?? null,
+              coverage: memberships.length > 0 ? 'complete' : 'no_change',
+              systems: proposed.map((system: any) => ({
+                systemKey: keyOf(system),
+                name: system.name,
+                description: system.description ?? null,
+                parentRefType: parentKeyOf(system)
+                  ? 'proposed_system'
+                  : system.parentSystemId ? 'live_system' : 'scope',
+                parentRefId: parentKeyOf(system) ?? system.parentSystemId ?? null,
+                depth: depthOf(system),
+              })),
+              memberships,
+            },
           }),
         })
         if (!res.ok) {
@@ -802,6 +834,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'create_system': {
+        // Writing straight to the map while a proposal is awaiting review is
+        // how "the human confirms" quietly becomes optional: the agent gets
+        // the same result without asking, so nothing forces it to ask. Refused
+        // with the alternative named, not silently ignored.
+        const open = await fetch(
+          `${API_BASE}/api/architecture-proposals?workspace=${encodeURIComponent(project.workspaceId)}`,
+        ).then(res => res.ok ? res.json() : null).catch(() => null) as
+          { proposals?: Array<{ systems?: Array<{ decision?: string }> }> } | null
+        const awaitingReview = open?.proposals?.some(
+          proposal => proposal.systems?.some(system => system.decision === 'pending'),
+        )
+        if (awaitingReview) {
+          throw new Error(
+            'An architecture you proposed is still awaiting review. Adding systems directly would ' +
+            'bypass it. Wait for the user to approve or send back what you proposed, then revise ' +
+            'with edit_systems(op: "propose").',
+          )
+        }
         const systemId = generateUUID()
         const payload = {
           id: systemId,
