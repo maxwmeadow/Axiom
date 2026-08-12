@@ -219,10 +219,44 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => ({
       description: 'Pull the latest canvas messages and staged UML changes from Axiom and act on them.',
       arguments: [],
     },
+    {
+      name: 'name-architecture',
+      description: "Read this codebase and tell its owner what its systems actually are, as a tree they can confirm.",
+      arguments: [],
+    },
   ],
 }))
 
+// The instructions an agent follows to give a codebase its architecture.
+//
+// This deliberately hands over NO analysis. An earlier version of this workflow
+// began from the clusters the indexer had already produced and asked the agent
+// to repair them, which is a harder task than starting fresh: it inherits a
+// hundred boundaries it did not set and cannot evaluate, and it anchors every
+// answer to a partition chosen by symbol frequency. Reading code is the thing
+// models are good at; arguing with someone else's partition is not.
+const NAME_ARCHITECTURE_PROMPT = `Map this codebase's architecture for its owner, who is watching a spatial map of it in Axiom.
+
+Produce a TREE OF SEMANTIC SYSTEMS.
+
+**What a system is.** A responsibility — something the codebase does. Name it the way an engineer would say it aloud explaining the project to a new colleague.
+
+A system is NOT a folder. Folders are for navigation; use them to find your way around, never as the answer. Two files in different directories belong to the same system when they serve the same responsibility, and one directory often holds several distinct systems.
+
+**Nesting is the point, not a fallback.** Every system may contain sub-systems, and those may contain more. Go as deep as the code justifies — a large area earns four or five levels, a small utility earns none. "World Generation" contains "Biomes" contains "Temperature Falloff". If a system holds more than about ten files, ask whether it is really one thing or several. Prefer decomposing over leaving something flat. There may be hundreds of systems in the tree; that is correct. What must stay small is how many appear at any one level.
+
+**Shape.** Around a dozen systems at the top — the parts you would list if asked what this application is made of. Then nest. For each: a name of two to four words in the vocabulary of the domain, one sentence saying what it is responsible for, and for leaf systems the files that belong to it. Parents own their children rather than files directly, unless a file genuinely sits at that level. Every source file lands somewhere, or is reported unplaced with a reason.
+
+**How to work.** Start from the file tree only to orient yourself. Then READ. Open entry points, the largest files, anything whose name suggests it coordinates others. Do not infer from filenames — a file called utils.ts may be the core of a system. Where a boundary is genuinely ambiguous, say so and say what would settle it; you can call get_architecture with scope cross_dependencies or neighbors to ask what a specific file actually talks to, but only when a boundary is unclear. Do not begin from the systems that already exist on the map: those were named automatically from word frequency and describe nothing.
+
+**What matters most.** Someone who did NOT write this code — because an agent wrote it for them — should read your tree and understand what this software is and how it is put together.
+
+Write the result with edit_systems (op: create, then assign). The human confirms, renames or rejects what you propose; you are not committing an architecture, you are making a proposal they can read.`
+
 server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+  if (request.params.name === 'name-architecture') {
+    return { messages: [{ role: 'user', content: { type: 'text', text: NAME_ARCHITECTURE_PROMPT } }] }
+  }
   if (request.params.name !== 'review-canvas') {
     throw new Error(`Unknown prompt: ${request.params.name}`)
   }
@@ -323,7 +357,7 @@ const CORE_TOOLS = [
   },
   {
     name: 'edit_systems',
-    description: "Curate the architecture map itself. The indexer infers systems from code topology and gets you most of the way; it cannot know the architecture in the human's head. When you see boundaries that are wrong — a system that should be split, files in the wrong place, two systems that are really one — fix them here. Do this after building, and during first-run review. ops: create | update | delete | assign | merge | bulk.",
+    description: "Author the architecture map. YOU name the systems — the automatic grouping is a placeholder named by word frequency, so never treat existing system names as meaningful or as a starting point. Build a tree: major systems, then sub-systems inside them, as deep as the code justifies. A system is a responsibility, never a folder. Run /axiom:name-architecture for the full method. ops: create | update | delete | assign | merge | bulk.",
     inputSchema: {
       type: 'object',
       properties: {
