@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { AxiomCanvas } from '../canvas/AxiomCanvas'
 import { useGraphStore } from '../store/graphStore'
 import type { ProjectConfig } from '../../shared/types'
+import type { AgentConnection } from '../../../electron/preload'
 import { WorkbenchTitleBar } from '../components/ui/WorkbenchTitleBar'
 
 interface ProjectReviewScreenProps {
@@ -56,7 +57,38 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
   const unclassifiedCount = files.filter(file => !file.systemId).length
   const classifiedCount = totalFiles - unclassifiedCount
   const classificationPercent = totalFiles === 0 ? 100 : Math.round((classifiedCount / totalFiles) * 100)
-  const universalCommand = `npx tsx "${mcpPath || 'axiom-mcp.ts'}"`
+  // What an agent actually needs is a server entry for this install, not a
+  // command line and not a path. Resolved by the main process, which knows
+  // whether this is a packaged app or a dev checkout.
+  const [connection, setConnection] = useState<AgentConnection | null>(null)
+  useEffect(() => {
+    void window.axiom.getAgentConnection().then(setConnection)
+  }, [])
+
+  // Every MCP call an agent makes is logged against this workspace, so the
+  // arrival of any action is proof something out there is talking to us. It
+  // cannot report connected without a real call having happened.
+  const [agentConnected, setAgentConnected] = useState(false)
+  useEffect(() => {
+    if (agentConnected) return
+    let live = true
+    const poll = async () => {
+      try {
+        const res = await fetch(
+          `http://127.0.0.1:7743/api/agent/actions?workspace=${encodeURIComponent(project.id)}&limit=1`,
+        )
+        if (!res.ok || !live) return
+        const body = await res.json() as { actions?: unknown[] } | unknown[]
+        const actions = Array.isArray(body) ? body : body.actions ?? []
+        if (actions.length > 0 && live) setAgentConnected(true)
+      } catch {
+        // A daemon hiccup is not a disconnection; keep waiting quietly.
+      }
+    }
+    void poll()
+    const timer = setInterval(poll, 2_000)
+    return () => { live = false; clearInterval(timer) }
+  }, [project.id, agentConnected])
   const hasReviewEvents = agentActivities.length > 0
 
   const handleCopy = async (text: string, field: 'command' | 'path') => {
@@ -114,28 +146,59 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
           </div>
 
           <div className="axiom-review__scroll">
+            {/* Connecting an agent is the whole of the work on a codebase
+                Axiom has never mapped — everything the map can say is
+                downstream of it — so it is not "optional assistance". It also
+                offered `npx tsx "<path>"` and a bare filesystem path, neither
+                of which is a thing any agent accepts; what an agent needs is a
+                server entry, so that is what it hands over now. */}
             <section className="axiom-review__connection" aria-labelledby="agent-connection-title">
               <div className="axiom-review__section-heading">
-                <span>OPTIONAL ASSISTANCE</span>
+                <span>STEP 03 · NAME IT</span>
                 <div>
-                  <h2 id="agent-connection-title">Agent review connection</h2>
-                  <p>Point an MCP-capable editor at Axiom, then ask it to “start a review.”</p>
+                  <h2 id="agent-connection-title">Connect an agent to name your systems</h2>
+                  <p>
+                    The boxes below were grouped automatically and named after the most frequent
+                    words in your code, so they describe nothing. An agent that reads the project
+                    can tell you what its parts actually are — you confirm or rename each one.
+                  </p>
                 </div>
               </div>
 
-              <ConnectionField
-                label="MCP COMMAND"
-                value={universalCommand}
-                feedback={copyFeedback?.field === 'command' ? copyFeedback.state : null}
-                onCopy={() => void handleCopy(universalCommand, 'command')}
-              />
-              <ConnectionField
-                label="APPLICATION SCRIPT"
-                value={mcpPath}
-                placeholder="Locating application script…"
-                feedback={copyFeedback?.field === 'path' ? copyFeedback.state : null}
-                onCopy={() => void handleCopy(mcpPath, 'path')}
-              />
+              {connection && !connection.available ? (
+                <p className="axiom-review__connection-broken">
+                  This Axiom install has no MCP server at <code>{connection.path}</code>.
+                  Reinstall or rebuild before connecting an agent.
+                </p>
+              ) : (
+                <>
+                  <ConnectionField
+                    label="PASTE INTO YOUR AGENT’S MCP CONFIG"
+                    value={connection?.config ?? ''}
+                    placeholder="Locating your Axiom install…"
+                    feedback={copyFeedback?.field === 'command' ? copyFeedback.state : null}
+                    onCopy={() => void handleCopy(connection?.config ?? '', 'command')}
+                  />
+                  <ol className="axiom-review__connect-steps">
+                    <li>Paste that into Claude Code, Codex, Cursor, or any MCP-capable agent.</li>
+                    <li>Restart the agent — MCP configuration is read at startup.</li>
+                    <li>Tell it: <code>/axiom:name-architecture</code></li>
+                  </ol>
+                </>
+              )}
+
+              <div
+                className="axiom-review__connection-status"
+                data-status={agentConnected ? 'connected' : 'waiting'}
+                aria-live="polite"
+              >
+                <span className="axiom-review__connection-lamp" aria-hidden="true" />
+                <span>
+                  {agentConnected
+                    ? 'An agent is connected. Ask it to name your architecture.'
+                    : 'Waiting for an agent to connect…'}
+                </span>
+              </div>
             </section>
 
             <section className="axiom-review-log" aria-labelledby="review-log-title">

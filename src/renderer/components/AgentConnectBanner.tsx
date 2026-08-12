@@ -48,7 +48,12 @@ export function AgentConnectBanner() {
   // invitation being raised twice for the same facts. Dismissing is a judgement
   // about this codebase, not a global preference, so opening a different one
   // asks again.
-  const invited = useRef<{ workspace: string; title: string } | null>(null)
+  // Keyed on the whole sentence rather than the title. The title is constant
+  // for a given condition, so keying on it froze the wording at whatever the
+  // counts were when the invitation first appeared — which on a fresh project
+  // is before indexing has finished. It read "0 systems were named
+  // automatically" over a canvas showing fifteen.
+  const invited = useRef<{ workspace: string; said: string } | null>(null)
   useEffect(() => {
     invited.current = null
   }, [workspaceId])
@@ -72,11 +77,12 @@ export function AgentConnectBanner() {
       return
     }
 
+    const said = `${described.title}\n${described.detail}`
     const prior = invited.current
-    if (prior?.workspace === workspaceId && (!showing || prior.title === described.title)) {
+    if (prior?.workspace === workspaceId && (!showing || prior.said === said)) {
       return
     }
-    invited.current = { workspace: workspaceId, title: described.title }
+    invited.current = { workspace: workspaceId, said }
 
     raiseInvitation(
       ID,

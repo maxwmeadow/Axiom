@@ -212,3 +212,261 @@
 @media (prefers-reduced-motion: reduce) {
   .axiom-proposal * { transition: none !important; }
 }
+
+/* ── Connect an agent ─────────────────────────────────────────────────────
+   The first screen on a codebase Axiom has never mapped. It replaced a
+   notification whose one action copied a string and raised a notice behind
+   the notice already showing, so nothing visibly happened at all. */
+
+.axiom-connect {
+  height: 100vh;
+  overflow-y: auto;
+  background: #1b2320;
+  color: #e8e6dd;
+  font-family: var(--font-mono);
+}
+
+.axiom-connect__sheet {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 32px 72px;
+}
+
+.axiom-connect__back {
+  border: none;
+  background: none;
+  color: #8fa39c;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 0;
+  margin-bottom: 28px;
+}
+.axiom-connect__back:hover { color: #d7e0dc; }
+
+.axiom-connect__eyebrow {
+  margin: 0 0 8px;
+  color: #7f938c;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.axiom-connect__title {
+  margin: 0 0 14px;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.axiom-connect__lede {
+  margin: 0 0 10px;
+  max-width: 60ch;
+  color: #b9c6c1;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.axiom-connect__indexed {
+  margin: 0 0 34px;
+  color: #7f938c;
+  font-size: 12.5px;
+}
+
+.axiom-connect__steps {
+  margin: 0 0 32px;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.axiom-connect__steps > li {
+  counter-increment: step;
+  position: relative;
+  padding: 0 0 26px 40px;
+  border-left: 1px solid #33413c;
+  margin-left: 12px;
+}
+.axiom-connect__steps > li:last-child { border-left-color: transparent; padding-bottom: 12px; }
+.axiom-connect__steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: -13px;
+  top: 0;
+  width: 25px;
+  height: 25px;
+  border: 1px solid #4f7d70;
+  border-radius: 50%;
+  background: #1b2320;
+  color: #77b2a0;
+  font-size: 12px;
+  line-height: 23px;
+  text-align: center;
+}
+.axiom-connect__steps h2 {
+  margin: 2px 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.axiom-connect__steps p {
+  margin: 0 0 12px;
+  max-width: 58ch;
+  color: #a9b8b3;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.axiom-connect__steps code {
+  background: #232e2a;
+  border: 1px solid #34423d;
+  border-radius: 2px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+
+.axiom-connect__config {
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border: 1px solid #34423d;
+  border-radius: 3px;
+  background: #131a18;
+  color: #c8d6d1;
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre;
+  user-select: all;
+}
+
+.axiom-connect__copy,
+.axiom-connect__go {
+  border: 1px solid #4f8279;
+  border-radius: 2px;
+  background: #35705f;
+  color: #f2f7f4;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 7px 14px;
+}
+.axiom-connect__copy:disabled { opacity: 0.45; cursor: not-allowed; }
+.axiom-connect__copy:hover:not(:disabled),
+.axiom-connect__go:hover { background: #3f8570; }
+
+.axiom-connect__broken {
+  padding: 12px 14px;
+  border: 1px solid #7a4a33;
+  border-radius: 3px;
+  background: #2a1e19;
+  color: #e0b39d;
+  font-size: 13px;
+}
+
+.axiom-connect__status {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 16px;
+  border: 1px solid #34423d;
+  border-radius: 3px;
+  background: #202b27;
+  font-size: 13.5px;
+  color: #a9b8b3;
+}
+.axiom-connect__status[data-status='connected'] {
+  border-color: #4f8279;
+  color: #dcefe7;
+}
+.axiom-connect__status strong { flex: 1 1 auto; font-weight: 600; }
+
+.axiom-connect__lamp {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #6b7d77;
+  flex: 0 0 auto;
+  animation: axiom-connect-pulse 1.9s ease-in-out infinite;
+}
+.axiom-connect__status[data-status='connected'] .axiom-connect__lamp {
+  background: #5fc39d;
+  animation: none;
+}
+@keyframes axiom-connect-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .axiom-connect__lamp { animation: none; }
+}
+
+.axiom-connect__skip {
+  display: block;
+  margin: 22px auto 0;
+  border: none;
+  background: none;
+  color: #7f938c;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.axiom-connect__skip:hover { color: #c3d0cb; }
+
+.axiom-connect button:focus-visible {
+  outline: 2px solid #5fc39d;
+  outline-offset: 2px;
+}
+
+/* ── Connect step inside the baseline review ─────────────────────────────── */
+
+.axiom-review__connect-steps {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  color: #55635d;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.axiom-review__connect-steps code {
+  background: #e2e6df;
+  border-radius: 2px;
+  padding: 1px 5px;
+}
+
+.axiom-review__connection-broken {
+  margin: 10px 0 0;
+  padding: 11px 13px;
+  border: 1px solid #a8674a;
+  border-radius: 3px;
+  background: #f2e2da;
+  color: #7a3c22;
+  font-size: 12.5px;
+}
+
+.axiom-review__connection-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 13px;
+  border: 1px solid #c3c1b9;
+  border-radius: 3px;
+  font-size: 12.5px;
+  color: #55635d;
+}
+.axiom-review__connection-status[data-status='connected'] {
+  border-color: #4f8279;
+  background: #e4efe9;
+  color: #23453d;
+}
+.axiom-review__connection-lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9aa8a2;
+  flex: 0 0 auto;
+  animation: axiom-connect-pulse 1.9s ease-in-out infinite;
+}
+.axiom-review__connection-status[data-status='connected'] .axiom-review__connection-lamp {
+  background: #35705f;
+  animation: none;
+}
