@@ -87,7 +87,7 @@ func TestFloorLayoutBatchRejectsCyclesAtomically(t *testing.T) {
 	}
 }
 
-func TestFloorSystemContainmentUpdatesSemanticHierarchyAndDepth(t *testing.T) {
+func TestFloorLayoutBatchNeverChangesSemanticOwnership(t *testing.T) {
 	sqlDB, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -96,29 +96,81 @@ func TestFloorSystemContainmentUpdatesSemanticHierarchyAndDepth(t *testing.T) {
 	if err := UpsertWorkspace(sqlDB, Workspace{ID: "ws", Name: "test"}); err != nil {
 		t.Fatal(err)
 	}
-	parent := System{ID: "parent", WorkspaceID: "ws", Name: "parent", Source: "user", Depth: 2}
-	child := System{ID: "child", WorkspaceID: "ws", Name: "child", Source: "user", Depth: 0}
-	grandchild := System{ID: "grandchild", WorkspaceID: "ws", Name: "grandchild", Source: "user", Depth: 1, ParentID: stringPtr("child")}
-	for _, system := range []System{parent, child, grandchild} {
+	semanticParent := System{ID: "semantic-parent", WorkspaceID: "ws", Name: "semantic-parent", Source: "user", Depth: 1}
+	visualParent := System{ID: "visual-parent", WorkspaceID: "ws", Name: "visual-parent", Source: "user", Depth: 4}
+	child := System{ID: "child", WorkspaceID: "ws", Name: "child", Source: "user", Depth: 2, ParentID: stringPtr(semanticParent.ID)}
+	grandchild := System{ID: "grandchild", WorkspaceID: "ws", Name: "grandchild", Source: "user", Depth: 3, ParentID: stringPtr(child.ID)}
+	for _, system := range []System{semanticParent, visualParent, child, grandchild} {
 		if err := UpsertSystem(sqlDB, system); err != nil {
 			t.Fatal(err)
 		}
 	}
-	parentID, parentType := parent.ID, "system"
-	_, err = ApplyFloorLayoutBatch(sqlDB, "ws", []FloorLayout{{
-		NodeID: child.ID, NodeType: "system", ParentNodeID: &parentID, ParentNodeType: &parentType,
-		Width: 400, Height: 300, Scale: 1,
-	}})
+	if err := UpsertRoot(sqlDB, Root{ID: "root", WorkspaceID: "ws", Path: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	file := File{ID: "file", RootID: "root", Path: "file.go", RelPath: "file.go", Language: "go", SystemID: stringPtr(semanticParent.ID)}
+	if err := UpsertFile(sqlDB, file); err != nil {
+		t.Fatal(err)
+	}
+
+	parentType := "system"
+	_, err = ApplyFloorLayoutBatch(sqlDB, "ws", []FloorLayout{
+		{NodeID: child.ID, NodeType: "system", ParentNodeID: stringPtr(visualParent.ID), ParentNodeType: &parentType, Width: 400, Height: 300, Scale: 1},
+		{NodeID: file.ID, NodeType: "file", ParentNodeID: stringPtr(visualParent.ID), ParentNodeType: &parentType, Width: 200, Height: 100, Scale: 1},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	gotChild, _ := GetSystem(sqlDB, child.ID)
-	gotGrandchild, _ := GetSystem(sqlDB, grandchild.ID)
-	if gotChild.ParentID == nil || *gotChild.ParentID != parent.ID || gotChild.Depth != 3 {
-		t.Fatalf("child hierarchy: %#v", gotChild)
+
+	gotChild, err := GetSystem(sqlDB, child.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if gotGrandchild.Depth != 4 {
-		t.Fatalf("grandchild depth = %d, want 4", gotGrandchild.Depth)
+	gotGrandchild, err := GetSystem(sqlDB, grandchild.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotFile, err := GetFileByID(sqlDB, file.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotChild.ParentID == nil || *gotChild.ParentID != semanticParent.ID || gotChild.Depth != child.Depth {
+		t.Fatalf("visual system placement changed semantic hierarchy: %#v", gotChild)
+	}
+	if gotGrandchild.Depth != grandchild.Depth {
+		t.Fatalf("visual system placement changed descendant depth: got %d want %d", gotGrandchild.Depth, grandchild.Depth)
+	}
+	if gotFile.SystemID == nil || *gotFile.SystemID != semanticParent.ID {
+		t.Fatalf("visual file placement changed semantic ownership: %#v", gotFile.SystemID)
+	}
+
+	// Moving both nodes to visual root must be equally semantic-neutral.
+	_, err = ApplyFloorLayoutBatch(sqlDB, "ws", []FloorLayout{
+		{NodeID: child.ID, NodeType: "system", Width: 400, Height: 300, Scale: 1},
+		{NodeID: file.ID, NodeType: "file", Width: 200, Height: 100, Scale: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotChild, _ = GetSystem(sqlDB, child.ID)
+	gotFile, _ = GetFileByID(sqlDB, file.ID)
+	if gotChild.ParentID == nil || *gotChild.ParentID != semanticParent.ID || gotChild.Depth != child.Depth {
+		t.Fatalf("visual root placement changed semantic hierarchy: %#v", gotChild)
+	}
+	if gotFile.SystemID == nil || *gotFile.SystemID != semanticParent.ID {
+		t.Fatalf("visual root placement changed semantic ownership: %#v", gotFile.SystemID)
+	}
+	layouts, err := GetFloorLayouts(sqlDB, "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(layouts) != 2 {
+		t.Fatalf("layouts = %d, want 2", len(layouts))
+	}
+	for _, layout := range layouts {
+		if layout.ContainmentKind != "root" || layout.ParentNodeID != nil || layout.ParentNodeType != nil {
+			t.Fatalf("visual root layout was not persisted: %#v", layout)
+		}
 	}
 }
 

@@ -334,6 +334,65 @@ func migrate(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS planned_edges_sheet ON planned_edges(sheet_id);
 
+	-- Agent-authored semantic systems remain isolated from the live graph until
+	-- the user approves each candidate. Numbered rounds preserve review history.
+	CREATE TABLE IF NOT EXISTS architecture_proposals (
+		id TEXT PRIMARY KEY,
+		workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+		root_id TEXT REFERENCES roots(id) ON DELETE SET NULL,
+		parent_scope_type TEXT NOT NULL CHECK(parent_scope_type IN ('workspace','system')),
+		parent_scope_id TEXT NOT NULL DEFAULT '',
+		current_revision INTEGER NOT NULL DEFAULT 1 CHECK(current_revision > 0),
+		created_by TEXT NOT NULL DEFAULT 'agent',
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS architecture_proposals_ws ON architecture_proposals(workspace_id, updated_at DESC);
+	CREATE TABLE IF NOT EXISTS architecture_proposal_rounds (
+		proposal_id TEXT NOT NULL REFERENCES architecture_proposals(id) ON DELETE CASCADE,
+		revision INTEGER NOT NULL CHECK(revision > 0),
+		rationale TEXT NOT NULL DEFAULT '',
+		evidence_summary TEXT NOT NULL DEFAULT '',
+		coverage TEXT NOT NULL CHECK(coverage IN ('complete','partial','no_change')),
+		created_by TEXT NOT NULL DEFAULT 'agent',
+		created_at INTEGER NOT NULL,
+		PRIMARY KEY(proposal_id, revision)
+	);
+	CREATE TABLE IF NOT EXISTS architecture_proposal_systems (
+		proposal_id TEXT NOT NULL,
+		revision INTEGER NOT NULL,
+		system_key TEXT NOT NULL,
+		name TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		parent_ref_type TEXT NOT NULL CHECK(parent_ref_type IN ('scope','live_system','proposed_system')),
+		parent_ref_id TEXT NOT NULL DEFAULT '',
+		depth INTEGER NOT NULL DEFAULT 0 CHECK(depth >= 0),
+		decision TEXT NOT NULL DEFAULT 'pending' CHECK(decision IN ('pending','approved','rejected')),
+		rejection_reason TEXT NOT NULL DEFAULT '',
+		decided_by TEXT NOT NULL DEFAULT '',
+		decided_at INTEGER,
+		materialized_system_id TEXT REFERENCES systems(id) ON DELETE SET NULL,
+		PRIMARY KEY(proposal_id, revision, system_key),
+		FOREIGN KEY(proposal_id, revision) REFERENCES architecture_proposal_rounds(proposal_id, revision) ON DELETE CASCADE,
+		CHECK(decision != 'rejected' OR length(trim(rejection_reason)) > 0)
+	);
+	CREATE TABLE IF NOT EXISTS architecture_proposal_memberships (
+		id TEXT PRIMARY KEY,
+		proposal_id TEXT NOT NULL,
+		revision INTEGER NOT NULL,
+		file_id TEXT REFERENCES files(id) ON DELETE SET NULL,
+		root_id TEXT NOT NULL DEFAULT '',
+		file_path TEXT NOT NULL,
+		target_system_key TEXT NOT NULL DEFAULT '',
+		disposition TEXT NOT NULL CHECK(disposition IN ('assign','retain','unassigned','excluded')),
+		rationale TEXT NOT NULL DEFAULT '',
+		FOREIGN KEY(proposal_id, revision) REFERENCES architecture_proposal_rounds(proposal_id, revision) ON DELETE CASCADE,
+		UNIQUE(proposal_id, revision, file_path),
+		CHECK(disposition != 'assign' OR (file_id IS NOT NULL AND length(target_system_key) > 0))
+	);
+	CREATE INDEX IF NOT EXISTS architecture_proposal_memberships_target
+		ON architecture_proposal_memberships(proposal_id, revision, target_system_key, disposition);
+
 	-- Canvas→agent outbox (UML_UX_PLAN.md Phase U-C). The user composes a
 	-- note on the canvas; MCP tools drain it; every axiom tool response
 	-- carries an unread-count trailer so any active agent sees it fast.
