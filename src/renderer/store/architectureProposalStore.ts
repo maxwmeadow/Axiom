@@ -25,6 +25,43 @@ export interface ProposalSummary {
   systems: ProposedSystem[]
 }
 
+/**
+ * What the daemon actually returns: a header whose candidates live inside the
+ * current round, since rounds are immutable and numbered. The panel wants one
+ * flat thing to render, so the translation happens here — at the boundary,
+ * once — rather than every component learning the wire format.
+ *
+ * This mattered: reading `systems` off the header found nothing and the panel
+ * rendered an empty review, which looks exactly like "the agent proposed
+ * nothing" rather than like a bug.
+ */
+interface DaemonProposal {
+  id: string
+  workspaceId: string
+  currentRevision: number
+  createdBy?: string | null
+  createdAt?: number
+  round?: {
+    rationale?: string | null
+    evidenceSummary?: string | null
+    systems?: ProposedSystem[]
+  }
+  systems?: ProposedSystem[]
+}
+
+function normalize(proposal: DaemonProposal): ProposalSummary {
+  return {
+    id: proposal.id,
+    workspaceId: proposal.workspaceId,
+    currentRevision: proposal.currentRevision,
+    createdBy: proposal.createdBy ?? null,
+    createdAt: proposal.createdAt,
+    rationale: proposal.round?.rationale ?? null,
+    evidenceSummary: proposal.round?.evidenceSummary ?? null,
+    systems: proposal.round?.systems ?? proposal.systems ?? [],
+  }
+}
+
 interface ProposalState {
   proposal: ProposalSummary | null
   loading: boolean
@@ -61,8 +98,12 @@ export const useProposalStore = create<ProposalState>((set, get) => ({
         `${API}/api/architecture-proposals?workspace=${encodeURIComponent(workspaceId)}`,
       )
       if (!listed.ok) throw new Error(`proposals unavailable (${listed.status})`)
-      const body = await listed.json() as { proposals?: Array<{ id: string }> }
-      const head = body.proposals?.[0]
+      // The daemon returns a bare array; accept the wrapped form too so a
+      // later shape change on that side cannot blank this panel silently.
+      const body = await listed.json() as
+        Array<{ id: string }> | { proposals?: Array<{ id: string }> }
+      const list = Array.isArray(body) ? body : body.proposals ?? []
+      const head = list[0]
       if (!head) {
         set({ proposal: null, loading: false })
         return
@@ -71,7 +112,7 @@ export const useProposalStore = create<ProposalState>((set, get) => ({
         `${API}/api/architecture-proposals/${head.id}?workspace=${encodeURIComponent(workspaceId)}`,
       )
       if (!detailed.ok) throw new Error(`proposal unavailable (${detailed.status})`)
-      set({ proposal: await detailed.json() as ProposalSummary, loading: false })
+      set({ proposal: normalize(await detailed.json() as DaemonProposal), loading: false })
     } catch (error) {
       // A daemon that is not running is not a broken proposal. Say what failed
       // rather than rendering an empty review that looks like "nothing to do".

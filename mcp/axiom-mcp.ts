@@ -838,12 +838,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // how "the human confirms" quietly becomes optional: the agent gets
         // the same result without asking, so nothing forces it to ask. Refused
         // with the alternative named, not silently ignored.
-        const open = await fetch(
+        // The daemon returns a bare array. Reading `.proposals` off it found
+        // nothing, so the guard silently passed and an agent wrote straight to
+        // the map — the exact bypass this exists to prevent. Accept both
+        // shapes: a guard that fails open is worse than no guard, because it
+        // reads as enforcement while enforcing nothing.
+        type Candidates = { decision?: string }
+        type Listed = { systems?: Candidates[]; round?: { systems?: Candidates[] } }
+        const openBody = await fetch(
           `${API_BASE}/api/architecture-proposals?workspace=${encodeURIComponent(project.workspaceId)}`,
         ).then(res => res.ok ? res.json() : null).catch(() => null) as
-          { proposals?: Array<{ systems?: Array<{ decision?: string }> }> } | null
-        const awaitingReview = open?.proposals?.some(
-          proposal => proposal.systems?.some(system => system.decision === 'pending'),
+          Listed[] | { proposals?: Listed[] } | null
+        const openProposals = Array.isArray(openBody) ? openBody : openBody?.proposals ?? []
+        const awaitingReview = openProposals.some(proposal =>
+          (proposal.round?.systems ?? proposal.systems ?? [])
+            .some(system => system.decision === 'pending'),
         )
         if (awaitingReview) {
           throw new Error(
