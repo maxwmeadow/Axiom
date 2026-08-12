@@ -19,7 +19,7 @@ import (
 	"axiom.local/archd/internal/runtime"
 )
 
-func TestSyncWorkspaceWorktreesAddsRefreshesAndRemovesLiveRoots(t *testing.T) {
+func TestSyncWorkspaceWorktreesKeepsOneCanonicalGraphRoot(t *testing.T) {
 	dataDir := t.TempDir()
 	eventHub := hub.New()
 	server := NewServer(dataDir, eventHub, runtime.NewManager(eventHub))
@@ -56,16 +56,26 @@ func TestSyncWorkspaceWorktreesAddsRefreshesAndRemovesLiveRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(roots) != 2 || !roots[0].IsPrimary || roots[0].Path != primaryPath {
-		t.Fatalf("initial roots = %#v", roots)
+		t.Fatalf("worktree identities = %#v", roots)
 	}
-	branchID := roots[1].ID
-	for _, root := range roots {
-		if err := db.UpsertFile(sqlDB, db.File{
-			ID: root.ID + "-file", RootID: root.ID,
-			Path: filepath.Join(root.Path, "file.go"), RelPath: "file.go",
-		}); err != nil {
-			t.Fatal(err)
-		}
+	primaryID := roots[0].ID
+	if err := db.UpsertFile(sqlDB, db.File{
+		ID: primaryID + "-file", RootID: primaryID,
+		Path: filepath.Join(primaryPath, "file.go"), RelPath: "file.go",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a legacy database that indexed a linked worktree before the
+	// canonical-root invariant existed. The next sync must remove its projection.
+	legacyBranch := db.Root{ID: "legacy-branch", WorkspaceID: "ws", Path: branchPath, Branch: "feature/one"}
+	if err := db.UpsertRoot(sqlDB, legacyBranch); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpsertFile(sqlDB, db.File{
+		ID: "legacy-file", RootID: legacyBranch.ID,
+		Path: filepath.Join(branchPath, "file.go"), RelPath: "file.go",
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	refreshed := []gitworktree.Worktree{
@@ -82,19 +92,19 @@ func TestSyncWorkspaceWorktreesAddsRefreshesAndRemovesLiveRoots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(active) != 2 || active[0].HeadCommit != "new-head" || active[1].Branch != "feature/three" {
-		t.Fatalf("refreshed roots = %#v", active)
+	if len(active) != 2 || active[0].ID != primaryID || active[0].HeadCommit != "new-head" {
+		t.Fatalf("refreshed worktree identities = %#v", active)
 	}
-	removedFiles, err := db.GetFilesByRoot(sqlDB, branchID)
+	removedFiles, err := db.GetFilesByRoot(sqlDB, legacyBranch.ID)
 	if err != nil || len(removedFiles) != 0 {
-		t.Fatalf("removed worktree graph remains: files=%#v err=%v", removedFiles, err)
+		t.Fatalf("legacy worktree graph remains: files=%#v err=%v", removedFiles, err)
 	}
 	server.mu.RLock()
 	watcherCount := len(server.watchers)
-	_, removedWatcher := server.watchers[branchID]
+	_, removedWatcher := server.watchers[legacyBranch.ID]
 	server.mu.RUnlock()
-	if watcherCount != 2 || removedWatcher {
-		t.Fatalf("watchers = %d, removed watcher present = %t", watcherCount, removedWatcher)
+	if watcherCount != 1 || removedWatcher {
+		t.Fatalf("watchers = %d, legacy watcher present = %t", watcherCount, removedWatcher)
 	}
 }
 
@@ -158,7 +168,7 @@ func waitForWorktreeTest(t *testing.T, description string, condition func() bool
 	t.Fatalf("timed out waiting for %s", description)
 }
 
-func TestOpenWorkspaceDiscoversIndexesAndWatchesNewGitWorktrees(t *testing.T) {
+func TestOpenWorkspaceIndexesOnlyCanonicalRootAndStillTracksGitMetadata(t *testing.T) {
 	projectParent := t.TempDir()
 	primaryPath := filepath.Join(projectParent, "primary")
 	if err := os.MkdirAll(primaryPath, 0o755); err != nil {
@@ -204,59 +214,54 @@ func TestOpenWorkspaceDiscoversIndexesAndWatchesNewGitWorktrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitForWorktreeTest(t, "two indexed worktrees with live watchers", func() bool {
+	waitForWorktreeTest(t, "one indexed canonical root with one live watcher", func() bool {
 		roots, err := db.GetActiveRoots(sqlDB, "ws")
 		if err != nil || len(roots) != 2 {
 			return false
 		}
+		indexedRoots := 0
 		for _, root := range roots {
-			if root.IndexedAt == nil || *root.IndexedAt == 0 {
-				return false
+			if root.IndexedAt != nil && *root.IndexedAt > 0 {
+				indexedRoots++
+				if !sameRootPath(root.Path, primaryPath) {
+					return false
+				}
 			}
 		}
 		server.mu.RLock()
 		watcherCount := len(server.watchers)
 		server.mu.RUnlock()
-		return watcherCount == 2
+		return indexedRoots == 1 && watcherCount == 1
 	})
 
 	secondAgentPath := filepath.Join(projectParent, "agent-two")
 	runWorktreeGit(t, primaryPath, "worktree", "add", "-b", "agent-two", secondAgentPath)
-	waitForWorktreeTest(t, "dynamically added third worktree", func() bool {
-		roots, err := db.GetActiveRoots(sqlDB, "ws")
-		if err != nil || len(roots) != 3 {
-			return false
-		}
-		for _, root := range roots {
-			if root.IndexedAt == nil || *root.IndexedAt == 0 {
-				return false
-			}
-		}
-		server.mu.RLock()
-		watcherCount := len(server.watchers)
-		server.mu.RUnlock()
-		return watcherCount == 3
-	})
-
-	if err := os.WriteFile(
-		filepath.Join(secondAgentPath, "live.go"),
-		[]byte("package sample\n\nfunc Live() {}\n"),
-		0o644,
-	); err != nil {
+	// Metadata refresh must not turn the new linked worktree into another code root.
+	time.Sleep(350 * time.Millisecond)
+	roots, err := db.GetActiveRoots(sqlDB, "ws")
+	if err != nil {
 		t.Fatal(err)
 	}
-	waitForWorktreeTest(t, "new file from the third worktree watcher", func() bool {
-		roots, err := db.GetActiveRoots(sqlDB, "ws")
-		if err != nil {
-			return false
+	if len(roots) != 3 {
+		t.Fatalf("worktree metadata was not retained: %#v", roots)
+	}
+	for _, root := range roots {
+		files, filesErr := db.GetFilesByRoot(sqlDB, root.ID)
+		if filesErr != nil {
+			t.Fatal(filesErr)
 		}
-		for _, root := range roots {
-			if !sameRootPath(root.Path, secondAgentPath) {
-				continue
+		if sameRootPath(root.Path, primaryPath) {
+			if len(files) == 0 {
+				t.Fatal("canonical root lost its graph projection")
 			}
-			file, err := db.GetFileByRelPath(sqlDB, root.ID, "live.go")
-			return err == nil && file != nil
+		} else if len(files) != 0 {
+			t.Fatalf("linked worktree contributes duplicate files: %#v", root)
 		}
-		return false
-	})
+	}
+	server.mu.RLock()
+	watcherCount := len(server.watchers)
+	server.mu.RUnlock()
+	if watcherCount != 1 {
+		t.Fatalf("watchers = %d, want one canonical watcher", watcherCount)
+	}
 }

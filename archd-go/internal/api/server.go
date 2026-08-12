@@ -251,6 +251,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/registry/services", s.handleRegistryServices)
 	mux.HandleFunc("/api/layout/batch", s.handleFloorLayoutBatch)
 	s.registerSheetRoutes(mux)
+	s.registerArchitectureProposalRoutes(mux)
 	mux.HandleFunc("/api/call-path", s.handleCallPath)
 	mux.HandleFunc("/api/function-body", s.handleFunctionBody)
 	mux.HandleFunc("/api/data-flow", s.handleDataFlow)

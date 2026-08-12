@@ -176,42 +176,9 @@ func ApplyFloorLayoutBatch(db *sql.DB, workspaceID string, updates []FloorLayout
 	}
 
 	for _, u := range updates {
-		// A system frame is semantic part-of intent on the live Floor. Hosting is
-		// intentionally visual/deployment-only and never overwrites code ownership.
-		if u.NodeType == "file" && (u.ContainmentKind == "part_of" || u.ContainmentKind == "root") {
-			var semanticParent any
-			if u.ContainmentKind == "part_of" {
-				semanticParent = u.ParentNodeID
-			}
-			if _, err = tx.Exec(`UPDATE files SET system_id=? WHERE id=?`, semanticParent, u.NodeID); err != nil {
-				return nil, err
-			}
-		}
-		if u.NodeType == "system" && (u.ContainmentKind == "part_of" || u.ContainmentKind == "root") {
-			var oldDepth int
-			if err := tx.QueryRow(`SELECT depth FROM systems WHERE id=?`, u.NodeID).Scan(&oldDepth); err != nil {
-				return nil, err
-			}
-			newDepth := 0
-			var semanticParent any
-			if u.ContainmentKind == "part_of" {
-				semanticParent = u.ParentNodeID
-				if err := tx.QueryRow(`SELECT depth+1 FROM systems WHERE id=?`, u.ParentNodeID).Scan(&newDepth); err != nil {
-					return nil, err
-				}
-			}
-			if _, err = tx.Exec(`UPDATE systems SET parent_id=? WHERE id=?`, semanticParent, u.NodeID); err != nil {
-				return nil, err
-			}
-			delta := newDepth - oldDepth
-			if delta != 0 {
-				if _, err = tx.Exec(`WITH RECURSIVE subtree(id) AS (
-					SELECT ? UNION ALL SELECT s.id FROM systems s JOIN subtree p ON s.parent_id=p.id
-				) UPDATE systems SET depth=depth+? WHERE id IN (SELECT id FROM subtree)`, u.NodeID, delta); err != nil {
-					return nil, err
-				}
-			}
-		}
+		// Floor containment is a coordinate-frame relationship only. Semantic file
+		// ownership and system hierarchy are changed through explicit graph mutations,
+		// never as a side effect of tidy, resize, or generated layout persistence.
 		_, err = tx.Exec(`
 			INSERT INTO floor_layouts
 			(workspace_id,node_id,node_type,parent_node_id,parent_node_type,containment_kind,position_x,position_y,width,height,scale,interior_scale,updated_at)

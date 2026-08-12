@@ -90,9 +90,28 @@ func (s *Server) discoverInitialWorktrees(rootPath string) ([]gitworktree.Worktr
 	return []gitworktree.Worktree{{Path: filepath.Clean(rootPath), Primary: true}}, false
 }
 
-// syncWorkspaceWorktrees reconciles persisted roots and live watchers against
-// one authoritative porcelain snapshot. Missing roots retain their metadata
-// and history but lose their current graph projection.
+func canonicalGraphRoot(requestedPath string, worktrees []gitworktree.Worktree) (gitworktree.Worktree, bool) {
+	for _, worktree := range worktrees {
+		if sameRootPath(worktree.Path, requestedPath) {
+			return worktree, true
+		}
+	}
+	for _, worktree := range worktrees {
+		if worktree.Primary {
+			return worktree, true
+		}
+	}
+	if len(worktrees) > 0 {
+		return worktrees[0], true
+	}
+	return gitworktree.Worktree{}, false
+}
+
+// syncWorkspaceWorktrees keeps exactly one filesystem projection in the graph.
+// Linked Git worktrees describe parallel branches; indexing each as another root
+// duplicates every source file and corrupts system counts and classification.
+// Their branch metadata remains discoverable through Git, while only the folder
+// the user opened (or the primary worktree fallback) owns live file rows.
 func (s *Server) syncWorkspaceWorktrees(
 	sqlDB *sql.DB,
 	workspaceID string,
@@ -110,11 +129,16 @@ func (s *Server) syncWorkspaceWorktrees(
 	for _, root := range existing {
 		existingByPath[normalizedRootPath(root.Path)] = root
 	}
+	canonical, ok := canonicalGraphRoot(requestedPath, worktrees)
+	if !ok {
+		return "", fmt.Errorf("no filesystem root discovered for %s", requestedPath)
+	}
 
 	activeIDs := make(map[string]struct{}, len(worktrees))
 	requestedRootID := ""
 	rootsChanged := reconcileExisting
 	topologyChanged := reconcileExisting
+	canonicalPath := filepath.Clean(canonical.Path)
 	for _, discovered := range worktrees {
 		path := filepath.Clean(discovered.Path)
 		prior, known := existingByPath[normalizedRootPath(path)]
@@ -142,6 +166,7 @@ func (s *Server) syncWorkspaceWorktrees(
 				root.SourceBoundariesReviewedAt = prior.SourceBoundariesReviewedAt
 			}
 		}
+		isCanonical := sameRootPath(path, canonicalPath)
 		rootChanged := !known || !prior.IsActive || prior.Branch != root.Branch ||
 			prior.HeadCommit != root.HeadCommit || prior.IsPrimary != root.IsPrimary ||
 			!slices.Equal(prior.IgnoredPaths, root.IgnoredPaths) ||
@@ -159,9 +184,21 @@ func (s *Server) syncWorkspaceWorktrees(
 		if sameRootPath(path, requestedPath) {
 			requestedRootID = root.ID
 		}
-		s.startWatcher(sqlDB, root)
+		if isCanonical {
+			s.startWatcher(sqlDB, root)
+		} else {
+			s.stopWatcher(root.ID)
+			removed, err := db.ClearRootGraphProjection(sqlDB, root.ID)
+			if err != nil {
+				return "", fmt.Errorf("clear linked worktree projection %s: %w", path, err)
+			}
+			if removed > 0 {
+				log.Printf("api: removed %d duplicate file rows for linked worktree %s", removed, path)
+				topologyChanged = true
+			}
+		}
 
-		if !scheduleIndex {
+		if !scheduleIndex || !isCanonical {
 			continue
 		}
 		indexed := root.IndexedAt != nil && *root.IndexedAt > 0

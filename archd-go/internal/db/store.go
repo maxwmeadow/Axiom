@@ -236,6 +236,29 @@ func GetActiveRoots(db *sql.DB, workspaceID string) ([]Root, error) {
 	return active, nil
 }
 
+// ClearRootGraphProjection removes indexed code for a branch worktree while
+// retaining the root row as branch identity for history and collision analysis.
+// Linked worktrees must never contribute duplicate files to the live graph.
+func ClearRootGraphProjection(db *sql.DB, rootID string) (int64, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	result, err := tx.Exec(`DELETE FROM files WHERE root_id=?`, rootID)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`UPDATE roots SET indexed_at=NULL, classifier_version=0 WHERE id=?`, rootID); err != nil {
+		return 0, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return count, tx.Commit()
+}
+
 // DeactivateRoot removes its current graph projection while preserving the
 // root row and denormalized history for a later re-add or historical review.
 func DeactivateRoot(db *sql.DB, rootID string) error {
