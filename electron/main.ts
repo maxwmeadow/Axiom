@@ -402,6 +402,31 @@ function setupIPC(): void {
       isPackaged,
     }
   })
+
+  // How an agent actually connects. Axiom speaks MCP over stdio, so the thing a
+  // user needs is a server entry naming this install — never a URL. The old
+  // invitation copied http://127.0.0.1:7743/mcp, which archd does not serve and
+  // never did, so following the app's own instruction could not work.
+  ipcMain.handle('agent:connection', () => {
+    const mcpPath = app.isPackaged
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.js')
+      : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
+    const args = [mcpPath]
+    return {
+      command: 'node',
+      args,
+      // Reported rather than assumed: a missing entry point is the difference
+      // between "paste this" and "your install is incomplete", and the user
+      // should be told which one they are looking at.
+      available: fs.existsSync(mcpPath),
+      path: mcpPath,
+      config: JSON.stringify(
+        { mcpServers: { axiom: { command: 'node', args } } },
+        null,
+        2,
+      ),
+    }
+  })
 }
 
 // ─── App lifecycle ──────────────────────────────────────────────────────────

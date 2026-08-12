@@ -45,6 +45,10 @@ contextBridge.exposeInMainWorld('axiom', {
   getAppInfo: (): Promise<{ version: string; dataDir: string; platform: string; mcpPath: string; archdApiUrl: string; archdWsUrl: string; isPackaged: boolean }> =>
     ipcRenderer.invoke('app:info'),
 
+  // How an agent connects to this install (stdio server entry, not a URL)
+  getAgentConnection: (): Promise<AgentConnection> =>
+    ipcRenderer.invoke('agent:connection'),
+
   // Listen for messages from archd (forwarded by main process)
   onArchdMessage: (callback: (msg: WsMessage) => void) => {
     ipcRenderer.on('archd:message', (_event, msg) => callback(msg))
@@ -54,6 +58,16 @@ contextBridge.exposeInMainWorld('axiom', {
     ipcRenderer.removeListener('archd:message', (_event: Electron.IpcRendererEvent, msg: WsMessage) => callback(msg))
   },
 })
+
+export interface AgentConnection {
+  command: string
+  args: string[]
+  /** False when this install has no MCP entry point on disk. */
+  available: boolean
+  path: string
+  /** A ready-to-paste `mcpServers` entry for this machine. */
+  config: string
+}
 
 // Type declaration for the renderer
 declare global {
@@ -71,6 +85,7 @@ declare global {
       showInFolder: (filePath: string) => void
       openFile: (filePath: string) => void
       getAppInfo: () => Promise<{ version: string; dataDir: string; platform: string; mcpPath: string; archdApiUrl: string; archdWsUrl: string; isPackaged: boolean }>
+      getAgentConnection: () => Promise<AgentConnection>
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void
     }
