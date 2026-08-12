@@ -1,0 +1,214 @@
+/* Reviewing a proposed architecture.
+   Its own stylesheet rather than an addition to global.css, which is the one
+   file guaranteed to conflict between long-running worktrees. Loaded from
+   main.tsx alongside the other per-track sheets. */
+
+.axiom-proposal {
+  --proposal-ink:      #1f2a26;
+  --proposal-ink-soft: #55635d;
+  --proposal-paper:    #eceae3;
+  --proposal-rule:     #c3c1b9;
+  --proposal-green:    #35705f;
+  --proposal-amber:    #8a6320;
+  position: absolute;
+  z-index: 1200;
+  border: 1px solid #4f5d58;
+  border-radius: 3px;
+  background: var(--proposal-paper);
+  box-shadow: 3px 3px 0 rgba(7, 12, 11, 0.46), 0 18px 44px rgba(0, 0, 0, 0.34);
+  color: var(--proposal-ink);
+  font-family: var(--font-mono);
+}
+
+.axiom-proposal--panel {
+  top: 14px;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  width: 460px;
+  max-width: calc(100vw - 28px);
+  flex-direction: column;
+  overflow: hidden;
+  border-top: 2px solid var(--proposal-green);
+}
+
+.axiom-proposal__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 10px 11px 12px;
+  border-bottom: 1px solid #1d2925;
+  background: linear-gradient(180deg, #4a5652 0%, #2d3834 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  color: #f2f1eb;
+}
+
+.axiom-proposal__mode {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.axiom-proposal__progress {
+  flex: 1 1 auto;
+  font-size: 12px;
+}
+
+.axiom-proposal__close {
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+.axiom-proposal__close:focus-visible,
+.axiom-proposal button:focus-visible {
+  outline: 2px solid var(--proposal-green);
+  outline-offset: 1px;
+}
+
+.axiom-proposal__rationale {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--proposal-rule);
+  color: var(--proposal-ink-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.axiom-proposal__error {
+  margin: 0;
+  padding: 10px 14px;
+  background: #f2e2da;
+  color: #7a3c22;
+  font-size: 12px;
+}
+
+.axiom-proposal__list {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.axiom-proposal__item {
+  padding: 10px 14px 12px;
+  border-bottom: 1px solid var(--proposal-rule);
+  cursor: default;
+}
+.axiom-proposal__item[data-active] {
+  background: #e2e6df;
+  box-shadow: inset 3px 0 0 var(--proposal-green);
+}
+/* A decided system stays visible and stays quiet: removing it would make the
+   list jump under the cursor mid-review, and hide the record of what you just
+   did. */
+.axiom-proposal__item[data-decision='approved'] { opacity: 0.62; }
+.axiom-proposal__item[data-decision='rejected'] { opacity: 0.62; }
+.axiom-proposal__item[data-decision='approved'] .axiom-proposal__name::after {
+  content: ' ✓';
+  color: var(--proposal-green);
+}
+.axiom-proposal__item[data-decision='rejected'] .axiom-proposal__name::after {
+  content: ' ↩';
+  color: var(--proposal-amber);
+}
+
+.axiom-proposal__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.axiom-proposal__name {
+  flex: 1 1 auto;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.axiom-proposal__count {
+  color: var(--proposal-ink-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.axiom-proposal__purpose {
+  margin: 5px 0 0;
+  color: var(--proposal-ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.axiom-proposal__sentback {
+  margin: 6px 0 0;
+  color: var(--proposal-amber);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.axiom-proposal__actions,
+.axiom-proposal__reject-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.axiom-proposal button {
+  border: 1px solid #6d7a75;
+  border-radius: 2px;
+  background: #f7f6f1;
+  color: var(--proposal-ink);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 4px 10px;
+}
+.axiom-proposal button:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.axiom-proposal__approve {
+  border-color: var(--proposal-green);
+  background: var(--proposal-green);
+  color: #f4f7f4;
+}
+
+.axiom-proposal__reject textarea {
+  width: 100%;
+  min-height: 58px;
+  margin-top: 9px;
+  padding: 7px 8px;
+  border: 1px solid #6d7a75;
+  border-radius: 2px;
+  background: #f7f6f1;
+  color: var(--proposal-ink);
+  font-family: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.axiom-proposal__refusal {
+  margin: 8px 0 0;
+  color: #7a3c22;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.axiom-proposal__footer {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-top: 1px solid #1d2925;
+  background: #2d3834;
+  color: #b9c4bf;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axiom-proposal * { transition: none !important; }
+}

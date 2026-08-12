@@ -12,6 +12,7 @@ import { InjectConfirmBanner } from './components/InjectConfirmBanner'
 import { AgentLogPanel } from './components/AgentLogPanel'
 import { PaperTextureDefs } from './canvas/nodes/PaperTexture'
 import { DeltaPanel } from './components/DeltaPanel'
+import { ArchitectureProposalPanel } from './components/ArchitectureProposalPanel'
 import { ReplayBar } from './components/ReplayBar'
 import { OnboardingGuide } from './components/OnboardingGuide'
 import { AgentLane } from './components/AgentLane'
@@ -469,6 +470,9 @@ export default function App() {
 
           {/* Morning Delta — what changed while you weren't watching */}
           <DeltaPanel />
+
+          {/* The architecture an agent proposed, for you to confirm */}
+          <ArchitectureProposalPanel />
 
           {/* Detail panel (right side) */}
           <DetailPanel />

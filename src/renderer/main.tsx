@@ -6,6 +6,7 @@ import './styles/global.css'
 // out of global.css, which is the one file guaranteed to conflict.
 import './styles/agents.css'
 import './styles/spine.css'
+import './styles/proposal.css'
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
