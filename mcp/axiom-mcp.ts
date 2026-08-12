@@ -357,11 +357,17 @@ const CORE_TOOLS = [
   },
   {
     name: 'edit_systems',
-    description: "Author the architecture map. YOU name the systems — the automatic grouping is a placeholder named by word frequency, so never treat existing system names as meaningful or as a starting point. Build a tree: major systems, then sub-systems inside them, as deep as the code justifies. A system is a responsibility, never a folder. Run /axiom:name-architecture for the full method. ops: create | update | delete | assign | merge | bulk.",
+    description: "Author the architecture map. YOU name the systems — existing names are placeholders from word frequency, never a starting point. Build a tree of responsibilities, not folders, nested as deep as the code justifies. `propose` submits the whole tree for the human to confirm and is the normal path; see /axiom:name-architecture. ops: propose | create | update | delete | assign | merge | bulk.",
     inputSchema: {
       type: 'object',
       properties: {
-        op: { type: 'string', description: 'create | update | delete | assign | merge | bulk' },
+        op: { type: 'string', description: 'propose | create | update | delete | assign | merge | bulk' },
+        systems: {
+          type: 'array',
+          items: { type: 'object' },
+          description: 'propose: the whole tree at once. Each: {systemKey, name, description, parentKey?, files?[]}',
+        },
+        rationale: { type: 'string', description: 'propose: one paragraph on how you read this codebase' },
         systemId: { type: 'string' },
         name: { type: 'string' },
         description: { type: 'string' },
@@ -725,6 +731,76 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       // ── WRITES (Forwarded HTTP Mutations) ──────────────────────────────────
+
+      // Propose a whole architecture for the human to confirm.
+      //
+      // One call carrying the entire tree, rather than a create-per-system
+      // walk. A half-written architecture is not something anyone can review:
+      // it reads as the agent's mistake rather than as work in progress, and
+      // there is no honest moment at which to show it.
+      //
+      // Nothing here reaches the live map. Candidates sit in their own tables
+      // until a human approves them one at a time, which is what makes "the
+      // agent proposes, you decide" structurally true rather than a convention
+      // some later code path forgets.
+      case 'propose_architecture': {
+        const proposed = Array.isArray(args.systems) ? args.systems : []
+        if (proposed.length === 0) {
+          throw new Error(
+            'propose needs `systems`: the tree you are proposing. Each entry takes a systemKey, a ' +
+            'name, a one-sentence description, an optional parentKey naming another proposed ' +
+            'system, and files (relative paths) for leaf systems.',
+          )
+        }
+        await postAgentActivity(
+          project.workspaceId,
+          `Proposing an architecture: ${proposed.length} systems`,
+          'info',
+        )
+        const res = await fetch(`${API_BASE}/api/architecture-proposals`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId: project.workspaceId,
+            rationale: args.rationale ?? null,
+            evidenceSummary: args.evidenceSummary ?? null,
+            createdBy: 'agent',
+            systems: proposed.map((system: any) => ({
+              systemKey: system.systemKey ?? system.key ?? system.name,
+              name: system.name,
+              description: system.description ?? null,
+              parentRefType: system.parentKey
+                ? 'proposed_system'
+                : system.parentSystemId ? 'live_system' : 'scope',
+              parentRefId: system.parentKey ?? system.parentSystemId ?? null,
+              // Membership arrives as paths because that is what an agent has
+              // after reading a repository. The daemon resolves them to file
+              // ids and reports back anything it could not place.
+              files: system.files ?? [],
+            })),
+          }),
+        })
+        if (!res.ok) {
+          const errMsg = await res.text()
+          await postAgentActivity(project.workspaceId, `Proposal was not recorded: ${errMsg}`, 'error')
+          throw new Error(`Could not record the proposal: ${errMsg}`)
+        }
+        const created = await res.json() as { id?: string; unresolvedFiles?: string[] }
+        await postAgentActivity(
+          project.workspaceId,
+          `Architecture proposed — ${proposed.length} systems awaiting review`,
+          'success',
+        )
+        result = {
+          status: 'proposed',
+          proposalId: created.id,
+          systems: proposed.length,
+          unresolvedFiles: created.unresolvedFiles ?? [],
+          note: 'Nothing is on the map yet. The user approves, renames or sends back each system.',
+        }
+        break
+      }
+
       case 'create_system': {
         const systemId = generateUUID()
         const payload = {

@@ -48,6 +48,7 @@ const ARCHITECTURE_SCOPES: Record<string, string> = {
 
 /** Architecture curation. Agents keep the map true; that is the product. */
 const SYSTEM_OPS: Record<string, string> = {
+  propose: 'propose_architecture',
   create: 'create_system',
   update: 'update_system',
   delete: 'delete_system',
