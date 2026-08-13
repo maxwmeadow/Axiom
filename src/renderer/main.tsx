@@ -7,6 +7,7 @@ import './styles/global.css'
 import './styles/agents.css'
 import './styles/spine.css'
 import './styles/proposal.css'
+import './styles/connectAgent.css'
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
