@@ -2152,23 +2152,35 @@ Steps to execute:
 
 // ─── Start ─────────────────────────────────────────────────────────────────
 
-async function main() {
+// Announce this agent's presence for whichever project Axiom currently has
+// open, and keep doing so if that changes.
+//
+// A single announcement at startup only covers one ordering: agent first, then
+// project. Start Claude Code before opening the project in Axiom -- which is
+// the normal way round, since the editor is already open -- and the server
+// announced itself against no project at all, then never spoke again. Axiom sat
+// on "waiting for an agent" beside a client that plainly said connected.
+//
+// So presence is re-checked rather than declared once. The active project is
+// read fresh each time, and an announcement is made whenever it changes, which
+// includes the case of it appearing for the first time. Unchanged projects are
+// not re-announced, so the action log does not fill with heartbeats.
+let announcedWorkspace: string | null = null
+
+async function announcePresence() {
+  let workspaceId: string
   try {
-    const project = getActiveProject()
-    await postAgentActivity(project.workspaceId, 'Agent MCP server connected', 'success')
-    // Connecting is not calling. A host that has started this server reports
-    // itself connected, but until the agent invokes a tool nothing durable is
-    // recorded, so Axiom had no way to know anyone had arrived and its setup
-    // screen waited forever beside a host that said "connected".
-    //
-    // The activity stream above is transient and only reaches an attached
-    // renderer. This writes the arrival to the durable action log, which is
-    // what anything asking "is an agent here?" actually reads.
+    workspaceId = getActiveProject().workspaceId
+  } catch {
+    return // No project open yet. Try again on the next tick.
+  }
+  if (!workspaceId || workspaceId === announcedWorkspace) return
+  try {
     await fetch(`${API_BASE}/api/agent/action`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        workspaceId: project.workspaceId,
+        workspaceId,
         cwd: process.cwd(),
         tool: 'connect',
         kind: 'session',
@@ -2178,9 +2190,17 @@ async function main() {
         status: 'ok',
       }),
     })
-  } catch (err) {
-    console.error('[axiom-mcp] startup notification failed:', err)
+    await postAgentActivity(workspaceId, 'Agent MCP server connected', 'success')
+    announcedWorkspace = workspaceId
+  } catch {
+    // archd may not be up yet; the next tick retries.
   }
+}
+
+async function main() {
+  void announcePresence()
+  const presence = setInterval(() => { void announcePresence() }, 5_000)
+  presence.unref?.()
   const transport = new StdioServerTransport()
   await server.connect(transport)
   console.error('[axiom-mcp] SQLite-over-HTTP MCP server started, ready for queries.')

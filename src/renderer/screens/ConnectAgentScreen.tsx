@@ -24,7 +24,6 @@ import { AGENT_HOSTS } from './agentHosts'
  */
 
 const POLL_MS = 2000
-const COMMAND = '/axiom:name-architecture'
 
 type Phase = 'waiting' | 'connected' | 'proposed'
 
@@ -193,14 +192,14 @@ export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, o
               <>
                 <p>Your agent is listening. Start a <strong>new session</strong> and run:</p>
                 <div className="axiom-connect__command">
-                  <strong>{COMMAND}</strong>
-                  <button type="button" onClick={() => void copy(COMMAND, 'command')}>
+                  <strong>{host.command}</strong>
+                  <button type="button" onClick={() => void copy(host.command, 'command')}>
                     {copied === 'command' ? 'Copied ✓' : 'Copy'}
                   </button>
                 </div>
-                <p>Axiom publishes that as an MCP prompt, so the agent gets its full brief from
-                  the server — there is no prompt to paste. It reads the project, proposes a tree of
-                  systems, and nothing reaches your map until you approve it.</p>
+                <p>Axiom publishes that as an MCP prompt, so the agent gets its full brief from the
+                  server — there is no prompt to paste. If your client does not list it, tell the
+                  agent in words instead: <em>map this codebase’s architecture in Axiom</em>.</p>
               </>
             ) : (
               <p>Once your agent is connected, Axiom will give you a slash command to run in a new
