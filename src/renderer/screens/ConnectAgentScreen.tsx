@@ -49,6 +49,7 @@ export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, o
   const [connection, setConnection] = useState<AgentConnection | null>(null)
   const [copied, setCopied] = useState<'config' | 'command' | null>(null)
   const [hostId, setHostId] = useState(AGENT_HOSTS[0].id)
+  const [installed, setInstalled] = useState<{ ok: boolean; detail: string } | null>(null)
   const [phase, setPhaseState] = useState<Phase>(() => progress.get(project.id) ?? 'waiting')
   const setPhase = useCallback((next: Phase) => {
     // One-way: connected never falls back to waiting, and a proposal outranks
@@ -193,10 +194,27 @@ export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, o
                 <p>Your agent is listening. Start a <strong>new session</strong> and run:</p>
                 <div className="axiom-connect__command">
                   <strong>{host.command}</strong>
-                  <button type="button" onClick={() => void copy(host.command, 'command')}>
-                    {copied === 'command' ? 'Copied ✓' : 'Copy'}
-                  </button>
+                  {host.installable ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const result = await window.axiom.installAgentCommand()
+                        setInstalled(result.installed
+                          ? { ok: true, detail: `Installed. Restart Claude Code and run ${host.command}.` }
+                          : { ok: false, detail: result.error ?? `Could not write ${result.path}` })
+                      }}
+                    >
+                      Install command
+                    </button>
+                  ) : (
+                    <button type="button" onClick={() => void copy(host.command, 'command')}>
+                      {copied === 'command' ? 'Copied ✓' : 'Copy'}
+                    </button>
+                  )}
                 </div>
+                {installed && (
+                  <p className={installed.ok ? 'axiom-connect__hint' : 'axiom-connect__broken'}>{installed.detail}</p>
+                )}
                 <p>Axiom publishes that as an MCP prompt, so the agent gets its full brief from the
                   server — there is no prompt to paste. If your client does not list it, tell the
                   agent in words instead: <em>map this codebase’s architecture in Axiom</em>.</p>

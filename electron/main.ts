@@ -403,6 +403,33 @@ function setupIPC(): void {
     }
   })
 
+  // Install Axiom's slash command for Claude Code.
+  //
+  // Claude Code builds its slash commands from markdown files in
+  // ~/.claude/commands — the filename becomes the command and the body is the
+  // brief. MCP *prompts* are a different mechanism and this client does not
+  // surface them in the slash menu, so telling a user to type an MCP prompt
+  // name sent them looking for something their client never had.
+  //
+  // Writing the file is a better integration than an instruction anyway: the
+  // command appears without the user copying anything, and its body is
+  // generated from the same source Axiom uses, so it cannot drift.
+  ipcMain.handle('agent:install-command', () => {
+    const commandsDir = join(os.homedir(), '.claude', 'commands')
+    const file = join(commandsDir, 'axiom-map.md')
+    try {
+      fs.mkdirSync(commandsDir, { recursive: true })
+      fs.writeFileSync(file, NAME_ARCHITECTURE_COMMAND, 'utf8')
+      return { installed: true, path: file }
+    } catch (error) {
+      return {
+        installed: false,
+        path: file,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  })
+
   // How an agent actually connects. Axiom speaks MCP over stdio, so the thing a
   // user needs is a server entry naming this install — never a URL. The old
   // invitation copied http://127.0.0.1:7743/mcp, which archd does not serve and
@@ -428,6 +455,50 @@ function setupIPC(): void {
     }
   })
 }
+
+
+// The body of the /axiom-map slash command. Kept beside the installer so the
+// command a user runs and the instructions Axiom means to give are the same
+// text, rather than two copies that drift.
+const NAME_ARCHITECTURE_COMMAND = `# Axiom — map this codebase's architecture
+
+Map this codebase's architecture for its owner, who is watching a spatial map
+of it in Axiom. Produce a TREE OF SEMANTIC SYSTEMS.
+
+**What a system is.** A responsibility — something the codebase does. Name it
+the way an engineer would say it aloud explaining the project to a new
+colleague.
+
+A system is NOT a folder. Folders are for navigation; never use them as the
+answer. Two files in different directories belong to the same system when they
+serve the same responsibility, and one directory often holds several distinct
+systems.
+
+**Nesting is the point.** Every system may contain sub-systems, and those may
+contain more. Go as deep as the code justifies — a large area earns four or
+five levels, a small utility earns none. If a system holds more than about ten
+files, ask whether it is really one thing or several. There may be hundreds of
+systems in the tree; what must stay small is how many appear at any one level.
+
+**Shape.** Around a dozen systems at the top — the parts you would list if
+asked what this application is made of. For each: a name of two to four words,
+one sentence saying what it is responsible for, and for leaf systems the files
+that belong to it.
+
+**How to work.** Start from the file tree only to orient yourself. Then READ.
+Open entry points, the largest files, anything whose name suggests it
+coordinates others. Do not infer from filenames — a file called utils.ts may be
+the core of a system. Do not begin from the systems already on the map: those
+were named automatically from word frequency and describe nothing.
+
+**Submit it** with Axiom's \`edit_systems\` tool using \`op: "propose"\`, passing the
+whole tree in one call: each entry takes a systemKey, name, description, an
+optional parentKey naming another proposed system, and files (repository-relative
+paths) for leaf systems.
+
+The human confirms, renames or rejects each system. Nothing reaches their map
+until they do.
+`
 
 // ─── App lifecycle ──────────────────────────────────────────────────────────
 

@@ -31,6 +31,12 @@ export interface AgentHost {
    * looking for a command that does not exist in their client.
    */
   command: string
+  /**
+   * Whether Axiom can write this host's slash command itself. Claude Code
+   * builds its command list from markdown in ~/.claude/commands, so the command
+   * can simply be installed rather than described.
+   */
+  installable?: boolean
 }
 
 const jsonEntry = (command: string, args: string[]) =>
@@ -42,7 +48,8 @@ export const AGENT_HOSTS: AgentHost[] = [
     label: 'Claude Code',
     how: 'Run this in your terminal — Claude Code writes its own configuration.',
     snippet: (command, args) => `claude mcp add axiom -- ${command} ${args.map(quote).join(' ')}`,
-    command: '/mcp__axiom__name-architecture',
+    command: '/axiom-map',
+    installable: true,
   },
   {
     id: 'codex',

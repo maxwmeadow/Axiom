@@ -49,6 +49,10 @@ contextBridge.exposeInMainWorld('axiom', {
   getAgentConnection: (): Promise<AgentConnection> =>
     ipcRenderer.invoke('agent:connection'),
 
+  // Install Axiom's slash command into the user's agent
+  installAgentCommand: (): Promise<{ installed: boolean; path: string; error?: string }> =>
+    ipcRenderer.invoke('agent:install-command'),
+
   // Listen for messages from archd (forwarded by main process)
   onArchdMessage: (callback: (msg: WsMessage) => void) => {
     ipcRenderer.on('archd:message', (_event, msg) => callback(msg))
@@ -86,6 +90,7 @@ declare global {
       openFile: (filePath: string) => void
       getAppInfo: () => Promise<{ version: string; dataDir: string; platform: string; mcpPath: string; archdApiUrl: string; archdWsUrl: string; isPackaged: boolean }>
       getAgentConnection: () => Promise<AgentConnection>
+      installAgentCommand: () => Promise<{ installed: boolean; path: string; error?: string }>
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void
     }
