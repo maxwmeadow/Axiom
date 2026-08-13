@@ -418,7 +418,7 @@ function setupIPC(): void {
 
   // Install Axiom into one agent: its MCP server entry, and its slash command
   // where the host has such a thing. An action, not an instruction.
-  ipcMain.handle('agent:install', (_event, hostId: string) => {
+  ipcMain.handle('agent:install', (_event, hostId: string, projectRoot?: string) => {
     const host = buildHosts().find(candidate => candidate.id === hostId)
     if (!host) return { ok: false, detail: `Unknown agent "${hostId}".`, paths: [] }
     const mcpPath = app.isPackaged
@@ -428,7 +428,7 @@ function setupIPC(): void {
       return { ok: false, detail: `This Axiom install has no MCP server at ${mcpPath}.`, paths: [] }
     }
     try {
-      return host.install('node', [mcpPath], NAME_ARCHITECTURE_COMMAND)
+      return host.install('node', [mcpPath], NAME_ARCHITECTURE_COMMAND, projectRoot)
     } catch (error) {
       return {
         ok: false,

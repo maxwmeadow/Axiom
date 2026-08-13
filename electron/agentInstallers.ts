@@ -37,7 +37,7 @@ export interface HostDescriptor {
   commandPath?: () => string
   /** The command a user types once installed. */
   command?: string
-  install: (command: string, args: string[], brief: string) => InstallResult
+  install: (command: string, args: string[], brief: string, projectRoot?: string) => InstallResult
 }
 
 const home = () => os.homedir()
@@ -141,25 +141,43 @@ export function buildHosts(): HostDescriptor[] {
       id: 'cursor',
       label: 'Cursor',
       configPath: () => join(home(), '.cursor', 'mcp.json'),
-      install: (command, args) =>
-        installJsonServer(join(home(), '.cursor', 'mcp.json'), 'mcpServers', command, args, 'Cursor'),
+      // Cursor reads project config before global, and its global file is
+      // widely reported as ignored, so both are written and the project one is
+      // what actually gets used.
+      install: (command, args, _brief, projectRoot) => {
+        const global = installJsonServer(join(home(), '.cursor', 'mcp.json'), 'mcpServers', command, args, 'Cursor')
+        if (!projectRoot) return global
+        const local = installJsonServer(join(projectRoot, '.cursor', 'mcp.json'), 'mcpServers', command, args, 'Cursor')
+        return {
+          ok: global.ok || local.ok,
+          detail: 'Added Axiom to Cursor, for this project and globally. Restart Cursor.',
+          paths: [...global.paths, ...local.paths],
+        }
+      },
     },
     {
       id: 'copilot',
       label: 'GitHub Copilot',
-      configPath: () => join(home(), '.vscode', 'mcp.json'),
-      commandPath: () => join(home(), '.vscode', 'prompts', 'axiom-map.prompt.md'),
+      configPath: () => join(home(), '.copilot', 'mcp-config.json'),
       command: '/axiom-map',
-      install: (command, args, brief) => {
-        // VS Code takes servers under `servers`, not `mcpServers`.
-        const result = installJsonServer(join(home(), '.vscode', 'mcp.json'), 'servers', command, args, 'GitHub Copilot')
-        if (!result.ok) return result
-        const cmd = installCommandFile(join(home(), '.vscode', 'prompts', 'axiom-map.prompt.md'), brief)
-        return {
-          ok: true,
-          detail: 'Added Axiom and installed the axiom-map prompt. Reload VS Code.',
-          paths: [...result.paths, cmd],
+      // ~/.copilot/mcp-config.json is the documented portable user config that
+      // Copilot reads across VS Code and the CLI. The workspace file VS Code
+      // reads is .vscode/mcp.json and it keys servers under `servers`, not
+      // `mcpServers`; both are written so either path works.
+      install: (command, args, brief, projectRoot) => {
+        const user = installJsonServer(
+          join(home(), '.copilot', 'mcp-config.json'), 'mcpServers', command, args, 'GitHub Copilot',
+        )
+        const paths = [...user.paths]
+        if (projectRoot) {
+          const ws = installJsonServer(join(projectRoot, '.vscode', 'mcp.json'), 'servers', command, args, 'VS Code')
+          paths.push(...ws.paths)
+          try {
+            paths.push(installCommandFile(join(projectRoot, '.github', 'prompts', 'axiom-map.prompt.md'), brief))
+          } catch { /* prompt file is a convenience, not the connection */ }
         }
+        if (!user.ok) return { ...user, paths }
+        return { ok: true, detail: 'Added Axiom to Copilot. Reload VS Code.', paths }
       },
     },
     {
@@ -175,10 +193,12 @@ export function buildHosts(): HostDescriptor[] {
     {
       id: 'antigravity',
       label: 'Antigravity',
-      configPath: () => join(home(), '.antigravity', 'mcp_config.json'),
+      // Antigravity keeps its servers under the Gemini config tree, not a
+      // ~/.antigravity folder. Confirmed against a real install.
+      configPath: () => join(home(), '.gemini', 'antigravity-ide', 'mcp_config.json'),
       install: (command, args) =>
         installJsonServer(
-          join(home(), '.antigravity', 'mcp_config.json'),
+          join(home(), '.gemini', 'antigravity-ide', 'mcp_config.json'),
           'mcpServers', command, args, 'Antigravity',
         ),
     },

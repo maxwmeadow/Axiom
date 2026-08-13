@@ -165,7 +165,7 @@ export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, o
                         disabled={installing === candidate.id}
                         onClick={async () => {
                           setInstalling(candidate.id)
-                          const outcome = await window.axiom.installAgent(candidate.id)
+                          const outcome = await window.axiom.installAgent(candidate.id, project.rootPath)
                           setResults(current => ({ ...current, [candidate.id]: outcome }))
                           setInstalling(null)
                         }}

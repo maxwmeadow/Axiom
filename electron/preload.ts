@@ -53,8 +53,8 @@ contextBridge.exposeInMainWorld('axiom', {
   listAgentHosts: (): Promise<AgentHostInfo[]> => ipcRenderer.invoke('agent:hosts'),
 
   // Install Axiom into one agent — server entry and slash command
-  installAgent: (hostId: string): Promise<AgentInstallResult> =>
-    ipcRenderer.invoke('agent:install', hostId),
+  installAgent: (hostId: string, projectRoot?: string): Promise<AgentInstallResult> =>
+    ipcRenderer.invoke('agent:install', hostId, projectRoot),
 
   // Listen for messages from archd (forwarded by main process)
   onArchdMessage: (callback: (msg: WsMessage) => void) => {
@@ -109,7 +109,7 @@ declare global {
       getAppInfo: () => Promise<{ version: string; dataDir: string; platform: string; mcpPath: string; archdApiUrl: string; archdWsUrl: string; isPackaged: boolean }>
       getAgentConnection: () => Promise<AgentConnection>
       listAgentHosts: () => Promise<AgentHostInfo[]>
-      installAgent: (hostId: string) => Promise<AgentInstallResult>
+      installAgent: (hostId: string, projectRoot?: string) => Promise<AgentInstallResult>
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void
     }
