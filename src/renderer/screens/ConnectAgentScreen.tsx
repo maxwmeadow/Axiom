@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ProjectConfig } from '../../shared/types'
 import type { AgentConnection } from '../../../electron/preload'
+import { AGENT_HOSTS } from './agentHosts'
 
 /**
  * The first thing you see on a codebase whose architecture nobody has authored.
@@ -48,6 +49,7 @@ interface Props {
 export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, onBack }: Props) {
   const [connection, setConnection] = useState<AgentConnection | null>(null)
   const [copied, setCopied] = useState<'config' | 'command' | null>(null)
+  const [hostId, setHostId] = useState(AGENT_HOSTS[0].id)
   const [phase, setPhaseState] = useState<Phase>(() => progress.get(project.id) ?? 'waiting')
   const setPhase = useCallback((next: Phase) => {
     // One-way: connected never falls back to waiting, and a proposal outranks
@@ -110,6 +112,10 @@ export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, o
     }
   }, [])
 
+  const host = AGENT_HOSTS.find(candidate => candidate.id === hostId) ?? AGENT_HOSTS[0]
+  const snippet = connection?.available
+    ? host.snippet(connection.command, connection.args)
+    : ''
   const connected = phase !== 'waiting'
   const stepState = (step: 1 | 2 | 3) => {
     if (step === 3) return phase === 'proposed' ? 'done' : connected ? 'active' : 'upcoming'
@@ -136,8 +142,6 @@ export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, o
         <ol className="axiom-connect__steps">
           <li className="axiom-connect__step" data-index="1" data-state={stepState(1)}>
             <h2>Add Axiom to your agent</h2>
-            <p>Paste this into your agent’s MCP configuration — Claude Code, Codex, Cursor, or
-              anything else that speaks MCP.</p>
             {connection && !connection.available ? (
               <p className="axiom-connect__broken">
                 This Axiom install has no MCP server at <code>{connection.path}</code>. Reinstall or
@@ -145,16 +149,31 @@ export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, o
               </p>
             ) : (
               <>
-                <pre className="axiom-connect__config">{connection?.config ?? 'Locating your Axiom install…'}</pre>
+                <div className="axiom-connect__hosts" role="tablist" aria-label="Which agent are you using?">
+                  {AGENT_HOSTS.map(candidate => (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={candidate.id === hostId}
+                      data-selected={candidate.id === hostId}
+                      onClick={() => setHostId(candidate.id)}
+                    >
+                      {candidate.label}
+                    </button>
+                  ))}
+                </div>
+                <p>{host.how}{host.location && <> Its configuration lives at <code>{host.location}</code>.</>}</p>
+                <pre className="axiom-connect__config">{snippet || 'Locating your Axiom install…'}</pre>
                 <div className="axiom-connect__actions">
                   <button
                     type="button"
                     className="axiom-connect__copy"
                     data-copied={copied === 'config'}
-                    onClick={() => void copy(connection?.config ?? '', 'config')}
+                    onClick={() => void copy(snippet, 'config')}
                     disabled={!connection?.available}
                   >
-                    {copied === 'config' ? 'Copied ✓' : 'Copy configuration'}
+                    {copied === 'config' ? 'Copied ✓' : 'Copy'}
                   </button>
                   {connected && <span className="axiom-connect__hint">Already connected — nothing to do here.</span>}
                 </div>
@@ -172,19 +191,20 @@ export function ConnectAgentScreen({ project, fileCount, indexing, onContinue, o
             <h2>Ask it to map this project</h2>
             {connected ? (
               <>
-                <p>Your agent is listening. Give it this:</p>
+                <p>Your agent is listening. Start a <strong>new session</strong> and run:</p>
                 <div className="axiom-connect__command">
                   <strong>{COMMAND}</strong>
                   <button type="button" onClick={() => void copy(COMMAND, 'command')}>
                     {copied === 'command' ? 'Copied ✓' : 'Copy'}
                   </button>
                 </div>
-                <p>Or just tell it: <em>map this codebase’s architecture in Axiom</em>. It will read
-                  the project and propose a tree of systems. Nothing reaches your map until you
-                  approve it.</p>
+                <p>Axiom publishes that as an MCP prompt, so the agent gets its full brief from
+                  the server — there is no prompt to paste. It reads the project, proposes a tree of
+                  systems, and nothing reaches your map until you approve it.</p>
               </>
             ) : (
-              <p>Once your agent is connected, Axiom will give you the command to run here.</p>
+              <p>Once your agent is connected, Axiom will give you a slash command to run in a new
+                session. That command briefs the agent for you — nothing to copy or write yourself.</p>
             )}
           </li>
         </ol>

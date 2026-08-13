@@ -315,3 +315,30 @@
   .axiom-connect__sheet { margin: 0; padding: 32px 22px; border-left: none; border-right: none; }
   .axiom-connect__title { font-size: 30px; }
 }
+
+/* Which agent you are using. Each host is configured differently — a CLI, a
+   TOML file, a project JSON — so the tab changes what you paste, not just the
+   label above it. */
+
+.axiom-connect__hosts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 14px;
+}
+.axiom-connect__hosts button {
+  border: 1px solid #c2ccc5;
+  border-radius: 2px;
+  background: #e8e7df;
+  color: #55635d;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 5px 12px;
+}
+.axiom-connect__hosts button:hover { border-color: #8fa199; color: #24312c; }
+.axiom-connect__hosts button[data-selected='true'] {
+  border-color: #35705f;
+  background: #35705f;
+  color: #f4f8f5;
+}
