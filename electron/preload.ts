@@ -49,9 +49,12 @@ contextBridge.exposeInMainWorld('axiom', {
   getAgentConnection: (): Promise<AgentConnection> =>
     ipcRenderer.invoke('agent:connection'),
 
-  // Install Axiom's slash command into the user's agent
-  installAgentCommand: (): Promise<{ installed: boolean; path: string; error?: string }> =>
-    ipcRenderer.invoke('agent:install-command'),
+  // Which agents are on this machine
+  listAgentHosts: (): Promise<AgentHostInfo[]> => ipcRenderer.invoke('agent:hosts'),
+
+  // Install Axiom into one agent — server entry and slash command
+  installAgent: (hostId: string): Promise<AgentInstallResult> =>
+    ipcRenderer.invoke('agent:install', hostId),
 
   // Listen for messages from archd (forwarded by main process)
   onArchdMessage: (callback: (msg: WsMessage) => void) => {
@@ -62,6 +65,21 @@ contextBridge.exposeInMainWorld('axiom', {
     ipcRenderer.removeListener('archd:message', (_event: Electron.IpcRendererEvent, msg: WsMessage) => callback(msg))
   },
 })
+
+export interface AgentHostInfo {
+  id: string
+  label: string
+  /** Whether this agent looks installed on this machine. */
+  detected: boolean
+  configPath: string
+  command: string | null
+}
+
+export interface AgentInstallResult {
+  ok: boolean
+  detail: string
+  paths: string[]
+}
 
 export interface AgentConnection {
   command: string
@@ -90,7 +108,8 @@ declare global {
       openFile: (filePath: string) => void
       getAppInfo: () => Promise<{ version: string; dataDir: string; platform: string; mcpPath: string; archdApiUrl: string; archdWsUrl: string; isPackaged: boolean }>
       getAgentConnection: () => Promise<AgentConnection>
-      installAgentCommand: () => Promise<{ installed: boolean; path: string; error?: string }>
+      listAgentHosts: () => Promise<AgentHostInfo[]>
+      installAgent: (hostId: string) => Promise<AgentInstallResult>
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void
     }

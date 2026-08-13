@@ -342,3 +342,56 @@
   background: #35705f;
   color: #f4f8f5;
 }
+
+/* One row per agent. Detected agents sort first — the editor you actually use
+   should not be third in a list of six. */
+
+.axiom-connect__agents {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid #d8d6cc;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.axiom-connect__agents > li { border-bottom: 1px solid #e2e0d6; background: #f7f6f1; }
+.axiom-connect__agents > li:last-child { border-bottom: none; }
+.axiom-connect__agents > li[data-detected='true'] { background: #edf2ee; }
+
+.axiom-connect__agent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+}
+.axiom-connect__agent-name {
+  flex: 1 1 auto;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #16211d;
+}
+.axiom-connect__agent-name em {
+  margin-left: 9px;
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: #35705f;
+}
+.axiom-connect__agent-row button { padding: 5px 13px; font-size: 11.5px; }
+
+.axiom-connect__agent-detail {
+  margin: 0;
+  padding: 0 14px 11px;
+  color: #55635d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.axiom-connect__agent-paths {
+  display: block;
+  margin-top: 4px;
+  color: #8a968f;
+  font-size: 11px;
+  word-break: break-all;
+}
+.axiom-connect__agents .axiom-connect__broken { margin: 0 14px 12px; }

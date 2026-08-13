@@ -6,6 +6,7 @@ import os from 'os'
 import fs from 'fs'
 import type { ProjectConfig, WsMessage } from '../src/shared/types'
 import { completeSourceBoundaries, mergePersistedProjectConfig } from '../src/shared/projectLifecycle'
+import { buildHosts, detectHosts } from './agentInstallers'
 
 // electron-vite sets VITE_DEV_SERVER_URL in dev/preview mode only
 const IS_DEV = !!process.env.VITE_DEV_SERVER_URL
@@ -403,29 +404,36 @@ function setupIPC(): void {
     }
   })
 
-  // Install Axiom's slash command for Claude Code.
-  //
-  // Claude Code builds its slash commands from markdown files in
-  // ~/.claude/commands — the filename becomes the command and the body is the
-  // brief. MCP *prompts* are a different mechanism and this client does not
-  // surface them in the slash menu, so telling a user to type an MCP prompt
-  // name sent them looking for something their client never had.
-  //
-  // Writing the file is a better integration than an instruction anyway: the
-  // command appears without the user copying anything, and its body is
-  // generated from the same source Axiom uses, so it cannot drift.
-  ipcMain.handle('agent:install-command', () => {
-    const commandsDir = join(os.homedir(), '.claude', 'commands')
-    const file = join(commandsDir, 'axiom-map.md')
+  // Which agents are on this machine, and what each install would touch.
+  ipcMain.handle('agent:hosts', () => {
+    const present = detectHosts()
+    return buildHosts().map(host => ({
+      id: host.id,
+      label: host.label,
+      detected: present[host.id] === true,
+      configPath: host.configPath(),
+      command: host.command ?? null,
+    }))
+  })
+
+  // Install Axiom into one agent: its MCP server entry, and its slash command
+  // where the host has such a thing. An action, not an instruction.
+  ipcMain.handle('agent:install', (_event, hostId: string) => {
+    const host = buildHosts().find(candidate => candidate.id === hostId)
+    if (!host) return { ok: false, detail: `Unknown agent "${hostId}".`, paths: [] }
+    const mcpPath = app.isPackaged
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.js')
+      : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
+    if (!fs.existsSync(mcpPath)) {
+      return { ok: false, detail: `This Axiom install has no MCP server at ${mcpPath}.`, paths: [] }
+    }
     try {
-      fs.mkdirSync(commandsDir, { recursive: true })
-      fs.writeFileSync(file, NAME_ARCHITECTURE_COMMAND, 'utf8')
-      return { installed: true, path: file }
+      return host.install('node', [mcpPath], NAME_ARCHITECTURE_COMMAND)
     } catch (error) {
       return {
-        installed: false,
-        path: file,
-        error: error instanceof Error ? error.message : String(error),
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+        paths: [host.configPath()],
       }
     }
   })
