@@ -2156,6 +2156,28 @@ async function main() {
   try {
     const project = getActiveProject()
     await postAgentActivity(project.workspaceId, 'Agent MCP server connected', 'success')
+    // Connecting is not calling. A host that has started this server reports
+    // itself connected, but until the agent invokes a tool nothing durable is
+    // recorded, so Axiom had no way to know anyone had arrived and its setup
+    // screen waited forever beside a host that said "connected".
+    //
+    // The activity stream above is transient and only reaches an attached
+    // renderer. This writes the arrival to the durable action log, which is
+    // what anything asking "is an agent here?" actually reads.
+    await fetch(`${API_BASE}/api/agent/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: project.workspaceId,
+        cwd: process.cwd(),
+        tool: 'connect',
+        kind: 'session',
+        summary: 'Agent connected to Axiom',
+        targets: [],
+        durationMs: 0,
+        status: 'ok',
+      }),
+    })
   } catch (err) {
     console.error('[axiom-mcp] startup notification failed:', err)
   }
