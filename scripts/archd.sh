@@ -24,7 +24,7 @@ cd "$ROOT/archd-go"
 
 export PATH="/mingw64/bin:/mingw64/lib/go/bin:$PATH"
 export GOROOT="/mingw64/lib/go"
-export GOPATH="/c/Users/maxst/go"
+export GOPATH="${GOPATH:-$HOME/go}"
 export CGO_ENABLED=1
 
 case "${1:-build}" in
@@ -43,7 +43,7 @@ case "${1:-build}" in
     ;;
   dbquery)
     shift
-    go run ./cmd/dbquery/main.go -db /c/Users/maxst/.axiom/data/axiom.db "$@"
+    go run ./cmd/dbquery/main.go -db "${AXIOM_DB_PATH:-$HOME/.axiom/data/axiom.db}" "$@"
     ;;
   *)
     echo "usage: archd.sh [build|test|vet|dbquery]" >&2
