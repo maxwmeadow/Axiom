@@ -5,7 +5,7 @@
 //	GET  /ws                           — WebSocket upgrade (renderer connects here)
 //	GET  /api/snapshot/:workspaceId    — full canvas snapshot
 //	POST /api/workspace                — create or open a workspace + root (opens per-project DB)
-//	DELETE /api/workspace/:id          — close workspace DB connection (call before deleting project dir)
+//	DELETE /api/workspace/:id          — close and permanently delete workspace-owned data
 //	POST /api/systems                  — create / upsert a system
 //	PUT  /api/systems/:id              — update system (name, parent, description)
 //	DELETE /api/systems/:id?workspace= — delete system
@@ -73,6 +73,16 @@ type Server struct {
 	rootSyncPending   map[string]pendingRootSync
 	collisionCache    map[string]collisionCacheEntry
 	collisionCacheTTL time.Duration
+	// A deleted workspace cannot be lazily reopened by a late poll or an old
+	// MCP process. Only POST /api/workspace explicitly starts a new lifetime.
+	deletedWorkspaces map[string]struct{}
+	// Agent presence is a short lease renewed by each running MCP process. It
+	// is deliberately separate from the durable action log: history proves an
+	// agent connected before, while a lease proves it is connected now.
+	presenceMu       sync.Mutex
+	agentPresence    map[string]map[string]AgentPresence
+	presenceNow      func() time.Time
+	agentPresenceTTL time.Duration
 }
 
 func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
@@ -91,6 +101,10 @@ func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
 		rootSyncPending:   make(map[string]pendingRootSync),
 		collisionCache:    make(map[string]collisionCacheEntry),
 		collisionCacheTTL: 2 * time.Second,
+		deletedWorkspaces: make(map[string]struct{}),
+		agentPresence:     make(map[string]map[string]AgentPresence),
+		presenceNow:       time.Now,
+		agentPresenceTTL:  15 * time.Second,
 	}
 	// Adapters started outside the launcher (PYTHONPATH opt-in) have no
 	// AXIOM_WORKSPACE_ID; map them to a workspace by their working directory.
@@ -124,6 +138,9 @@ func (s *Server) workspaceForCwd(cwd string) string {
 func (s *Server) openDB(workspaceID string) (*sql.DB, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, deleted := s.deletedWorkspaces[workspaceID]; deleted {
+		return nil, fmt.Errorf("workspace %s was deleted; reopen it explicitly", workspaceID)
+	}
 	if d, ok := s.dbs[workspaceID]; ok {
 		return d, nil
 	}
@@ -134,6 +151,72 @@ func (s *Server) openDB(workspaceID string) (*sql.DB, error) {
 	}
 	s.dbs[workspaceID] = d
 	return d, nil
+}
+
+func validWorkspaceID(workspaceID string) bool {
+	if workspaceID == "" || workspaceID == "." || workspaceID == ".." || len(workspaceID) > 128 {
+		return false
+	}
+	for _, char := range workspaceID {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (s *Server) workspaceDataPath(workspaceID string) (string, error) {
+	if !validWorkspaceID(workspaceID) {
+		return "", fmt.Errorf("invalid workspace id")
+	}
+	base, err := filepath.Abs(s.dataDir)
+	if err != nil {
+		return "", err
+	}
+	target, err := filepath.Abs(filepath.Join(base, workspaceID))
+	if err != nil {
+		return "", err
+	}
+	relative, err := filepath.Rel(base, target)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("workspace path escapes data directory")
+	}
+	return target, nil
+}
+
+func (s *Server) markWorkspaceDeleted(workspaceID string) {
+	s.mu.Lock()
+	s.deletedWorkspaces[workspaceID] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *Server) reviveWorkspace(workspaceID string) {
+	s.mu.Lock()
+	delete(s.deletedWorkspaces, workspaceID)
+	s.mu.Unlock()
+}
+
+func (s *Server) deleteWorkspace(workspaceID string) error {
+	projectDir, err := s.workspaceDataPath(workspaceID)
+	if err != nil {
+		return err
+	}
+	// Tombstone first. Otherwise a proposal poll between closeDB and RemoveAll
+	// can lazily reopen the same SQLite database and keep the deleted project alive.
+	s.markWorkspaceDeleted(workspaceID)
+	s.closeDB(workspaceID)
+	if err := os.RemoveAll(projectDir); err != nil {
+		return fmt.Errorf("delete workspace data: %w", err)
+	}
+	if _, err := os.Stat(projectDir); !os.IsNotExist(err) {
+		if err == nil {
+			return fmt.Errorf("workspace data still exists after deletion")
+		}
+		return fmt.Errorf("verify workspace deletion: %w", err)
+	}
+	return nil
 }
 
 // dbFor returns the already-open database for a workspace, or an error if it
@@ -189,6 +272,9 @@ func (s *Server) closeDB(workspaceID string) {
 	if d != nil {
 		_ = d.Close()
 	}
+	s.presenceMu.Lock()
+	delete(s.agentPresence, workspaceID)
+	s.presenceMu.Unlock()
 }
 
 // startWatcher attaches a live fsnotify watcher to a root so saves re-index
@@ -258,6 +344,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	s.registerRuntimeRoutes(mux)
 	s.registerInvestigationRoutes(mux)
 	mux.HandleFunc("/api/agent/activity", s.handleAgentActivity)
+	mux.HandleFunc("/api/agent/presence", s.handleAgentPresence)
 	mux.HandleFunc("/api/agent/action", s.handleAgentAction)
 	mux.HandleFunc("/api/agent/actions", s.handleAgentActions)
 	mux.HandleFunc("/api/activity/hotspots", s.handleActivityHotspots)
@@ -370,6 +457,13 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	if wsID == "" {
 		wsID = uuid.New().String()
 	}
+	if !validWorkspaceID(wsID) {
+		jsonError(w, "invalid workspace id", http.StatusBadRequest)
+		return
+	}
+	// This POST is the one operation allowed to begin a new lifetime for an id
+	// that was explicitly deleted. Ordinary reads and writes remain tombstoned.
+	s.reviveWorkspace(wsID)
 
 	sqlDB, err := s.openDB(wsID)
 	if err != nil {
@@ -407,9 +501,9 @@ func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"workspaceId": wsID, "rootId": rootID})
 }
 
-// handleWorkspaceByID handles DELETE /api/workspace/:id.
-// The renderer calls this before deleting the project directory so the SQLite
-// file lock is released (critical on Windows).
+// handleWorkspaceByID handles DELETE /api/workspace/:id. The daemon owns the
+// whole teardown: it releases locks, deletes the database directory, and
+// tombstones the id so late reads cannot recreate it.
 func (s *Server) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 	workspaceID := strings.TrimPrefix(r.URL.Path, "/api/workspace/")
 	if workspaceID == "" {
@@ -420,9 +514,12 @@ func (s *Server) handleWorkspaceByID(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	s.closeDB(workspaceID)
-	log.Printf("[api] workspace %s closed", workspaceID)
-	jsonOK(w, map[string]string{"closed": workspaceID})
+	if err := s.deleteWorkspace(workspaceID); err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	log.Printf("[api] workspace %s deleted", workspaceID)
+	jsonOK(w, map[string]string{"deleted": workspaceID})
 }
 
 // ─── Systems ──────────────────────────────────────────────────────────────────

@@ -25,11 +25,6 @@ var skipDirs = map[string]bool{
 	"__pycache__": true, "vendor": true, "target": true,
 }
 
-var supportedExts = map[string]bool{
-	".ts": true, ".tsx": true, ".js": true, ".mjs": true,
-	".jsx": true, ".py": true, ".go": true, ".rs": true, ".cs": true,
-}
-
 const (
 	fileChangeDebounce     = 150 * time.Millisecond
 	classificationDebounce = 1500 * time.Millisecond
@@ -334,5 +329,5 @@ func isIgnoredPath(path string, ignoredPaths []string) bool {
 }
 
 func isSourceFile(path string) bool {
-	return supportedExts[strings.ToLower(filepath.Ext(path))]
+	return indexer.IsSupportedSourceFile(path)
 }

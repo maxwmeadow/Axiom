@@ -2,7 +2,9 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -37,6 +39,7 @@ type ArchitectureProposalRound struct {
 	CreatedAt       int64                            `json:"createdAt"`
 	Systems         []ArchitectureProposalSystem     `json:"systems"`
 	Memberships     []ArchitectureProposalMembership `json:"memberships"`
+	Layouts         []ArchitectureProposalLayout     `json:"layouts"`
 }
 
 type ArchitectureProposalSystem struct {
@@ -69,6 +72,23 @@ type ArchitectureProposalDecision struct {
 	Decision        string `json:"decision"`
 	RejectionReason string `json:"rejectionReason"`
 	DecidedBy       string `json:"decidedBy"`
+}
+
+// ArchitectureProposalLayout is the mutable review-only counterpart of a
+// Floor layout. NodeKey is a proposal system key or membership id; parent
+// references are semantic proposal references, never renderer node ids.
+type ArchitectureProposalLayout struct {
+	NodeType      string  `json:"nodeType"`
+	NodeKey       string  `json:"nodeKey"`
+	ParentRefType string  `json:"parentRefType"`
+	ParentRefID   string  `json:"parentRefId"`
+	PositionX     float64 `json:"positionX"`
+	PositionY     float64 `json:"positionY"`
+	Width         float64 `json:"width"`
+	Height        float64 `json:"height"`
+	Scale         float64 `json:"scale"`
+	InteriorScale float64 `json:"interiorScale"`
+	UpdatedAt     int64   `json:"updatedAt"`
 }
 
 func validateProposalRound(round *ArchitectureProposalRound) error {
@@ -219,26 +239,26 @@ func insertProposalRound(tx *sql.Tx, proposalID string, round *ArchitecturePropo
 	}
 	for i := range round.Memberships {
 		membership := &round.Memberships[i]
-		var currentRoot, currentPath string
+		var currentRoot, currentPath, currentLanguage string
 		switch {
 		case membership.FileID != nil:
-			if err := tx.QueryRow(`SELECT f.root_id,f.rel_path FROM files f JOIN roots r ON r.id=f.root_id WHERE f.id=? AND r.workspace_id=?`, *membership.FileID, workspaceID).Scan(&currentRoot, &currentPath); err != nil {
+			if err := tx.QueryRow(`SELECT f.root_id,f.rel_path,f.language FROM files f JOIN roots r ON r.id=f.root_id WHERE f.id=? AND r.workspace_id=?`, *membership.FileID, workspaceID).Scan(&currentRoot, &currentPath, &currentLanguage); err != nil {
 				return fmt.Errorf("membership file %s is stale: %w", membership.FilePath, err)
 			}
 		case membership.Disposition == "assign" || membership.Disposition == "retain":
 			if proposalRootID != nil {
-				if err := tx.QueryRow(`SELECT id,root_id,rel_path FROM files WHERE root_id=? AND rel_path=?`, *proposalRootID, membership.FilePath).Scan(&membership.FileID, &currentRoot, &currentPath); err != nil {
+				if err := tx.QueryRow(`SELECT id,root_id,rel_path,language FROM files WHERE root_id=? AND rel_path=?`, *proposalRootID, membership.FilePath).Scan(&membership.FileID, &currentRoot, &currentPath, &currentLanguage); err != nil {
 					return fmt.Errorf("membership path %s does not resolve in proposal root: %w", membership.FilePath, err)
 				}
 			} else {
-				rows, err := tx.Query(`SELECT f.id,f.root_id,f.rel_path FROM files f JOIN roots r ON r.id=f.root_id WHERE r.workspace_id=? AND f.rel_path=?`, workspaceID, membership.FilePath)
+				rows, err := tx.Query(`SELECT f.id,f.root_id,f.rel_path,f.language FROM files f JOIN roots r ON r.id=f.root_id WHERE r.workspace_id=? AND f.rel_path=?`, workspaceID, membership.FilePath)
 				if err != nil {
 					return err
 				}
 				matches := 0
 				for rows.Next() {
 					matches++
-					if err := rows.Scan(&membership.FileID, &currentRoot, &currentPath); err != nil {
+					if err := rows.Scan(&membership.FileID, &currentRoot, &currentPath, &currentLanguage); err != nil {
 						rows.Close()
 						return err
 					}
@@ -250,6 +270,10 @@ func insertProposalRound(tx *sql.Tx, proposalID string, round *ArchitecturePropo
 					return fmt.Errorf("membership path %s resolved to %d files; provide rootId", membership.FilePath, matches)
 				}
 			}
+		}
+		if (membership.Disposition == "assign" || membership.Disposition == "retain") &&
+			(currentLanguage == "markdown" || currentLanguage == "text") {
+			return fmt.Errorf("documentation path %s belongs in Documents and cannot be assigned to an architecture system", membership.FilePath)
 		}
 		if currentRoot != "" {
 			if membership.RootID != "" && membership.RootID != currentRoot {
@@ -298,6 +322,341 @@ func AddArchitectureProposalRevision(database *sql.DB, proposalID, workspaceID s
 	return GetArchitectureProposal(database, proposalID, workspaceID, false)
 }
 
+// ApplyArchitectureProposalLayouts commits one complete review gesture. In
+// addition to geometry, a changed coordinate parent updates the proposal's
+// semantic hierarchy (or a membership's target) in the same transaction.
+// Nothing here mutates the live systems/files tables.
+func ApplyArchitectureProposalLayouts(database *sql.DB, proposalID, workspaceID string, revision int, updates []ArchitectureProposalLayout) (*ArchitectureProposal, error) {
+	if len(updates) == 0 {
+		return nil, fmt.Errorf("at least one proposal layout is required")
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var current int
+	if err := tx.QueryRow(`SELECT current_revision FROM architecture_proposals WHERE id=? AND workspace_id=?`, proposalID, workspaceID).Scan(&current); err != nil {
+		return nil, err
+	}
+	if current != revision {
+		return nil, fmt.Errorf("stale proposal revision: current=%d", current)
+	}
+
+	type systemState struct {
+		parentType string
+		parentID   string
+		decision   string
+	}
+	systems := make(map[string]systemState)
+	rows, err := tx.Query(`SELECT system_key,parent_ref_type,parent_ref_id,decision FROM architecture_proposal_systems WHERE proposal_id=? AND revision=?`, proposalID, revision)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var key string
+		var state systemState
+		if err := rows.Scan(&key, &state.parentType, &state.parentID, &state.decision); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		systems[key] = state
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UnixMilli()
+	seen := make(map[string]bool, len(updates))
+	for i := range updates {
+		u := &updates[i]
+		key := u.NodeType + ":" + u.NodeKey
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate proposal layout %s", key)
+		}
+		seen[key] = true
+		if u.InteriorScale == 0 {
+			u.InteriorScale = 1
+		}
+		geometry := []float64{u.PositionX, u.PositionY, u.Width, u.Height, u.Scale, u.InteriorScale}
+		for _, value := range geometry {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return nil, fmt.Errorf("invalid geometry for proposal layout %s", key)
+			}
+		}
+		if u.Width <= 0 || u.Height <= 0 || u.Scale <= 0 || u.InteriorScale <= 0 {
+			return nil, fmt.Errorf("invalid geometry for proposal layout %s", key)
+		}
+		switch u.NodeType {
+		case "system":
+			state, ok := systems[u.NodeKey]
+			if !ok {
+				return nil, fmt.Errorf("proposal system %s does not exist", u.NodeKey)
+			}
+			if state.decision != ProposalDecisionPending {
+				return nil, fmt.Errorf("proposal system %s is already %s", u.NodeKey, state.decision)
+			}
+			switch u.ParentRefType {
+			case "scope":
+				u.ParentRefID = ""
+			case "proposed_system":
+				if u.ParentRefID == u.NodeKey || systems[u.ParentRefID].parentType == "" {
+					return nil, fmt.Errorf("proposed parent %s does not exist", u.ParentRefID)
+				}
+			case "live_system":
+				var exists int
+				if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM systems WHERE id=? AND workspace_id=?)`, u.ParentRefID, workspaceID).Scan(&exists); err != nil {
+					return nil, err
+				}
+				if exists == 0 {
+					return nil, fmt.Errorf("live parent %s does not belong to workspace", u.ParentRefID)
+				}
+			default:
+				return nil, fmt.Errorf("invalid parent reference %q", u.ParentRefType)
+			}
+			state.parentType, state.parentID = u.ParentRefType, u.ParentRefID
+			systems[u.NodeKey] = state
+		case "file":
+			target, targetExists := systems[u.ParentRefID]
+			if u.ParentRefType != "proposed_system" || !targetExists {
+				return nil, fmt.Errorf("proposal file parent must be a proposed system")
+			}
+			if target.decision != ProposalDecisionPending {
+				return nil, fmt.Errorf("proposal file parent %s is already %s", u.ParentRefID, target.decision)
+			}
+			var decision, disposition string
+			if err := tx.QueryRow(`SELECT s.decision,m.disposition FROM architecture_proposal_memberships m JOIN architecture_proposal_systems s ON s.proposal_id=m.proposal_id AND s.revision=m.revision AND s.system_key=m.target_system_key WHERE m.proposal_id=? AND m.revision=? AND m.id=?`, proposalID, revision, u.NodeKey).Scan(&decision, &disposition); err != nil {
+				return nil, fmt.Errorf("proposal membership %s does not exist: %w", u.NodeKey, err)
+			}
+			if disposition != "assign" || decision != ProposalDecisionPending {
+				return nil, fmt.Errorf("proposal membership %s is not editable", u.NodeKey)
+			}
+		default:
+			return nil, fmt.Errorf("invalid proposal layout node type %q", u.NodeType)
+		}
+	}
+
+	// Reject cycles and derive all depths from the resulting hierarchy. The
+	// stored depth can never drift from a drag-based reparent operation.
+	depths := make(map[string]int, len(systems))
+	visiting := make(map[string]bool, len(systems))
+	var depthFor func(string) (int, error)
+	depthFor = func(key string) (int, error) {
+		if depth, ok := depths[key]; ok {
+			return depth, nil
+		}
+		if visiting[key] {
+			return 0, fmt.Errorf("proposal hierarchy cycle involving %s", key)
+		}
+		visiting[key] = true
+		state := systems[key]
+		depth := 0
+		switch state.parentType {
+		case "proposed_system":
+			parentDepth, err := depthFor(state.parentID)
+			if err != nil {
+				return 0, err
+			}
+			depth = parentDepth + 1
+		case "live_system":
+			if err := tx.QueryRow(`SELECT depth + 1 FROM systems WHERE id=? AND workspace_id=?`, state.parentID, workspaceID).Scan(&depth); err != nil {
+				return 0, err
+			}
+		case "scope":
+			var scopeType, scopeID string
+			if err := tx.QueryRow(`SELECT parent_scope_type,parent_scope_id FROM architecture_proposals WHERE id=?`, proposalID).Scan(&scopeType, &scopeID); err != nil {
+				return 0, err
+			}
+			if scopeType == "system" {
+				if err := tx.QueryRow(`SELECT depth + 1 FROM systems WHERE id=? AND workspace_id=?`, scopeID, workspaceID).Scan(&depth); err != nil {
+					return 0, err
+				}
+			}
+		default:
+			return 0, fmt.Errorf("invalid parent reference %q", state.parentType)
+		}
+		delete(visiting, key)
+		depths[key] = depth
+		return depth, nil
+	}
+	for key := range systems {
+		if _, err := depthFor(key); err != nil {
+			return nil, err
+		}
+	}
+
+	for key, state := range systems {
+		if _, err := tx.Exec(`UPDATE architecture_proposal_systems SET parent_ref_type=?,parent_ref_id=?,depth=? WHERE proposal_id=? AND revision=? AND system_key=?`, state.parentType, state.parentID, depths[key], proposalID, revision, key); err != nil {
+			return nil, err
+		}
+	}
+	for _, u := range updates {
+		if u.NodeType == "file" {
+			if _, err := tx.Exec(`UPDATE architecture_proposal_memberships SET target_system_key=? WHERE proposal_id=? AND revision=? AND id=?`, u.ParentRefID, proposalID, revision, u.NodeKey); err != nil {
+				return nil, err
+			}
+		}
+		if _, err := tx.Exec(`INSERT INTO architecture_proposal_layouts(proposal_id,revision,node_type,node_key,parent_ref_type,parent_ref_id,position_x,position_y,width,height,scale,interior_scale,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(proposal_id,revision,node_type,node_key) DO UPDATE SET parent_ref_type=excluded.parent_ref_type,parent_ref_id=excluded.parent_ref_id,position_x=excluded.position_x,position_y=excluded.position_y,width=excluded.width,height=excluded.height,scale=excluded.scale,interior_scale=excluded.interior_scale,updated_at=excluded.updated_at`, proposalID, revision, u.NodeType, u.NodeKey, u.ParentRefType, u.ParentRefID, u.PositionX, u.PositionY, u.Width, u.Height, u.Scale, u.InteriorScale, now); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE architecture_proposals SET updated_at=? WHERE id=?`, now, proposalID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return GetArchitectureProposal(database, proposalID, workspaceID, false)
+}
+
+// approveArchitectureProposalSystemTx materializes one pending proposal system
+// into the canonical Floor. The caller owns the transaction and the Floor
+// layout revision, which lets a whole reviewed tree become live atomically
+// instead of exposing one partially-materialized branch at a time.
+func approveArchitectureProposalSystemTx(tx *sql.Tx, proposalID, workspaceID string, revision int, system *ArchitectureProposalSystem, decidedBy string, now int64) (bool, error) {
+	var parentID *string
+	switch system.ParentRefType {
+	case "scope":
+		var scopeType, scopeID string
+		if err := tx.QueryRow(`SELECT parent_scope_type,parent_scope_id FROM architecture_proposals WHERE id=?`, proposalID).Scan(&scopeType, &scopeID); err != nil {
+			return false, err
+		}
+		if scopeType == "system" {
+			parentID = &scopeID
+		}
+	case "live_system":
+		parentID = &system.ParentRefID
+	case "proposed_system":
+		if err := tx.QueryRow(`SELECT materialized_system_id FROM architecture_proposal_systems WHERE proposal_id=? AND revision=? AND system_key=? AND decision='approved'`, proposalID, revision, system.ParentRefID).Scan(&parentID); err != nil || parentID == nil {
+			return false, fmt.Errorf("proposed parent %s must be approved first", system.ParentRefID)
+		}
+	}
+	materializedID := uuid.NewString()
+	if _, err := tx.Exec(`INSERT INTO systems(id,workspace_id,name,parent_id,source,description,depth,created_at,updated_at) VALUES(?,?,?,?,'agent',?,?,?,?)`, materializedID, workspaceID, system.Name, parentID, system.Description, system.Depth, now, now); err != nil {
+		return false, err
+	}
+	wroteFloorLayout := false
+	var systemLayout ArchitectureProposalLayout
+	layoutErr := tx.QueryRow(`SELECT node_type,node_key,parent_ref_type,parent_ref_id,position_x,position_y,width,height,scale,interior_scale,updated_at FROM architecture_proposal_layouts WHERE proposal_id=? AND revision=? AND node_type='system' AND node_key=?`, proposalID, revision, system.SystemKey).Scan(&systemLayout.NodeType, &systemLayout.NodeKey, &systemLayout.ParentRefType, &systemLayout.ParentRefID, &systemLayout.PositionX, &systemLayout.PositionY, &systemLayout.Width, &systemLayout.Height, &systemLayout.Scale, &systemLayout.InteriorScale, &systemLayout.UpdatedAt)
+	if layoutErr != nil && !errors.Is(layoutErr, sql.ErrNoRows) {
+		return false, layoutErr
+	}
+	if layoutErr == nil {
+		var parentType *string
+		if parentID != nil {
+			value := "system"
+			parentType = &value
+		}
+		containment := "root"
+		if parentID != nil {
+			containment = "part_of"
+		}
+		if _, err := tx.Exec(`INSERT INTO floor_layouts(workspace_id,node_id,node_type,parent_node_id,parent_node_type,containment_kind,position_x,position_y,width,height,scale,interior_scale,updated_at) VALUES(?,?,'system',?,?,?,?,?,?,?,?,?,?) ON CONFLICT(workspace_id,node_type,node_id) DO UPDATE SET parent_node_id=excluded.parent_node_id,parent_node_type=excluded.parent_node_type,containment_kind=excluded.containment_kind,position_x=excluded.position_x,position_y=excluded.position_y,width=excluded.width,height=excluded.height,scale=excluded.scale,interior_scale=excluded.interior_scale,updated_at=excluded.updated_at`, workspaceID, materializedID, parentID, parentType, containment, systemLayout.PositionX, systemLayout.PositionY, systemLayout.Width, systemLayout.Height, systemLayout.Scale, systemLayout.InteriorScale, now); err != nil {
+			return false, err
+		}
+		wroteFloorLayout = true
+	}
+	rows, err := tx.Query(`SELECT m.id,m.file_id,m.root_id,m.file_path,l.position_x,l.position_y,l.width,l.height,l.scale,l.interior_scale FROM architecture_proposal_memberships m LEFT JOIN architecture_proposal_layouts l ON l.proposal_id=m.proposal_id AND l.revision=m.revision AND l.node_type='file' AND l.node_key=m.id WHERE m.proposal_id=? AND m.revision=? AND m.target_system_key=? AND m.disposition='assign'`, proposalID, revision, system.SystemKey)
+	if err != nil {
+		return false, err
+	}
+	for rows.Next() {
+		var membershipID string
+		var fileID *string
+		var rootID, path string
+		var x, y, width, height, scale, interiorScale *float64
+		if err := rows.Scan(&membershipID, &fileID, &rootID, &path, &x, &y, &width, &height, &scale, &interiorScale); err != nil {
+			rows.Close()
+			return false, err
+		}
+		if fileID == nil {
+			rows.Close()
+			return false, fmt.Errorf("membership %s no longer resolves to a file", path)
+		}
+		result, err := tx.Exec(`UPDATE files SET system_id=? WHERE id=? AND root_id=?`, materializedID, *fileID, rootID)
+		if err != nil {
+			rows.Close()
+			return false, err
+		}
+		if affected, _ := result.RowsAffected(); affected != 1 {
+			rows.Close()
+			return false, fmt.Errorf("membership %s is stale", path)
+		}
+		if x != nil && y != nil && width != nil && height != nil && scale != nil && interiorScale != nil {
+			parentType := "system"
+			if _, err := tx.Exec(`INSERT INTO floor_layouts(workspace_id,node_id,node_type,parent_node_id,parent_node_type,containment_kind,position_x,position_y,width,height,scale,interior_scale,updated_at) VALUES(?,?,'file',?,?,'part_of',?,?,?,?,?,?,?) ON CONFLICT(workspace_id,node_type,node_id) DO UPDATE SET parent_node_id=excluded.parent_node_id,parent_node_type=excluded.parent_node_type,containment_kind=excluded.containment_kind,position_x=excluded.position_x,position_y=excluded.position_y,width=excluded.width,height=excluded.height,scale=excluded.scale,interior_scale=excluded.interior_scale,updated_at=excluded.updated_at`, workspaceID, *fileID, materializedID, parentType, *x, *y, *width, *height, *scale, *interiorScale, now); err != nil {
+				rows.Close()
+				return false, err
+			}
+			wroteFloorLayout = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	result, err := tx.Exec(`UPDATE architecture_proposal_systems SET decision='approved',materialized_system_id=?,decided_by=?,decided_at=? WHERE proposal_id=? AND revision=? AND system_key=? AND decision='pending'`, materializedID, decidedBy, now, proposalID, revision, system.SystemKey)
+	if err != nil {
+		return false, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return false, fmt.Errorf("proposal system %s is already decided", system.SystemKey)
+	}
+	system.Decision = ProposalDecisionApproved
+	system.MaterializedSystemID = &materializedID
+	return wroteFloorLayout, nil
+}
+
+func bumpFloorLayoutRevisionTx(tx *sql.Tx, workspaceID string) error {
+	_, err := tx.Exec(`INSERT INTO floor_layout_revisions(workspace_id,revision) VALUES(?,1) ON CONFLICT(workspace_id) DO UPDATE SET revision=revision+1`, workspaceID)
+	return err
+}
+
+// pruneEmptyClassifierSystemsTx removes the provisional classifier scaffolding
+// that a reviewed proposal has superseded. Proposal memberships move files into
+// authored systems, but the old cluster tree can otherwise remain as empty
+// shells until a later live-clustering pass. That delayed cleanup is not code
+// drift and must not become a Morning Delta asking the user to review the map
+// they just approved.
+//
+// Delete empty leaves repeatedly so a classifier parent survives whenever it
+// still contains a file or any authored/classifier child. The systems delete
+// trigger removes their obsolete Floor layouts in the same transaction.
+func pruneEmptyClassifierSystemsTx(tx *sql.Tx, workspaceID string) (int64, error) {
+	var total int64
+	for {
+		result, err := tx.Exec(`
+			DELETE FROM systems
+			WHERE workspace_id=?
+			  AND source IN ('cluster','directory')
+			  AND NOT EXISTS (
+				SELECT 1 FROM files WHERE files.system_id=systems.id
+			  )
+			  AND NOT EXISTS (
+				SELECT 1 FROM systems child WHERE child.parent_id=systems.id
+			  )`, workspaceID)
+		if err != nil {
+			return total, err
+		}
+		removed, err := result.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += removed
+		if removed == 0 {
+			return total, nil
+		}
+	}
+}
+
 func DecideArchitectureProposalSystem(database *sql.DB, proposalID, workspaceID, systemKey string, revision int, decision ArchitectureProposalDecision) (*ArchitectureProposalSystem, error) {
 	if decision.Decision != ProposalDecisionApproved && decision.Decision != ProposalDecisionRejected {
 		return nil, fmt.Errorf("invalid decision %q", decision.Decision)
@@ -336,63 +695,15 @@ func DecideArchitectureProposalSystem(database *sql.DB, proposalID, workspaceID,
 			return nil, err
 		}
 	} else {
-		var parentID *string
-		switch system.ParentRefType {
-		case "scope":
-			var scopeType, scopeID string
-			if err := tx.QueryRow(`SELECT parent_scope_type,parent_scope_id FROM architecture_proposals WHERE id=?`, proposalID).Scan(&scopeType, &scopeID); err != nil {
-				return nil, err
-			}
-			if scopeType == "system" {
-				parentID = &scopeID
-			}
-		case "live_system":
-			parentID = &system.ParentRefID
-		case "proposed_system":
-			if err := tx.QueryRow(`SELECT materialized_system_id FROM architecture_proposal_systems WHERE proposal_id=? AND revision=? AND system_key=? AND decision='approved'`, proposalID, revision, system.ParentRefID).Scan(&parentID); err != nil || parentID == nil {
-				return nil, fmt.Errorf("proposed parent %s must be approved first", system.ParentRefID)
-			}
-		}
-		materializedID := uuid.NewString()
-		if _, err := tx.Exec(`INSERT INTO systems(id,workspace_id,name,parent_id,source,description,depth,created_at,updated_at) VALUES(?,?,?,?,'agent',?,?,?,?)`, materializedID, workspaceID, system.Name, parentID, system.Description, system.Depth, now, now); err != nil {
-			return nil, err
-		}
-		rows, err := tx.Query(`SELECT file_id,root_id,file_path FROM architecture_proposal_memberships WHERE proposal_id=? AND revision=? AND target_system_key=? AND disposition='assign'`, proposalID, revision, systemKey)
+		wroteFloorLayout, err := approveArchitectureProposalSystemTx(tx, proposalID, workspaceID, revision, &system, decision.DecidedBy, now)
 		if err != nil {
 			return nil, err
 		}
-		for rows.Next() {
-			var fileID *string
-			var rootID, path string
-			if err := rows.Scan(&fileID, &rootID, &path); err != nil {
-				rows.Close()
+		if wroteFloorLayout {
+			if err := bumpFloorLayoutRevisionTx(tx, workspaceID); err != nil {
 				return nil, err
 			}
-			if fileID == nil {
-				rows.Close()
-				return nil, fmt.Errorf("membership %s no longer resolves to a file", path)
-			}
-			result, err := tx.Exec(`UPDATE files SET system_id=? WHERE id=? AND root_id=?`, materializedID, *fileID, rootID)
-			if err != nil {
-				rows.Close()
-				return nil, err
-			}
-			if affected, _ := result.RowsAffected(); affected != 1 {
-				rows.Close()
-				return nil, fmt.Errorf("membership %s is stale", path)
-			}
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if err := rows.Close(); err != nil {
-			return nil, err
-		}
-		if _, err := tx.Exec(`UPDATE architecture_proposal_systems SET decision='approved',materialized_system_id=?,decided_by=?,decided_at=? WHERE proposal_id=? AND revision=? AND system_key=? AND decision='pending'`, materializedID, decision.DecidedBy, now, proposalID, revision, systemKey); err != nil {
-			return nil, err
-		}
-		system.MaterializedSystemID = &materializedID
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -407,6 +718,79 @@ func DecideArchitectureProposalSystem(database *sql.DB, proposalID, workspaceID,
 		}
 	}
 	return nil, sql.ErrNoRows
+}
+
+// FinalizeArchitectureProposal is the commit boundary for review. Every
+// remaining pending system is approved in hierarchy order, and the complete
+// system tree, memberships, and reviewed geometry become canonical in one
+// transaction. A malformed remainder (for example, a pending child beneath a
+// rejected parent) aborts the whole commit instead of leaking a partial Floor.
+func FinalizeArchitectureProposal(database *sql.DB, proposalID, workspaceID string, revision int, decidedBy string) (*ArchitectureProposal, error) {
+	if decidedBy == "" {
+		decidedBy = "user"
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	var current int
+	if err := tx.QueryRow(`SELECT current_revision FROM architecture_proposals WHERE id=? AND workspace_id=?`, proposalID, workspaceID).Scan(&current); err != nil {
+		return nil, err
+	}
+	if current != revision {
+		return nil, fmt.Errorf("stale proposal revision: current=%d", current)
+	}
+
+	rows, err := tx.Query(`SELECT system_key,name,description,parent_ref_type,parent_ref_id,depth,decision,rejection_reason,materialized_system_id FROM architecture_proposal_systems WHERE proposal_id=? AND revision=? ORDER BY depth,name,system_key`, proposalID, revision)
+	if err != nil {
+		return nil, err
+	}
+	systems := make([]ArchitectureProposalSystem, 0)
+	for rows.Next() {
+		var system ArchitectureProposalSystem
+		if err := rows.Scan(&system.SystemKey, &system.Name, &system.Description, &system.ParentRefType, &system.ParentRefID, &system.Depth, &system.Decision, &system.RejectionReason, &system.MaterializedSystemID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		systems = append(systems, system)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UnixMilli()
+	wroteFloorLayout := false
+	for i := range systems {
+		if systems[i].Decision != ProposalDecisionPending {
+			continue
+		}
+		wrote, err := approveArchitectureProposalSystemTx(tx, proposalID, workspaceID, revision, &systems[i], decidedBy, now)
+		if err != nil {
+			return nil, fmt.Errorf("could not finalize %s: %w", systems[i].Name, err)
+		}
+		wroteFloorLayout = wroteFloorLayout || wrote
+	}
+	prunedClassifierSystems, err := pruneEmptyClassifierSystemsTx(tx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("prune superseded classifier systems: %w", err)
+	}
+	if wroteFloorLayout || prunedClassifierSystems > 0 {
+		if err := bumpFloorLayoutRevisionTx(tx, workspaceID); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := tx.Exec(`UPDATE architecture_proposals SET updated_at=? WHERE id=? AND workspace_id=?`, now, proposalID, workspaceID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return GetArchitectureProposal(database, proposalID, workspaceID, false)
 }
 
 func GetArchitectureProposal(database *sql.DB, proposalID, workspaceID string, includeRetained bool) (*ArchitectureProposal, error) {
@@ -451,6 +835,26 @@ func GetArchitectureProposal(database *sql.DB, proposalID, workspaceID string, i
 			return nil, err
 		}
 		round.Memberships = append(round.Memberships, membership)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	rows, err = database.Query(`SELECT node_type,node_key,parent_ref_type,parent_ref_id,position_x,position_y,width,height,scale,interior_scale,updated_at FROM architecture_proposal_layouts WHERE proposal_id=? AND revision=? ORDER BY node_type,node_key`, proposalID, round.Revision)
+	if err != nil {
+		return nil, err
+	}
+	round.Layouts = make([]ArchitectureProposalLayout, 0)
+	for rows.Next() {
+		var layout ArchitectureProposalLayout
+		if err := rows.Scan(&layout.NodeType, &layout.NodeKey, &layout.ParentRefType, &layout.ParentRefID, &layout.PositionX, &layout.PositionY, &layout.Width, &layout.Height, &layout.Scale, &layout.InteriorScale, &layout.UpdatedAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		round.Layouts = append(round.Layouts, layout)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

@@ -181,7 +181,7 @@ export async function startHarness() {
       workspaceId, rootPath: projectDir, name: 'harness',
     }))
 
-    const mcp = spawn(process.execPath, [MCP_ENTRY], {
+    const mcp = spawn(process.execPath, [MCP_ENTRY, '--axiom-host=axiom-harness'], {
       cwd: projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: {

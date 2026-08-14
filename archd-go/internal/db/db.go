@@ -392,6 +392,28 @@ func migrate(db *sql.DB) error {
 	);
 	CREATE INDEX IF NOT EXISTS architecture_proposal_memberships_target
 		ON architecture_proposal_memberships(proposal_id, revision, target_system_key, disposition);
+	-- Mutable review geometry is scoped to one immutable semantic proposal
+	-- revision. Semantic references use proposal keys rather than renderer-only
+	-- namespaced ids, so the daemon can validate and materialise them safely.
+	CREATE TABLE IF NOT EXISTS architecture_proposal_layouts (
+		proposal_id TEXT NOT NULL,
+		revision INTEGER NOT NULL,
+		node_type TEXT NOT NULL CHECK(node_type IN ('system','file')),
+		node_key TEXT NOT NULL,
+		parent_ref_type TEXT NOT NULL CHECK(parent_ref_type IN ('scope','live_system','proposed_system')),
+		parent_ref_id TEXT NOT NULL DEFAULT '',
+		position_x REAL NOT NULL DEFAULT 0,
+		position_y REAL NOT NULL DEFAULT 0,
+		width REAL NOT NULL,
+		height REAL NOT NULL,
+		scale REAL NOT NULL DEFAULT 1 CHECK(scale > 0),
+		interior_scale REAL NOT NULL DEFAULT 1 CHECK(interior_scale > 0),
+		updated_at INTEGER NOT NULL,
+		PRIMARY KEY(proposal_id, revision, node_type, node_key),
+		FOREIGN KEY(proposal_id, revision) REFERENCES architecture_proposal_rounds(proposal_id, revision) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS architecture_proposal_layouts_parent
+		ON architecture_proposal_layouts(proposal_id, revision, parent_ref_type, parent_ref_id);
 
 	-- Canvas→agent outbox (UML_UX_PLAN.md Phase U-C). The user composes a
 	-- note on the canvas; MCP tools drain it; every axiom tool response

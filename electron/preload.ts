@@ -50,7 +50,8 @@ contextBridge.exposeInMainWorld('axiom', {
     ipcRenderer.invoke('agent:connection'),
 
   // Which agents are on this machine
-  listAgentHosts: (): Promise<AgentHostInfo[]> => ipcRenderer.invoke('agent:hosts'),
+  listAgentHosts: (projectRoot?: string): Promise<AgentHostInfo[]> =>
+    ipcRenderer.invoke('agent:hosts', projectRoot),
 
   // Install Axiom into one agent — server entry and slash command
   installAgent: (hostId: string, projectRoot?: string): Promise<AgentInstallResult> =>
@@ -71,6 +72,12 @@ export interface AgentHostInfo {
   label: string
   /** Whether this agent looks installed on this machine. */
   detected: boolean
+  /** Whether any user or project configuration contains an Axiom MCP entry. */
+  configured: boolean
+  configuredPaths: string[]
+  unreadablePaths: string[]
+  workflowInstalled: boolean
+  workflowPath: string | null
   configPath: string
   command: string | null
 }
@@ -108,7 +115,7 @@ declare global {
       openFile: (filePath: string) => void
       getAppInfo: () => Promise<{ version: string; dataDir: string; platform: string; mcpPath: string; archdApiUrl: string; archdWsUrl: string; isPackaged: boolean }>
       getAgentConnection: () => Promise<AgentConnection>
-      listAgentHosts: () => Promise<AgentHostInfo[]>
+      listAgentHosts: (projectRoot?: string) => Promise<AgentHostInfo[]>
       installAgent: (hostId: string, projectRoot?: string) => Promise<AgentInstallResult>
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void

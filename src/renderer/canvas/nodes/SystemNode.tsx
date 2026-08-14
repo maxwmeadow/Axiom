@@ -9,7 +9,7 @@ import { connectionHandleProps } from './connectionChrome'
 import { AxiomNodeResizer } from './AxiomNodeResizer'
 import { AgentPresenceBadge } from './AgentPresenceBadge'
 import { DEPTH_TITLE_PX } from '../frameGeometry'
-import { systemTabChrome } from '../systemChrome'
+import { monoFontFittingWidth, systemTabChrome } from '../systemChrome'
 import { LIVING_WINDOW_CLOSE_MS } from '../../store/graphStore'
 
 // Drop-target feedback: renders the cell grid only while a node is being
@@ -226,15 +226,17 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
   // Folder silhouette (Rev 2b): the node outline IS the UML package shape —
   // tab across the top-left holding the title, body below. Proportional to
   // the node so it reads at every zoom, unlike a fixed-px decoration.
-  const shellRef = React.useRef<HTMLDivElement>(null)
-  const [shellSize, setShellSize] = React.useState({ w: 200, h: 120 })
-  React.useLayoutEffect(() => {
-    const el = shellRef.current
-    if (!el) return
-    const ro = new ResizeObserver(() => setShellSize({ w: el.offsetWidth, h: el.offsetHeight }))
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+  // The React Flow node frame is the single geometry owner. Reading the shell
+  // back through ResizeObserver created a second, paint-delayed size stream:
+  // the resize outline followed the wrapper immediately while the SVG body
+  // rendered the previous pointer sample. The gap therefore grew in direct
+  // proportion to pointer speed, and a west/north resize visibly moved the
+  // supposedly fixed opposite edge. NodeProps updates in the same controlled
+  // commit as the wrapper, so body and interaction chrome now share one frame.
+  const shellSize = {
+    w: typeof width === 'number' && Number.isFinite(width) && width > 0 ? width : 200,
+    h: typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : 120,
+  }
   // Mirror NodeShell's folder proportions (the sheet-layer look): slim tab
   // with the tiny SYSTEM label, title full-width below. CONSTRAINT: the whole
   // chrome (tab + title band) must fit inside the grid's reserved gap — the
@@ -278,7 +280,13 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
   }
 
   // Big centered title — the collapsed identity. Fades out as contents reveal.
-  const bigTitleFont = Math.max(0.5, Math.min(shellSize.w * 0.11, shellSize.h * 0.2, 72 * presentationScale))
+  const bigTitleCeiling = Math.max(0.5, Math.min(
+    shellSize.w * 0.11,
+    shellSize.h * 0.2,
+    72 * presentationScale,
+  ))
+  const bigTitleAvailableWidth = Math.max(1, shellSize.w - padX * 2)
+  const bigTitleFont = monoFontFittingWidth(name, bigTitleAvailableWidth, bigTitleCeiling)
   const bigTitle = (
     <div style={{
       position: 'absolute',
@@ -301,8 +309,6 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
         color: 'var(--text-primary)',
         letterSpacing: '-0.02em',
         maxWidth: '100%',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
         textAlign: 'center',
         pointerEvents: d.onRename ? 'auto' : 'none',
@@ -422,7 +428,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
           reveal scale, and blur. Interaction chrome (resizer, connection
           handles) lives outside on the raw node frame so selection outlines
           never shift, teleport, or get clipped by the shell's overflow. */}
-      <div ref={shellRef} className="axiom-system-node__shell" style={{
+      <div className="axiom-system-node__shell" style={{
         position: 'absolute',
         inset: 0,
         // The folder SVG owns ALL chrome — a rect background/border here would

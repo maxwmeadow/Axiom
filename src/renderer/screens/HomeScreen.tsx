@@ -40,6 +40,8 @@ function safeFolderName(name: string): string {
 export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: HomeScreenProps) {
   const [recentProjects, setRecentProjects] = useState<ProjectConfig[]>([])
   const [deckStatus, setDeckStatus] = useState<Record<string, CommandDeckStatus>>({})
+  const [removingProjectId, setRemovingProjectId] = useState<string | null>(null)
+  const [removeError, setRemoveError] = useState<string | null>(null)
 
   // New Project flow
   const [creating, setCreating] = useState(false)
@@ -79,12 +81,22 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
 
   const removeProject = async (projectId: string) => {
     if (!window.axiom) return
-    await window.axiom.removeProject(projectId)
-    // Deleting is deleting. The database goes with the project; so does every
-    // local hint keyed to it, or reopening the same folder later inherits
-    // "you already reviewed this" from a workspace that no longer exists.
-    clearProjectLocalState(projectId)
-    setRecentProjects(previous => previous.filter(project => project.id !== projectId))
+    setRemovingProjectId(projectId)
+    setRemoveError(null)
+    try {
+      await window.axiom.removeProject(projectId)
+      // Deleting is deleting. The database goes with the project; so does every
+      // local hint keyed to it, or reopening the same folder later inherits
+      // "you already reviewed this" from a workspace that no longer exists.
+      clearProjectLocalState(projectId)
+      setRecentProjects(previous => previous.filter(project => project.id !== projectId))
+    } catch (error) {
+      setRemoveError(error instanceof Error
+        ? error.message
+        : 'Axiom could not delete this project. Nothing was removed from the project list.')
+    } finally {
+      setRemovingProjectId(null)
+    }
   }
 
   const openDialog = () => {
@@ -194,6 +206,9 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
                 <span>RECENTLY OPENED</span>
                 <small>{recentProjects.slice(0, 6).length} PROJECTS</small>
               </div>
+              {removeError && (
+                <div className="axiom-launcher__remove-error" role="alert">{removeError}</div>
+              )}
               <ul>
                 {recentProjects.slice(0, 6).map(project => (
                   <li key={project.id}>
@@ -213,10 +228,11 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
                     <button
                       className="axiom-launcher__recent-remove"
                       onClick={() => void removeProject(project.id)}
+                      disabled={removingProjectId !== null}
                       aria-label={`Remove ${project.name} from recent projects`}
                       title="Remove from recents and delete the cached index"
                     >
-                      ×
+                      {removingProjectId === project.id ? '…' : '×'}
                     </button>
                   </li>
                 ))}

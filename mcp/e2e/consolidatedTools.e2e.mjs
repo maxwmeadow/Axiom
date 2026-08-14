@@ -210,6 +210,7 @@ test('agent actions are logged with targets the canvas can light up', async () =
   assert.ok(architecture, `expected a get_architecture entry, got: ${
     actions.map(a => a.tool).join(', ')}`)
   assert.equal(architecture.rootId, harness.snapshot.files[0].rootId)
+  assert.equal(architecture.agent, 'axiom-harness')
   assert.equal(architecture.kind, 'read')
   assert.ok(
     architecture.targets.includes(files[0].id),
@@ -218,4 +219,23 @@ test('agent actions are logged with targets the canvas can light up', async () =
 
   const write = actions.find(action => action.kind === 'write')
   assert.ok(write, 'architecture curation was not logged as a write')
+})
+
+test('the running MCP process renews a harness-tagged presence lease', async () => {
+  let presence
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const res = await fetch(
+      `http://127.0.0.1:7853/api/agent/presence?workspace=${harness.workspaceId}`,
+    )
+    assert.ok(res.ok, `agent presence fetch failed: ${res.status}`)
+    presence = await res.json()
+    if (presence.connected) break
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+
+  assert.equal(presence?.connected, true)
+  assert.ok(
+    presence.connections.some(connection => connection.hostId === 'axiom-harness'),
+    `missing tagged harness presence: ${JSON.stringify(presence)}`,
+  )
 })

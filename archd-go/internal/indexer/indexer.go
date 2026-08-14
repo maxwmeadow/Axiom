@@ -48,16 +48,35 @@ func nextLivingTraceID() string {
 	return fmt.Sprintf("L%06d", livingTraceCounter.Add(1))
 }
 
-var supportedExts = map[string]bool{
-	".ts": true, ".tsx": true, ".js": true, ".mjs": true,
+var sourceExts = map[string]bool{
+	".ts": true, ".tsx": true, ".js": true, ".mjs": true, ".cjs": true,
 	".jsx": true, ".py": true, ".go": true, ".rs": true, ".cs": true,
 	".cpp": true, ".cc": true, ".cxx": true, ".hpp": true, ".hxx": true, ".rb": true, ".java": true,
 }
 
+var documentExts = map[string]bool{
+	".md": true, ".mdx": true, ".txt": true, ".rst": true, ".adoc": true,
+}
+
+// IsSupportedSourceFile is the single file-admission contract shared by the
+// initial index, reconciliation, and the live watcher. The watcher used to own
+// a shorter copy of this table, so files could exist after a cold index but
+// silently stop updating during the same session.
+func IsSupportedSourceFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return sourceExts[ext] || documentExts[ext]
+}
+
+// IsDocumentationFile marks readable repository context that belongs in the
+// Documents library, never in clustering or on the architecture Floor.
+func IsDocumentationFile(path string) bool {
+	return documentExts[strings.ToLower(filepath.Ext(path))]
+}
+
 // ClassifierVersion invalidates persisted inferred systems when the membership
-// contract changes. Version 3 restores authored filename evidence (but never
-// directory adjacency) and rebuilds persisted structural evidence before use.
-const ClassifierVersion = 3
+// contract changes. Version 4 removes documentation from architectural
+// clustering while keeping it indexed for the Documents library.
+const ClassifierVersion = 4
 
 // IndexRoot walks the root directory and indexes all source files.
 // After parsing, runs Louvain clustering and assigns files to cluster systems.
@@ -971,6 +990,9 @@ func clusterScope(files []db.File, systems []db.System) (managed []db.File, prun
 	}
 
 	for _, file := range files {
+		if IsDocumentationFile(file.RelPath) {
+			continue
+		}
 		if file.SystemID == nil || isAutoSystem(*file.SystemID, make(map[string]struct{})) {
 			managed = append(managed, file)
 		}
@@ -1020,6 +1042,15 @@ func clusterAndAssign(sqlDB *sql.DB, root db.Root, journalDrift bool) error {
 	files, err := db.GetFilesByRoot(sqlDB, root.ID)
 	if err != nil {
 		return err
+	}
+	for i := range files {
+		if !IsDocumentationFile(files[i].RelPath) || files[i].SystemID == nil {
+			continue
+		}
+		if err := db.ClearFileSystem(sqlDB, files[i].ID); err != nil {
+			return fmt.Errorf("detach document %s from architecture: %w", files[i].RelPath, err)
+		}
+		files[i].SystemID = nil
 	}
 	systems, err := db.GetSystems(sqlDB, root.WorkspaceID)
 	if err != nil {

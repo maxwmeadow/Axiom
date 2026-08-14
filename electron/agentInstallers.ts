@@ -1,4 +1,4 @@
-import { join } from 'path'
+import { join, resolve } from 'path'
 import os from 'os'
 import fs from 'fs'
 
@@ -33,14 +33,41 @@ export interface HostDescriptor {
   label: string
   /** Where this host keeps MCP servers, used both to detect and to install. */
   configPath: () => string
-  /** Where its slash commands live, if it has them. */
-  commandPath?: () => string
+  /** Every user or workspace MCP configuration this host can read. */
+  serverLocations: (projectRoot?: string) => ServerLocation[]
+  /** Where its reusable workflow lives, if this host supports one. */
+  commandPath?: (projectRoot?: string) => string | null
   /** The command a user types once installed. */
   command?: string
   install: (command: string, args: string[], brief: string, projectRoot?: string) => InstallResult
 }
 
+type ServerLocation =
+  | { format: 'json'; path: string; keyPath: string[] }
+  | { format: 'toml'; path: string }
+
+export interface HostConfigurationStatus {
+  configured: boolean
+  /** Configuration files containing an Axiom MCP entry. */
+  configuredPaths: string[]
+  /** Existing files that could not be safely inspected. */
+  unreadablePaths: string[]
+  /** Whether the host-specific reusable workflow is present. */
+  workflowInstalled: boolean
+  workflowPath: string | null
+}
+
 const home = () => os.homedir()
+
+function projectPathVariants(projectRoot: string): string[] {
+  const absolute = resolve(projectRoot)
+  return [...new Set([
+    projectRoot,
+    absolute,
+    absolute.replaceAll('\\', '/'),
+    absolute.replaceAll('/', '\\'),
+  ])]
+}
 
 /** Read JSON that may be absent or damaged without destroying it. */
 function readJson(path: string): Record<string, any> | null {
@@ -89,21 +116,149 @@ function installCommandFile(path: string, brief: string): string {
   return path
 }
 
-export function buildHosts(): HostDescriptor[] {
+function removeGeneratedFile(path: string, expectedContents: string): boolean {
+  if (!fs.existsSync(path)) return false
+  try {
+    const actual = fs.readFileSync(path, 'utf8').replaceAll('\r\n', '\n').trimEnd()
+    if (actual !== expectedContents.replaceAll('\r\n', '\n').trimEnd()) return false
+    fs.rmSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function installAgentSkill(path: string, brief: string): string {
+  const instructions = [
+    '---',
+    'name: axiom-map',
+    'description: Map the current codebase into a semantic system architecture in Axiom. Use when asked to map, name, or propose this project architecture in Axiom.',
+    '---',
+    '',
+    brief,
+  ].join('\n')
+  return installCommandFile(path, instructions)
+}
+
+function identifiedArgs(args: string[], hostId: string): string[] {
+  return [...args, `--axiom-host=${hostId}`]
+}
+
+function upsertTomlTable(source: string, table: RegExp, block: string): string {
+  const newline = source.includes('\r\n') ? '\r\n' : '\n'
+  const lines = source.split(/\r?\n/)
+  const tableHeader = /^\s*\[[^\]]+\]\s*(?:#.*)?$/
+  const start = lines.findIndex(line => table.test(line))
+
+  if (start < 0) {
+    return source.trimEnd() + (source.trim() ? newline + newline : '') + block.replaceAll('\n', newline) + newline
+  }
+
+  let end = start + 1
+  while (end < lines.length && !tableHeader.test(lines[end])) end += 1
+  lines.splice(start, end - start, ...block.split('\n'), '')
+  return lines.join(newline)
+}
+
+/**
+ * Inspect the same configuration locations the installer writes.
+ *
+ * This intentionally checks for an `axiom` server entry rather than comparing
+ * its command line with this build. A different Axiom build is still an
+ * existing configuration and should be presented as such; reinstall remains
+ * available when the user wants to refresh it.
+ */
+export function inspectHostConfiguration(
+  host: HostDescriptor,
+  projectRoot?: string,
+): HostConfigurationStatus {
+  const configuredPaths = new Set<string>()
+  const unreadablePaths = new Set<string>()
+
+  for (const location of host.serverLocations(projectRoot)) {
+    if (!fs.existsSync(location.path)) continue
+
+    if (location.format === 'json') {
+      const config = readJson(location.path)
+      if (config === null) {
+        unreadablePaths.add(location.path)
+        continue
+      }
+      let servers: unknown = config
+      for (const key of location.keyPath) {
+        if (servers === null || typeof servers !== 'object' || Array.isArray(servers)) {
+          servers = undefined
+          break
+        }
+        servers = (servers as Record<string, unknown>)[key]
+      }
+      if (
+        servers !== null &&
+        typeof servers === 'object' &&
+        !Array.isArray(servers) &&
+        Object.prototype.hasOwnProperty.call(servers, 'axiom')
+      ) {
+        configuredPaths.add(location.path)
+      }
+      continue
+    }
+
+    try {
+      const config = fs.readFileSync(location.path, 'utf8')
+      if (/^\s*\[\s*mcp_servers\s*\.\s*(?:axiom|"axiom"|'axiom')\s*\]\s*(?:#.*)?$/m.test(config)) {
+        configuredPaths.add(location.path)
+      }
+    } catch {
+      unreadablePaths.add(location.path)
+    }
+  }
+
+  return {
+    configured: configuredPaths.size > 0,
+    configuredPaths: [...configuredPaths],
+    unreadablePaths: [...unreadablePaths],
+    workflowInstalled: (() => {
+      const path = host.commandPath?.(projectRoot)
+      return path ? fs.existsSync(path) : false
+    })(),
+    workflowPath: host.commandPath?.(projectRoot) ?? null,
+  }
+}
+
+export function buildHosts(
+  homeDir = home(),
+  appDataDir = process.env.APPDATA ?? join(homeDir, 'AppData', 'Roaming'),
+): HostDescriptor[] {
   return [
     {
       id: 'claude-code',
       label: 'Claude Code',
-      configPath: () => join(home(), '.claude.json'),
-      commandPath: () => join(home(), '.claude', 'commands', 'axiom-map.md'),
+      configPath: () => join(homeDir, '.claude.json'),
+      serverLocations: projectRoot => [
+        { format: 'json', path: join(homeDir, '.claude.json'), keyPath: ['mcpServers'] },
+        ...(projectRoot ? [
+          ...projectPathVariants(projectRoot).map(projectPath => ({
+            format: 'json' as const,
+            path: join(homeDir, '.claude.json'),
+            keyPath: ['projects', projectPath, 'mcpServers'],
+          })),
+          {
+            format: 'json' as const,
+            path: join(projectRoot, '.mcp.json'),
+            keyPath: ['mcpServers'],
+          },
+        ] : []),
+      ],
+      commandPath: () => join(homeDir, '.claude', 'skills', 'axiom-map', 'SKILL.md'),
       command: '/axiom-map',
       install: (command, args, brief) => {
-        const result = installJsonServer(join(home(), '.claude.json'), 'mcpServers', command, args, 'Claude Code')
+        const hostArgs = identifiedArgs(args, 'claude-code')
+        const result = installJsonServer(join(homeDir, '.claude.json'), 'mcpServers', command, hostArgs, 'Claude Code')
         if (!result.ok) return result
-        const cmd = installCommandFile(join(home(), '.claude', 'commands', 'axiom-map.md'), brief)
+        const cmd = installAgentSkill(join(homeDir, '.claude', 'skills', 'axiom-map', 'SKILL.md'), brief)
         return {
           ok: true,
-          detail: 'Added Axiom and installed /axiom-map. Restart Claude Code.',
+          detail: 'Added Axiom and installed the /axiom-map skill. Restart Claude Code only if its skills folder was created after this session started.',
           paths: [...result.paths, cmd],
         }
       },
@@ -111,28 +266,38 @@ export function buildHosts(): HostDescriptor[] {
     {
       id: 'codex',
       label: 'Codex',
-      configPath: () => join(home(), '.codex', 'config.toml'),
-      commandPath: () => join(home(), '.codex', 'prompts', 'axiom-map.md'),
-      command: '/axiom-map',
+      configPath: () => join(homeDir, '.codex', 'config.toml'),
+      serverLocations: projectRoot => [
+        { format: 'toml', path: join(homeDir, '.codex', 'config.toml') },
+        ...(projectRoot
+          ? [{ format: 'toml' as const, path: join(projectRoot, '.codex', 'config.toml') }]
+          : []),
+      ],
+      commandPath: () => join(homeDir, '.agents', 'skills', 'axiom-map', 'SKILL.md'),
+      command: '$axiom-map',
       install: (command, args, brief) => {
-        const path = join(home(), '.codex', 'config.toml')
-        fs.mkdirSync(join(home(), '.codex'), { recursive: true })
+        const path = join(homeDir, '.codex', 'config.toml')
+        fs.mkdirSync(join(homeDir, '.codex'), { recursive: true })
         const existing = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : ''
+        const hostArgs = identifiedArgs(args, 'codex')
         const block = [
           '[mcp_servers.axiom]',
           `command = ${JSON.stringify(command)}`,
-          `args = [${args.map(a => JSON.stringify(a)).join(', ')}]`,
+          `args = [${hostArgs.map(a => JSON.stringify(a)).join(', ')}]`,
         ].join('\n')
-        // TOML has no safe generic merge without a parser, so an existing
-        // section is replaced in place and anything else is left untouched.
-        const next = /\[mcp_servers\.axiom\][^\[]*/.test(existing)
-          ? existing.replace(/\[mcp_servers\.axiom\][^\[]*/, block + '\n\n')
-          : (existing.trimEnd() + (existing.trim() ? '\n\n' : '') + block + '\n')
+        // Replace complete TOML table lines, not text up to the next `[`:
+        // `args = [...]` contains brackets too, so character-based matching
+        // corrupts the file on reinstall.
+        const next = upsertTomlTable(
+          existing,
+          /^\s*\[\s*mcp_servers\s*\.\s*(?:axiom|"axiom"|'axiom')\s*\]\s*(?:#.*)?$/,
+          block,
+        )
         fs.writeFileSync(path, next, 'utf8')
-        const cmd = installCommandFile(join(home(), '.codex', 'prompts', 'axiom-map.md'), brief)
+        const cmd = installAgentSkill(join(homeDir, '.agents', 'skills', 'axiom-map', 'SKILL.md'), brief)
         return {
           ok: true,
-          detail: 'Added Axiom and installed /axiom-map. Restart Codex.',
+          detail: 'Added Axiom and installed the $axiom-map skill. Restart Codex if it is not visible yet.',
           paths: [path, cmd],
         }
       },
@@ -140,67 +305,208 @@ export function buildHosts(): HostDescriptor[] {
     {
       id: 'cursor',
       label: 'Cursor',
-      configPath: () => join(home(), '.cursor', 'mcp.json'),
-      // Cursor reads project config before global, and its global file is
-      // widely reported as ignored, so both are written and the project one is
-      // what actually gets used.
-      install: (command, args, _brief, projectRoot) => {
-        const global = installJsonServer(join(home(), '.cursor', 'mcp.json'), 'mcpServers', command, args, 'Cursor')
-        if (!projectRoot) return global
-        const local = installJsonServer(join(projectRoot, '.cursor', 'mcp.json'), 'mcpServers', command, args, 'Cursor')
+      configPath: () => join(homeDir, '.cursor', 'mcp.json'),
+      serverLocations: projectRoot => [
+        { format: 'json', path: join(homeDir, '.cursor', 'mcp.json'), keyPath: ['mcpServers'] },
+        ...(projectRoot
+          ? [{ format: 'json' as const, path: join(projectRoot, '.cursor', 'mcp.json'), keyPath: ['mcpServers'] }]
+          : []),
+      ],
+      commandPath: () => join(homeDir, '.cursor', 'skills', 'axiom-map', 'SKILL.md'),
+      command: '/axiom-map',
+      // Keep both user and project MCP scopes current so Cursor IDE and CLI can
+      // resolve the same server regardless of how the workspace was opened.
+      install: (command, args, brief, projectRoot) => {
+        const hostArgs = identifiedArgs(args, 'cursor')
+        const global = installJsonServer(join(homeDir, '.cursor', 'mcp.json'), 'mcpServers', command, hostArgs, 'Cursor')
+        const paths = [...global.paths]
+        let configured = global.ok
+        if (projectRoot) {
+          const local = installJsonServer(join(projectRoot, '.cursor', 'mcp.json'), 'mcpServers', command, hostArgs, 'Cursor')
+          paths.push(...local.paths)
+          configured = configured || local.ok
+        }
+        const skill = installAgentSkill(join(homeDir, '.cursor', 'skills', 'axiom-map', 'SKILL.md'), brief)
+        paths.push(skill)
         return {
-          ok: global.ok || local.ok,
-          detail: 'Added Axiom to Cursor, for this project and globally. Restart Cursor.',
-          paths: [...global.paths, ...local.paths],
+          ok: configured,
+          detail: 'Added Axiom and installed the /axiom-map Agent Skill for Cursor. Start a new chat if it is not visible yet.',
+          paths,
         }
       },
     },
     {
       id: 'copilot',
       label: 'GitHub Copilot',
-      configPath: () => join(home(), '.copilot', 'mcp-config.json'),
+      configPath: () => join(homeDir, '.copilot', 'mcp-config.json'),
+      serverLocations: projectRoot => [
+        { format: 'json', path: join(homeDir, '.copilot', 'mcp-config.json'), keyPath: ['mcpServers'] },
+        ...(projectRoot ? [
+          {
+            format: 'json' as const,
+            path: join(projectRoot, '.vscode', 'mcp.json'),
+            keyPath: ['servers'],
+          },
+          {
+            format: 'json' as const,
+            path: join(projectRoot, '.mcp.json'),
+            keyPath: ['mcpServers'],
+          },
+          {
+            format: 'json' as const,
+            path: join(projectRoot, '.mcp.json'),
+            keyPath: [],
+          },
+          {
+            format: 'json' as const,
+            path: join(projectRoot, '.github', 'mcp.json'),
+            keyPath: ['mcpServers'],
+          },
+          {
+            format: 'json' as const,
+            path: join(projectRoot, '.github', 'mcp.json'),
+            keyPath: [],
+          },
+        ] : []),
+      ],
+      commandPath: () => join(homeDir, '.copilot', 'skills', 'axiom-map', 'SKILL.md'),
       command: '/axiom-map',
       // ~/.copilot/mcp-config.json is the documented portable user config that
       // Copilot reads across VS Code and the CLI. The workspace file VS Code
       // reads is .vscode/mcp.json and it keys servers under `servers`, not
       // `mcpServers`; both are written so either path works.
       install: (command, args, brief, projectRoot) => {
+        const hostArgs = identifiedArgs(args, 'copilot')
         const user = installJsonServer(
-          join(home(), '.copilot', 'mcp-config.json'), 'mcpServers', command, args, 'GitHub Copilot',
+          join(homeDir, '.copilot', 'mcp-config.json'), 'mcpServers', command, hostArgs, 'GitHub Copilot',
         )
         const paths = [...user.paths]
+        let configured = user.ok
         if (projectRoot) {
-          const ws = installJsonServer(join(projectRoot, '.vscode', 'mcp.json'), 'servers', command, args, 'VS Code')
+          const ws = installJsonServer(join(projectRoot, '.vscode', 'mcp.json'), 'servers', command, hostArgs, 'VS Code')
           paths.push(...ws.paths)
-          try {
-            paths.push(installCommandFile(join(projectRoot, '.github', 'prompts', 'axiom-map.prompt.md'), brief))
-          } catch { /* prompt file is a convenience, not the connection */ }
+          configured = configured || ws.ok
+          // Axiom versions before Agent Skills wrote this prompt file. Remove
+          // it only when it is still byte-for-byte Axiom's generated content;
+          // a user-edited file is theirs and must be preserved.
+          const legacyPrompt = join(projectRoot, '.github', 'prompts', 'axiom-map.prompt.md')
+          if (removeGeneratedFile(legacyPrompt, brief)) paths.push(legacyPrompt)
         }
-        if (!user.ok) return { ...user, paths }
-        return { ok: true, detail: 'Added Axiom to Copilot. Reload VS Code.', paths }
+        if (!configured) return { ...user, paths }
+        paths.push(installAgentSkill(join(homeDir, '.copilot', 'skills', 'axiom-map', 'SKILL.md'), brief))
+        return {
+          ok: true,
+          detail: 'Added Axiom and installed the /axiom-map Agent Skill for Copilot. Reload VS Code or run /skills reload in Copilot CLI.',
+          paths,
+        }
       },
     },
     {
       id: 'windsurf',
       label: 'Windsurf',
-      configPath: () => join(home(), '.codeium', 'windsurf', 'mcp_config.json'),
-      install: (command, args) =>
-        installJsonServer(
-          join(home(), '.codeium', 'windsurf', 'mcp_config.json'),
-          'mcpServers', command, args, 'Windsurf',
-        ),
+      configPath: () => join(appDataDir, 'devin', 'mcp_config.json'),
+      serverLocations: projectRoot => [
+        {
+          format: 'json',
+          path: join(appDataDir, 'devin', 'mcp_config.json'),
+          keyPath: ['mcpServers'],
+        },
+        ...(projectRoot ? [{
+          format: 'json' as const,
+          path: join(projectRoot, '.devin', 'mcp_config.local.json'),
+          keyPath: ['mcpServers'],
+        }] : []),
+        {
+          format: 'json',
+          path: join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'),
+          keyPath: ['mcpServers'],
+        },
+        {
+          format: 'json',
+          path: join(homeDir, '.codeium', 'mcp_config.json'),
+          keyPath: ['mcpServers'],
+        },
+      ],
+      commandPath: () => join(appDataDir, 'devin', 'skills', 'axiom-map', 'SKILL.md'),
+      command: '/axiom-map',
+      install: (command, args, brief) => {
+        const hostArgs = identifiedArgs(args, 'windsurf')
+        const current = installJsonServer(
+          join(appDataDir, 'devin', 'mcp_config.json'),
+          'mcpServers', command, hostArgs, 'Windsurf / Devin Local',
+        )
+        const legacy = installJsonServer(
+          join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'),
+          'mcpServers', command, hostArgs, 'Windsurf Cascade',
+        )
+        if (!current.ok) return { ...current, paths: [...current.paths, ...legacy.paths] }
+        const paths = [...current.paths, ...legacy.paths]
+        paths.push(installAgentSkill(join(appDataDir, 'devin', 'skills', 'axiom-map', 'SKILL.md'), brief))
+        paths.push(installAgentSkill(join(homeDir, '.codeium', 'windsurf', 'skills', 'axiom-map', 'SKILL.md'), brief))
+        return {
+          ok: true,
+          detail: 'Added Axiom and installed its Agent Skill for current Windsurf / Devin Local and legacy Cascade.',
+          paths,
+        }
+      },
     },
     {
       id: 'antigravity',
       label: 'Antigravity',
-      // Antigravity keeps its servers under the Gemini config tree, not a
-      // ~/.antigravity folder. Confirmed against a real install.
-      configPath: () => join(home(), '.gemini', 'antigravity-ide', 'mcp_config.json'),
-      install: (command, args) =>
-        installJsonServer(
-          join(home(), '.gemini', 'antigravity-ide', 'mcp_config.json'),
-          'mcpServers', command, args, 'Antigravity',
-        ),
+      configPath: () => join(homeDir, '.gemini', 'config', 'mcp_config.json'),
+      serverLocations: projectRoot => [
+        {
+          format: 'json',
+          path: join(homeDir, '.gemini', 'config', 'mcp_config.json'),
+          keyPath: ['mcpServers'],
+        },
+        // Older Antigravity IDE builds used this location. Inspect it so an
+        // existing installation remains visible, but new installs target the
+        // current shared Gemini configuration above.
+        {
+          format: 'json',
+          path: join(homeDir, '.gemini', 'antigravity-ide', 'mcp_config.json'),
+          keyPath: ['mcpServers'],
+        },
+        ...(projectRoot ? [{
+          format: 'json' as const,
+          path: join(projectRoot, '.agents', 'mcp_config.json'),
+          keyPath: ['mcpServers'],
+        }] : []),
+      ],
+      commandPath: () => join(homeDir, '.gemini', 'config', 'skills', 'axiom-map', 'SKILL.md'),
+      command: 'Use the axiom-map skill',
+      install: (command, args, brief, projectRoot) => {
+        const hostArgs = identifiedArgs(args, 'antigravity')
+        const global = installJsonServer(
+          join(homeDir, '.gemini', 'config', 'mcp_config.json'),
+          'mcpServers', command, hostArgs, 'Antigravity',
+        )
+        const paths = [...global.paths]
+        let configured = global.ok
+        const legacyPath = join(homeDir, '.gemini', 'antigravity-ide', 'mcp_config.json')
+        if (fs.existsSync(legacyPath)) {
+          const legacy = installJsonServer(
+            legacyPath, 'mcpServers', command, hostArgs, 'legacy Antigravity IDE',
+          )
+          paths.push(...legacy.paths)
+        }
+        if (projectRoot) {
+          const local = installJsonServer(
+            join(projectRoot, '.agents', 'mcp_config.json'),
+            'mcpServers', command, hostArgs, 'Antigravity workspace',
+          )
+          paths.push(...local.paths)
+          configured = configured || local.ok
+        }
+        if (!configured) return { ...global, paths }
+        paths.push(installAgentSkill(join(homeDir, '.gemini', 'config', 'skills', 'axiom-map', 'SKILL.md'), brief))
+        return {
+          ok: true,
+          detail: 'Added Axiom and installed the axiom-map Agent Skill for Antigravity.',
+          paths,
+        }
+      },
     },
   ]
 }
@@ -216,7 +522,9 @@ export function detectHosts(): Record<string, boolean> {
   const seen: Record<string, boolean> = {}
   for (const host of buildHosts()) {
     const dir = join(host.configPath(), '..')
-    seen[host.id] = fs.existsSync(dir) || fs.existsSync(host.configPath())
+    seen[host.id] = fs.existsSync(dir) ||
+      fs.existsSync(host.configPath()) ||
+      host.serverLocations().some(location => fs.existsSync(location.path))
   }
   return seen
 }

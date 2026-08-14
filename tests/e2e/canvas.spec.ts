@@ -120,6 +120,14 @@ test.beforeEach(async () => {
               '}',
             ].join('\n'),
           }
+      : url.includes('/api/files/file_docs/source?')
+        ? {
+            fileId: 'file_docs',
+            relPath: 'docs/ARCHITECTURE.md',
+            language: 'markdown',
+            lineCount: 3,
+            content: '# Architecture\n\nThe renderer consumes indexed source only.',
+          }
       : url.includes('/api/sheets/sheet_runtime?')
         ? {
             sheet: {
@@ -194,6 +202,48 @@ test.afterEach(async () => {
 
 test('renders the deterministic Floor baseline', async () => {
   await expect(page.locator('.react-flow')).toHaveScreenshot('floor-baseline.png')
+})
+
+test('autofits complete system names while their contents are covered', async () => {
+  const longName = 'Longitudinal Tracking and Trend Persistence'
+  const targetId = await page.evaluate(name => {
+    const graphStore = (window as any).__axiomGraphStore
+    const state = graphStore.getState()
+    const target = state.systems.find((system: any) => system.parentId == null) ?? state.systems[0]
+    graphStore.getState().applySnapshot({
+      workspaceId: state.currentProject.id,
+      systems: state.systems.map((system: any) => system.id === target.id
+        ? { ...system, name }
+        : system),
+      files: state.files,
+      infraNodes: state.infraNodes,
+      dependencies: state.dependencies,
+      floorLayouts: state.floorLayouts,
+    })
+    return target.id
+  }, longName)
+  const node = page.locator(`.react-flow__node[data-id="${targetId}"]`)
+  await expect(node.getByText(longName, { exact: true }).first()).toBeVisible()
+  const titles = await node.getByText(longName, { exact: true }).evaluateAll(elements =>
+    elements.map(element => {
+      const parent = element.parentElement!
+      const elementRect = element.getBoundingClientRect()
+      const parentRect = parent.getBoundingClientRect()
+      const parentStyle = getComputedStyle(parent)
+      return {
+        parentZIndex: parentStyle.zIndex,
+        textOverflow: getComputedStyle(element).textOverflow,
+        textWidth: elementRect.width,
+        availableWidth: parentRect.width
+          - Number.parseFloat(parentStyle.paddingLeft)
+          - Number.parseFloat(parentStyle.paddingRight),
+      }
+    }),
+  )
+  const covered = titles.find(title => title.parentZIndex === '15')
+  expect(covered).toBeDefined()
+  expect(covered!.textOverflow).not.toBe('ellipsis')
+  expect(covered!.textWidth).toBeLessThanOrEqual(covered!.availableWidth + 1)
 })
 
 test('defers and virtualizes an 805-file fresh-project overview', async () => {
@@ -652,9 +702,19 @@ test('presents project navigation as a desktop workbench launcher', async () => 
   await expect(page.locator('button button')).toHaveCount(0)
 
   const [titlebarBox, bodyBox] = await Promise.all([titlebar.boundingBox(), body.boundingBox()])
-  expect(titlebarBox?.height).toBeCloseTo(34, 0)
+  expect(titlebarBox?.height).toBeCloseTo(44, 0)
   expect(bodyBox?.width).toBeGreaterThan(900)
   expect(bodyBox?.height).toBeGreaterThan(700)
+  const launcherType = await page.evaluate(() => ({
+    description: parseFloat(getComputedStyle(document.querySelector('.axiom-launcher__description')!).fontSize),
+    workspaceHeading: parseFloat(getComputedStyle(document.querySelector('.axiom-launcher__workspace-heading h2')!).fontSize),
+    actionLabel: parseFloat(getComputedStyle(document.querySelector('.axiom-launcher__fork-copy strong')!).fontSize),
+    actionHeight: document.querySelector('.axiom-launcher__fork')!.getBoundingClientRect().height,
+  }))
+  expect(launcherType.description).toBeGreaterThanOrEqual(15)
+  expect(launcherType.workspaceHeading).toBeGreaterThanOrEqual(26)
+  expect(launcherType.actionLabel).toBeGreaterThanOrEqual(16)
+  expect(launcherType.actionHeight).toBeGreaterThanOrEqual(78)
   await expect.poll(() => openCodebase.evaluate(element => {
     const style = getComputedStyle(element)
     return {
@@ -669,57 +729,744 @@ test('presents project navigation as a desktop workbench launcher', async () => 
   })
 })
 
-test('configures index scope through the workbench directory planner', async () => {
+test('chooses project sources in a folder-first file browser', async () => {
   const setupUrl = new URL(page.url())
   setupUrl.searchParams.set('setup', '1')
   await page.goto(setupUrl.toString())
 
-  await expect(page.getByRole('heading', { name: 'Choose source boundaries' })).toBeVisible()
-  await expect(page.getByText('STEP 01 / INDEX SCOPE')).toBeVisible()
-  await expect(page.getByRole('tree', { name: 'Project directories' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Set up Axiom Canvas Fixture' })).toBeVisible()
+  await expect(page.getByText('Choose what Axiom reads')).toBeVisible()
+  const sourceTree = page.getByRole('tree', { name: 'Project files and folders' })
+  await expect(sourceTree).toBeVisible()
+  await expect(sourceTree.getByText('package.json', { exact: true })).toBeVisible()
 
-  const startIndexing = page.getByRole('button', { name: 'Start Indexing' })
+  const startIndexing = page.getByRole('button', { name: /Index this project/ })
   await expect(startIndexing).toBeEnabled()
 
-  const firstIncludedDirectory = page.locator('.axiom-setup-tree__check input:checked').first()
-  await expect(firstIncludedDirectory).toBeVisible()
-  const includedLabel = await firstIncludedDirectory.getAttribute('aria-label')
-  expect(includedLabel).toBeTruthy()
-  // Anchor subsequent assertions to the directory's stable accessible name.
-  // A locator rooted at `input:checked` retargets to the next checked row as
-  // soon as the controlled checkbox changes state.
-  const includedDirectory = page.getByLabel(includedLabel!, { exact: true })
-  const row = includedDirectory.locator('xpath=ancestor::div[contains(@class, "axiom-setup-tree__row")]')
-  await expect(row.locator('.axiom-setup-tree__state-label')).toHaveText('INDEX')
-  await includedDirectory.click()
-  await expect(includedDirectory).not.toBeChecked()
-  await expect(row.locator('.axiom-setup-tree__state-label')).toHaveText('EXCLUDED')
+  const rootKinds = await sourceTree.locator(':scope > .axiom-setup-tree__branch').evaluateAll(branches =>
+    branches.map(branch => branch.getAttribute('data-kind')),
+  )
+  const firstNonFolder = rootKinds.findIndex(kind => kind !== 'folder')
+  expect(firstNonFolder).toBeGreaterThan(0)
+  expect(rootKinds.slice(0, firstNonFolder).every(kind => kind === 'folder')).toBe(true)
+  expect(rootKinds.slice(firstNonFolder).every(kind => kind !== 'folder')).toBe(true)
 
-  const boardBox = await page.locator('.axiom-onboarding__board').boundingBox()
-  expect(boardBox?.width).toBeGreaterThan(900)
-  expect(boardBox?.height).toBeGreaterThan(700)
+  const packageCheckbox = page.getByLabel('Include package.json', { exact: true })
+  const packageRow = packageCheckbox.locator('xpath=ancestor::div[contains(@class, "axiom-setup-tree__row")]')
+  await expect(packageRow.locator('.axiom-setup-tree__kind')).toHaveText('Unsupported')
+  await expect(packageRow.locator('.axiom-setup-tree__state-label')).toHaveText('Skipped')
+  await expect(packageCheckbox).toBeDisabled()
+
+  const documentCheckbox = page.getByLabel('Include ARCHITECTURE.md', { exact: true })
+  const documentRow = documentCheckbox.locator('xpath=ancestor::div[contains(@class, "axiom-setup-tree__row")]')
+  await expect(documentRow.locator('.axiom-setup-tree__kind')).toHaveText('Document')
+  await expect(documentRow.locator('.axiom-setup-tree__state-label')).toHaveText('Documents')
+  await expect(documentCheckbox).toBeChecked()
+
+  const sourceCheckbox = page.getByLabel('Include electron.vite.config.ts', { exact: true })
+  const sourceRow = sourceCheckbox.locator('xpath=ancestor::div[contains(@class, "axiom-setup-tree__row")]')
+  await expect(sourceRow.locator('.axiom-setup-tree__kind')).toHaveText('Source')
+  await sourceCheckbox.click()
+  await expect(sourceCheckbox).not.toBeChecked()
+  await expect(sourceRow.locator('.axiom-setup-tree__state-label')).toHaveText('Excluded')
+
+  const screenBox = await page.locator('.axiom-source-setup').boundingBox()
+  expect(screenBox?.width).toBeGreaterThan(1200)
+  expect(screenBox?.height).toBeGreaterThan(780)
+  const setupScale = await page.evaluate(() => ({
+    bodyCopy: parseFloat(getComputedStyle(document.querySelector('.axiom-source-setup__description')!).fontSize),
+    treeLabel: parseFloat(getComputedStyle(document.querySelector('.axiom-setup-tree__name')!).fontSize),
+    rowHeight: document.querySelector('.axiom-setup-tree__row')!.getBoundingClientRect().height,
+    checkboxSize: document.querySelector('.axiom-setup-tree__check')!.getBoundingClientRect().width,
+    primaryHeight: document.querySelector('.axiom-source-setup__submit')!.getBoundingClientRect().height,
+  }))
+  expect(setupScale.bodyCopy).toBeGreaterThanOrEqual(14)
+  expect(setupScale.treeLabel).toBeGreaterThanOrEqual(15)
+  expect(setupScale.rowHeight).toBeGreaterThanOrEqual(52)
+  expect(setupScale.checkboxSize).toBeGreaterThanOrEqual(18)
+  expect(setupScale.primaryHeight).toBeGreaterThanOrEqual(58)
   await expect(page.locator('button button')).toHaveCount(0)
 })
 
-test('reviews the indexed baseline in the unified workbench workflow', async () => {
+test('keeps documentation in its library and off the architecture canvas', async () => {
+  await page.evaluate(() => {
+    const graphStore = (window as any).__axiomGraphStore
+    const state = graphStore.getState()
+    const template = state.files[0]
+    graphStore.getState().applySnapshot({
+      workspaceId: state.currentProject.id,
+      systems: state.systems,
+      files: [
+        ...state.files,
+        {
+          ...template,
+          id: 'file_docs',
+          path: '/axiom-e2e/docs/ARCHITECTURE.md',
+          relPath: 'docs/ARCHITECTURE.md',
+          language: 'markdown',
+          systemId: null,
+          lineCount: 3,
+        },
+      ],
+      infraNodes: state.infraNodes,
+      dependencies: state.dependencies,
+      floorLayouts: state.floorLayouts,
+    })
+  })
+
+  await expect(page.locator('.react-flow__node[data-id="file_docs"]')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Project documents' }).click()
+  const documents = page.getByRole('complementary', { name: 'Project documents' })
+  await expect(documents).toBeVisible()
+  await expect(documents.getByRole('button', { name: /ARCHITECTURE\.md/ })).toBeVisible()
+  await expect(documents.getByText('The renderer consumes indexed source only.')).toBeVisible()
+})
+
+test('guides agent setup through one harness-specific card', async () => {
+  let agentConnected = true
+  await page.route(/\/api\/agent\/presence\?/, route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      connected: agentConnected,
+      connections: agentConnected
+        ? [{ connectionId: 'connection-e2e', hostId: 'codex', lastSeenAt: Date.now() }]
+        : [],
+    }),
+  }))
+  const connectUrl = new URL(page.url())
+  connectUrl.searchParams.set('connect', '1')
+  await page.goto(connectUrl.toString())
+
+  const card = page.locator('.axiom-connect__card')
+  await expect(card).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Bring an agent into Axiom' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Add Axiom to your agent' })).toBeVisible()
+
+  const steps = page.getByRole('tablist', { name: 'Agent setup steps' }).getByRole('tab')
+  await expect(steps).toHaveCount(4)
+  await expect(steps.nth(0)).toHaveAttribute('aria-selected', 'true')
+
+  const agents = page.getByRole('list', { name: 'Supported agents' })
+  await expect(agents.locator(':scope > li')).toHaveCount(6)
+  await expect(agents.getByText('found on this machine')).toHaveCount(0)
+  await expect(agents.getByText(/Axiom configured|workflow missing|connected now/)).toHaveCount(0)
+  await expect(agents.locator('.axiom-connect__host-signal')).toHaveCount(6)
+  await expect(agents.locator('.axiom-connect__host-signal[data-state="live"]')).toHaveCount(1)
+  await expect(page.locator('.axiom-connect__mascot')).toHaveAttribute('data-state', 'awake')
+
+  const readStableFrame = () => page.evaluate(() => {
+    const screen = document.querySelector('.axiom-connect')!
+    const card = document.querySelector('.axiom-connect__card')!.getBoundingClientRect()
+    const stage = document.querySelector('.axiom-connect__workspace')!.getBoundingClientRect()
+    return {
+      cardWidth: Math.round(card.width),
+      cardHeight: Math.round(card.height),
+      stageHeight: Math.round(stage.height),
+      hasPageScrollbar: screen.scrollHeight > screen.clientHeight,
+    }
+  })
+  const firstFrame = await readStableFrame()
+  expect(firstFrame.hasPageScrollbar).toBe(false)
+
+  await steps.getByText('Restart').click()
+  await expect(page.getByRole('heading', { name: /Restart/ })).toBeVisible()
+  expect(await readStableFrame()).toEqual(firstFrame)
+
+  await steps.getByText('Map project').click()
+  await expect(page.locator('.axiom-connect__command > span')).toHaveText('$axiom-map')
+  expect(await readStableFrame()).toEqual(firstFrame)
+
+  await steps.getByText('Add Axiom').click()
+  await agents.getByText('Antigravity', { exact: true }).click()
+  await steps.getByText('Map project').click()
+  await expect(page.locator('.axiom-connect__command > span')).toHaveText('Use the axiom-map skill')
+
+  await steps.getByText('Review').click()
+  await expect(page.getByRole('heading', { name: 'Wait for the proposal' })).toBeVisible()
+  expect(await readStableFrame()).toEqual(firstFrame)
+  await expect(page.locator('button button')).toHaveCount(0)
+
+  const cardBox = await card.boundingBox()
+  expect(cardBox?.width).toBeGreaterThan(900)
+  expect(cardBox?.height).toBeLessThanOrEqual(820)
+
+  agentConnected = false
+  await expect(page.locator('.axiom-connect__mascot')).toHaveAttribute('data-state', 'sleeping', { timeout: 5_000 })
+  await expect(agents.locator('.axiom-connect__host-signal[data-state="live"]')).toHaveCount(0)
+})
+
+test('reviews the proposed system hierarchy in the unified workbench workflow', async () => {
+  const indexedSnapshot = await page.evaluate(() => {
+    const state = (window as any).__axiomGraphStore.getState()
+    return {
+      workspaceId: state.currentProject.id,
+      systems: state.systems,
+      files: state.files,
+      infraNodes: state.infraNodes,
+      dependencies: state.dependencies,
+      floorLayouts: state.floorLayouts,
+    }
+  })
+  const proposalBody = {
+    id: 'proposal-e2e',
+    workspaceId: 'demo',
+    currentRevision: 1,
+    createdAt: Date.now(),
+    round: {
+      rationale: 'Group the rendering pipeline by responsibility.',
+      evidenceSummary: 'Entry points, imports, and shared state agree on these boundaries.',
+      systems: [
+        {
+          systemKey: 'canvas', name: 'Living Canvas', description: 'Owns the interactive architecture Floor.',
+          parentRefType: 'scope', parentRefId: null, depth: 0, decision: 'pending',
+          fileCount: 2, affectedFileCount: 2,
+        },
+        {
+          systemKey: 'zoom', name: 'Semantic Zoom', description: 'Controls progressive detail and visibility.',
+          parentRefType: 'proposed_system', parentRefId: 'canvas', depth: 1, decision: 'pending',
+          fileCount: 1, affectedFileCount: 1,
+        },
+      ],
+      memberships: [
+        {
+          id: 'member-a', fileId: null, rootId: 'root', filePath: 'docs/ARCHITECTURE.md',
+          targetSystemKey: 'canvas', disposition: 'assign', rationale: '',
+        },
+        {
+          id: 'member-b', fileId: null, rootId: 'root', filePath: 'src/semanticZoom.ts',
+          targetSystemKey: 'zoom', disposition: 'assign', rationale: '',
+        },
+      ],
+      layouts: [],
+    },
+  }
+  await page.route('http://127.0.0.1:7743/api/architecture-proposals?workspace=demo', route =>
+    route.fulfill({ json: [{ id: 'proposal-e2e' }] }),
+  )
+  await page.route(/http:\/\/127\.0\.0\.1:7743\/api\/architecture-proposals\/proposal-e2e\?workspace=demo/, route =>
+    route.fulfill({ json: proposalBody }),
+  )
+  let proposalLayoutSaves = 0
+  let proposalFinalizations = 0
+  const proposalLayoutWriteKeys: string[][] = []
+  let deferNextLayoutResponse = false
+  let releaseDeferredLayoutResponse: (() => void) | null = null
+  await page.route('http://127.0.0.1:7743/api/architecture-proposals/proposal-e2e/layouts', async route => {
+    const request = route.request()
+    const payload = request.postDataJSON() as { layouts: typeof proposalBody.round.layouts }
+    proposalLayoutSaves += 1
+    proposalLayoutWriteKeys.push((payload.layouts as Array<{ nodeType: string; nodeKey: string }>)
+      .map(layout => `${layout.nodeType}:${layout.nodeKey}`))
+    proposalBody.round.layouts = [
+      ...proposalBody.round.layouts.filter(previous => !payload.layouts.some(layout =>
+        layout.nodeType === previous.nodeType && layout.nodeKey === previous.nodeKey)),
+      ...payload.layouts,
+    ]
+    if (deferNextLayoutResponse) {
+      deferNextLayoutResponse = false
+      await new Promise<void>(resolve => { releaseDeferredLayoutResponse = resolve })
+      releaseDeferredLayoutResponse = null
+    }
+    await route.fulfill({ json: proposalBody })
+  })
+  await page.route('http://127.0.0.1:7743/api/architecture-proposals/proposal-e2e/finalize', async route => {
+    proposalFinalizations += 1
+    const request = route.request().postDataJSON() as {
+      workspaceId: string
+      revision: number
+      decidedBy: string
+      establishDeltaBaseline: boolean
+    }
+    expect(request).toEqual({
+      workspaceId: 'demo',
+      revision: 1,
+      decidedBy: 'user',
+      establishDeltaBaseline: true,
+    })
+    const materialized = new Map([
+      ['canvas', 'committed-canvas'],
+      ['zoom', 'committed-zoom'],
+    ])
+    proposalBody.round.systems = proposalBody.round.systems.map(system => ({
+      ...system,
+      decision: 'approved',
+      materializedSystemId: materialized.get(system.systemKey),
+    }))
+    const systemTemplate = indexedSnapshot.systems[0]
+    const committedSystems = proposalBody.round.systems.map(system => ({
+      ...systemTemplate,
+      id: materialized.get(system.systemKey)!,
+      workspaceId: 'demo',
+      name: system.name,
+      description: system.description,
+      source: 'agent',
+      parentId: system.parentRefType === 'proposed_system'
+        ? materialized.get(system.parentRefId ?? '') ?? null
+        : null,
+      depth: system.depth,
+    }))
+    const fileAssignments = new Map([
+      ['file_canvas', 'committed-canvas'],
+      ['file_layerzoom', 'committed-zoom'],
+    ])
+    const nodeId = (layout: { nodeType: string; nodeKey: string }) => layout.nodeType === 'system'
+      ? materialized.get(layout.nodeKey)!
+      : layout.nodeKey === 'member-a' ? 'file_canvas' : 'file_layerzoom'
+    const reviewedLayouts = proposalBody.round.layouts as Array<{
+      nodeType: 'system' | 'file'
+      nodeKey: string
+      parentRefType: 'scope' | 'live_system' | 'proposed_system'
+      parentRefId: string
+      positionX: number
+      positionY: number
+      width: number
+      height: number
+      scale: number
+      interiorScale: number
+    }>
+    const committedLayouts = reviewedLayouts.map(layout => {
+      const parentNodeId = layout.parentRefType === 'proposed_system'
+        ? materialized.get(layout.parentRefId) ?? null
+        : null
+      return {
+        workspaceId: 'demo',
+        nodeId: nodeId(layout),
+        nodeType: layout.nodeType,
+        parentNodeId,
+        parentNodeType: parentNodeId ? 'system' : null,
+        containmentKind: parentNodeId ? 'part_of' : 'root',
+        positionX: layout.positionX,
+        positionY: layout.positionY,
+        width: layout.width,
+        height: layout.height,
+        scale: layout.scale,
+        interiorScale: layout.interiorScale,
+        updatedAt: Date.now(),
+      }
+    })
+    await route.fulfill({ json: {
+      proposal: proposalBody,
+      deltaBaselineAt: Date.now(),
+      snapshot: {
+        ...indexedSnapshot,
+        systems: committedSystems,
+        files: indexedSnapshot.files.map(file => ({
+          ...file,
+          systemId: fileAssignments.get(file.id) ?? null,
+        })),
+        floorLayouts: committedLayouts,
+      },
+    } })
+  })
   const reviewUrl = new URL(page.url())
   reviewUrl.searchParams.set('review', '1')
   await page.goto(reviewUrl.toString())
 
-  await expect(page.getByRole('heading', { name: 'Your codebase is becoming a map' })).toBeVisible()
-  await expect(page.getByText('STEP 02 / LIVE BASELINE')).toBeVisible()
-  await expect(page.getByText('CLASSIFICATION COVERAGE')).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Agent review connection' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Review activity' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Finish Review' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Review the architecture your agent found' })).toBeVisible()
+  await expect(page.getByText('STEP 04 / REVIEW THE MAP')).toBeVisible()
+  const proposalPanel = page.getByRole('complementary', { name: 'Proposed architecture' })
+  await expect(proposalPanel).toBeVisible()
+  await expect(proposalPanel.getByText('Living Canvas', { exact: true })).toBeVisible()
+  await expect(proposalPanel.getByText('Semantic Zoom', { exact: true })).toBeVisible()
+  await expect(page.locator('.axiom-review__canvas').getByText('ARCHITECTURE.md', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Done Reviewing' })).toBeVisible()
   await expect(page.locator('.axiom-review__canvas .react-flow')).toBeVisible()
-  await expect(page.getByText('INTERACTIVE REVIEW FLOOR')).toBeVisible()
+  await expect(page.locator('.axiom-review__canvas .react-flow__background')).toHaveCount(1)
+  await expect(page.locator('.axiom-review__canvas .axiom-canvas-review')).toHaveCount(1)
+  await expect(page.getByText('PROPOSED SYSTEM FLOOR')).toBeVisible()
+  // A review starts by freezing the same complete generated frame that the
+  // live Floor freezes. No gesture may be the first sparse layout write.
+  await expect.poll(() => proposalLayoutSaves).toBe(1)
+  await expect(page.locator('.axiom-review__canvas .axiom-canvas-review-ready')).toHaveCount(1)
+  expect(new Set(proposalLayoutWriteKeys[0]))
+    .toEqual(new Set(['system:canvas', 'system:zoom', 'file:member-a', 'file:member-b']))
 
   const panelBox = await page.locator('.axiom-review__panel').boundingBox()
   const canvasBox = await page.locator('.axiom-review__canvas').boundingBox()
-  expect(panelBox?.width).toBeCloseTo(410, 0)
-  expect(canvasBox?.width).toBeGreaterThan(900)
+  expect(panelBox?.width).toBeGreaterThanOrEqual(560)
+  expect(canvasBox?.width).toBeGreaterThan(760)
+  const reviewScale = await page.evaluate(() => ({
+    heading: parseFloat(getComputedStyle(document.querySelector('.axiom-review__heading h1')!).fontSize),
+    purpose: parseFloat(getComputedStyle(document.querySelector('.axiom-proposal__purpose')!).fontSize),
+    systemName: parseFloat(getComputedStyle(document.querySelector('.axiom-proposal__name')!).fontSize),
+    decisionHeight: document.querySelector('.axiom-proposal__approve')!.getBoundingClientRect().height,
+  }))
+  expect(reviewScale.heading).toBeGreaterThanOrEqual(28)
+  expect(reviewScale.purpose).toBeGreaterThanOrEqual(14)
+  expect(reviewScale.systemName).toBeGreaterThanOrEqual(18)
+  expect(reviewScale.decisionHeight).toBeGreaterThanOrEqual(40)
+  await expect(proposalPanel.getByText('3 files in branch', { exact: true })).toBeVisible()
+
+  await proposalPanel.getByRole('button', { name: 'Collapse Living Canvas' }).click()
+  await expect(proposalPanel.getByText('Semantic Zoom', { exact: true })).toHaveCount(0)
+  await proposalPanel.getByRole('button', { name: 'Expand Living Canvas' }).click()
+  await expect(proposalPanel.getByText('Semantic Zoom', { exact: true })).toBeVisible()
+
+  await page.locator('.axiom-review__canvas .react-flow__node-system')
+    .filter({ hasText: 'Semantic Zoom' }).click({ position: { x: 10, y: 10 } })
+  await expect(proposalPanel.locator('.axiom-proposal__item').filter({ hasText: 'Semantic Zoom' }))
+    .toHaveAttribute('data-active', 'true')
+  await expect(page.locator('.axiom-review__canvas .react-flow__node')).toHaveCount(4)
+
+  // Review uses AxiomCanvas itself. Persisting a node drag must update only the
+  // proposal geometry; it must not refit the camera or relayout its siblings.
+  const draggedNode = page.locator('.axiom-review__canvas .react-flow__node[data-id="proposal-file:proposal-e2e:member-a"]')
+  const nestedSystem = page.locator('.axiom-review__canvas .react-flow__node[data-id="proposal:proposal-e2e:zoom"]')
+  const viewport = page.locator('.axiom-review__canvas .react-flow__viewport')
+  const stableNodes = page.locator(
+    '.axiom-review__canvas .react-flow__node:not([data-id="proposal-file:proposal-e2e:member-a"])',
+  )
+  const [dragBox, nestedLocalBefore, stableGeometryBefore, cameraBefore] = await Promise.all([
+    draggedNode.boundingBox(),
+    nestedSystem.evaluate(element => (element as HTMLElement).style.transform),
+    stableNodes.evaluateAll(elements => elements.map(element => ({
+      id: element.getAttribute('data-id'),
+      transform: (element as HTMLElement).style.transform,
+      width: (element as HTMLElement).style.width,
+      height: (element as HTMLElement).style.height,
+    }))),
+    viewport.getAttribute('style'),
+  ])
+  expect(dragBox).not.toBeNull()
+  const pointerStart = await draggedNode.evaluate(element => {
+    const rect = element.getBoundingClientRect()
+    const id = element.getAttribute('data-id')
+    for (let y = rect.top + 4; y < rect.bottom - 4; y += 6) {
+      for (let x = rect.left + 4; x < rect.right - 4; x += 6) {
+        const target = document.elementFromPoint(x, y) as HTMLElement | null
+        if (target?.closest('.react-flow__node')?.getAttribute('data-id') === id &&
+            !target.closest('.nodrag')) {
+          return { x, y }
+        }
+      }
+    }
+    return null
+  })
+  expect(pointerStart).not.toBeNull()
+  await draggedNode.evaluate(element => {
+    const state = window as typeof window & {
+      __axiomReviewDragTransforms?: string[]
+      __axiomReviewDragObserver?: MutationObserver
+    }
+    state.__axiomReviewDragTransforms = [(element as HTMLElement).style.transform]
+    state.__axiomReviewDragObserver?.disconnect()
+    state.__axiomReviewDragObserver = new MutationObserver(() => {
+      state.__axiomReviewDragTransforms!.push((element as HTMLElement).style.transform)
+    })
+    state.__axiomReviewDragObserver.observe(element, {
+      attributes: true,
+      attributeFilter: ['style'],
+    })
+  })
+  await page.mouse.move(pointerStart!.x, pointerStart!.y)
+  await page.mouse.down()
+  await page.mouse.move(pointerStart!.x + 42, pointerStart!.y + 28, { steps: 12 })
+  const [dragSamples, liveDragBox] = await Promise.all([
+    draggedNode.evaluate(() => {
+      const state = window as typeof window & {
+        __axiomReviewDragTransforms?: string[]
+        __axiomReviewDragObserver?: MutationObserver
+      }
+      state.__axiomReviewDragObserver?.disconnect()
+      return (state.__axiomReviewDragTransforms ?? []).flatMap(transform => {
+        const match = transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)
+        return match ? [{ x: Number(match[1]), y: Number(match[2]) }] : []
+      })
+    }),
+    draggedNode.boundingBox(),
+  ])
+  await expect(viewport).toHaveAttribute('style', cameraBefore ?? '')
+  expect(liveDragBox).not.toBeNull()
+  expect(dragSamples.length).toBeGreaterThan(2)
+  for (let index = 1; index < dragSamples.length; index++) {
+    // A controlled scene rebuild used to restore the persisted position on
+    // alternating frames. A deliberate right/down drag may never move back.
+    expect(dragSamples[index].x).toBeGreaterThanOrEqual(dragSamples[index - 1].x - 0.5)
+    expect(dragSamples[index].y).toBeGreaterThanOrEqual(dragSamples[index - 1].y - 0.5)
+  }
+  expect(liveDragBox!.x).toBeGreaterThan(dragBox!.x + 25)
+  expect(liveDragBox!.y).toBeGreaterThan(dragBox!.y + 15)
+  deferNextLayoutResponse = true
+  await page.mouse.up()
+  await expect.poll(() => proposalLayoutSaves).toBe(2)
+  await expect.poll(() => releaseDeferredLayoutResponse !== null).toBe(true)
+  await expect.poll(() => viewport.getAttribute('style')).toBe(cameraBefore)
+  await expect.poll(() => nestedSystem.evaluate(element => (element as HTMLElement).style.transform))
+    .toBe(nestedLocalBefore)
+  await expect.poll(() => stableNodes.evaluateAll(elements => elements.map(element => ({
+    id: element.getAttribute('data-id'),
+    transform: (element as HTMLElement).style.transform,
+    width: (element as HTMLElement).style.width,
+    height: (element as HTMLElement).style.height,
+  })))).toEqual(stableGeometryBefore)
+
+  // A held resize is also a controlled React Flow interaction. The fixed
+  // opposite edge may not oscillate while proposal state is being previewed.
+  const resizedSystem = page.locator(
+    '.axiom-review__canvas .react-flow__node[data-id="proposal:proposal-e2e:canvas"]',
+  )
+  await resizedSystem.click({ position: { x: 18, y: 18 }, force: true })
+  await expect(resizedSystem).toHaveClass(/selected/)
+  const rightResizeHandle = resizedSystem.locator('[data-resize-direction="right"]')
+  await expect(rightResizeHandle).toBeVisible()
+  const [systemBoxBefore, resizeHandleBox] = await Promise.all([
+    resizedSystem.boundingBox(),
+    rightResizeHandle.boundingBox(),
+  ])
+  expect(systemBoxBefore).not.toBeNull()
+  expect(resizeHandleBox).not.toBeNull()
+  await resizedSystem.evaluate(element => {
+    const state = window as typeof window & {
+      __axiomReviewResizeFrames?: Array<{
+        left: number
+        right: number
+        width: number
+        bodyRight: number
+        outlineRight: number
+      }>
+      __axiomReviewResizeObserver?: MutationObserver
+    }
+    const sample = () => {
+      const rect = element.getBoundingClientRect()
+      const body = element.querySelector<SVGElement>('.axiom-system-node__shell > svg')?.getBoundingClientRect()
+      const outline = element.querySelector<HTMLElement>('.axiom-node-resizer')?.getBoundingClientRect()
+      state.__axiomReviewResizeFrames!.push({
+        left: rect.left,
+        right: rect.right,
+        width: rect.width,
+        bodyRight: body?.right ?? Number.NaN,
+        outlineRight: outline?.right ?? Number.NaN,
+      })
+    }
+    state.__axiomReviewResizeFrames = []
+    sample()
+    state.__axiomReviewResizeObserver?.disconnect()
+    state.__axiomReviewResizeObserver = new MutationObserver(sample)
+    state.__axiomReviewResizeObserver.observe(element, {
+      attributes: true,
+      attributeFilter: ['style'],
+    })
+  })
+  await page.mouse.move(
+    resizeHandleBox!.x + resizeHandleBox!.width / 2,
+    resizeHandleBox!.y + resizeHandleBox!.height / 2,
+  )
+  await page.mouse.down()
+  for (let step = 1; step <= 16; step++) {
+    await page.mouse.move(
+      resizeHandleBox!.x + resizeHandleBox!.width / 2 + step * 3,
+      resizeHandleBox!.y + resizeHandleBox!.height / 2,
+    )
+    await page.waitForTimeout(18)
+    if (step === 8) {
+      releaseDeferredLayoutResponse?.()
+      await page.waitForTimeout(80)
+    }
+  }
+  const resizeFrames = await resizedSystem.evaluate(() => {
+    const state = window as typeof window & {
+      __axiomReviewResizeFrames?: Array<{
+        left: number
+        right: number
+        width: number
+        bodyRight: number
+        outlineRight: number
+      }>
+      __axiomReviewResizeObserver?: MutationObserver
+    }
+    state.__axiomReviewResizeObserver?.disconnect()
+    return state.__axiomReviewResizeFrames ?? []
+  })
+  expect(resizeFrames.length).toBeGreaterThan(2)
+  for (let index = 1; index < resizeFrames.length; index++) {
+    expect(resizeFrames[index].left).toBeCloseTo(resizeFrames[0].left, 0)
+    expect(resizeFrames[index].width).toBeGreaterThanOrEqual(resizeFrames[index - 1].width - 0.5)
+    expect(resizeFrames[index].right).toBeGreaterThanOrEqual(resizeFrames[index - 1].right - 0.5)
+    expect(resizeFrames[index].outlineRight).toBeCloseTo(resizeFrames[index].right, 0)
+    expect(resizeFrames[index].bodyRight).toBeCloseTo(resizeFrames[index].right, 0)
+  }
+  expect(resizeFrames.at(-1)!.width).toBeGreaterThan(resizeFrames[0].width + 30)
+  await page.mouse.up()
+  await expect.poll(() => proposalLayoutSaves).toBe(3)
+  await expect.poll(() => viewport.getAttribute('style')).toBe(cameraBefore)
+
+  const leftResizeHandle = resizedSystem.locator('[data-resize-direction="left"]')
+  const [systemBoxBeforeLeftResize, leftResizeHandleBox] = await Promise.all([
+    resizedSystem.boundingBox(),
+    leftResizeHandle.boundingBox(),
+  ])
+  expect(systemBoxBeforeLeftResize).not.toBeNull()
+  expect(leftResizeHandleBox).not.toBeNull()
+  await resizedSystem.evaluate(element => {
+    const state = window as typeof window & {
+      __axiomReviewResizeFrames?: Array<{
+        left: number
+        right: number
+        width: number
+        bodyRight: number
+        outlineRight: number
+      }>
+      __axiomReviewResizeObserver?: MutationObserver
+    }
+    const sample = () => {
+      const rect = element.getBoundingClientRect()
+      const body = element.querySelector<SVGElement>('.axiom-system-node__shell > svg')?.getBoundingClientRect()
+      const outline = element.querySelector<HTMLElement>('.axiom-node-resizer')?.getBoundingClientRect()
+      state.__axiomReviewResizeFrames!.push({
+        left: rect.left,
+        right: rect.right,
+        width: rect.width,
+        bodyRight: body?.right ?? Number.NaN,
+        outlineRight: outline?.right ?? Number.NaN,
+      })
+    }
+    state.__axiomReviewResizeFrames = []
+    sample()
+    state.__axiomReviewResizeObserver?.disconnect()
+    state.__axiomReviewResizeObserver = new MutationObserver(sample)
+    state.__axiomReviewResizeObserver.observe(element, {
+      attributes: true,
+      attributeFilter: ['style'],
+    })
+  })
+  await page.mouse.move(
+    leftResizeHandleBox!.x + leftResizeHandleBox!.width / 2,
+    leftResizeHandleBox!.y + leftResizeHandleBox!.height / 2,
+  )
+  await page.mouse.down()
+  // Vary pointer velocity within one monotonic gesture. The review used to
+  // look nearly correct at a slow pace while its secondary geometry stream
+  // became visibly farther behind during these faster samples.
+  const westResizeOffsets = [2, 4, 6, 10, 18, 30, 33, 36, 39, 42, 45, 48]
+  for (const offset of westResizeOffsets) {
+    await page.mouse.move(
+      leftResizeHandleBox!.x + leftResizeHandleBox!.width / 2 - offset,
+      leftResizeHandleBox!.y + leftResizeHandleBox!.height / 2,
+    )
+    await page.waitForTimeout(8)
+  }
+  const westResizeFrames = await resizedSystem.evaluate(() => {
+    const state = window as typeof window & {
+      __axiomReviewResizeFrames?: Array<{
+        left: number
+        right: number
+        width: number
+        bodyRight: number
+        outlineRight: number
+      }>
+      __axiomReviewResizeObserver?: MutationObserver
+    }
+    state.__axiomReviewResizeObserver?.disconnect()
+    return state.__axiomReviewResizeFrames ?? []
+  })
+  expect(westResizeFrames.length).toBeGreaterThan(2)
+  for (let index = 1; index < westResizeFrames.length; index++) {
+    expect(westResizeFrames[index].right).toBeCloseTo(westResizeFrames[0].right, 0)
+    expect(westResizeFrames[index].width).toBeGreaterThanOrEqual(westResizeFrames[index - 1].width - 0.5)
+    expect(westResizeFrames[index].left).toBeLessThanOrEqual(westResizeFrames[index - 1].left + 0.5)
+    expect(westResizeFrames[index].outlineRight).toBeCloseTo(westResizeFrames[index].right, 0)
+    expect(westResizeFrames[index].bodyRight).toBeCloseTo(westResizeFrames[index].right, 0)
+  }
+  expect(westResizeFrames.at(-1)!.width).toBeGreaterThan(westResizeFrames[0].width + 30)
+  await page.mouse.up()
+  await expect.poll(() => proposalLayoutSaves).toBe(4)
+  await expect.poll(() => viewport.getAttribute('style')).toBe(cameraBefore)
+
+  // Selecting a proposal file keeps that exact canvas node selected even
+  // though the review panel follows the containing semantic branch.
+  await draggedNode.click({ position: { x: 12, y: 12 }, force: true })
+  await expect(draggedNode).toHaveClass(/selected/)
+  await expect(resizedSystem).not.toHaveClass(/selected/)
+  await expect(draggedNode.locator('[data-resize-direction="right"]')).toBeVisible()
+
+  await nestedSystem.click({ position: { x: 12, y: 12 }, force: true })
+  await expect(nestedSystem).toHaveClass(/selected/)
+  const nestedWestHandle = nestedSystem.locator('[data-resize-direction="left"]')
+  const nestedHandleBox = await nestedWestHandle.boundingBox()
+  expect(nestedHandleBox).not.toBeNull()
+  await nestedSystem.evaluate(element => {
+    const state = window as typeof window & {
+      __axiomReviewResizeFrames?: Array<{ left: number; right: number; width: number }>
+      __axiomReviewResizeObserver?: MutationObserver
+    }
+    const sample = () => {
+      const rect = element.getBoundingClientRect()
+      state.__axiomReviewResizeFrames!.push({ left: rect.left, right: rect.right, width: rect.width })
+    }
+    state.__axiomReviewResizeFrames = []
+    sample()
+    state.__axiomReviewResizeObserver?.disconnect()
+    state.__axiomReviewResizeObserver = new MutationObserver(sample)
+    state.__axiomReviewResizeObserver.observe(element, {
+      attributes: true,
+      attributeFilter: ['style'],
+    })
+  })
+  const nestedHandleCenter = {
+    x: nestedHandleBox!.x + nestedHandleBox!.width / 2,
+    y: nestedHandleBox!.y + nestedHandleBox!.height / 2,
+  }
+  await page.mouse.move(nestedHandleCenter.x, nestedHandleCenter.y)
+  await page.mouse.down()
+  for (let step = 1; step <= 12; step++) {
+    await page.mouse.move(nestedHandleCenter.x - step * 2, nestedHandleCenter.y)
+    await page.waitForTimeout(18)
+  }
+  const nestedWestFrames = await nestedSystem.evaluate(() => {
+    const state = window as typeof window & {
+      __axiomReviewResizeFrames?: Array<{ left: number; right: number; width: number }>
+      __axiomReviewResizeObserver?: MutationObserver
+    }
+    state.__axiomReviewResizeObserver?.disconnect()
+    return state.__axiomReviewResizeFrames ?? []
+  })
+  expect(nestedWestFrames.length).toBeGreaterThan(2)
+  for (let index = 1; index < nestedWestFrames.length; index++) {
+    expect(nestedWestFrames[index].right).toBeCloseTo(nestedWestFrames[0].right, 0)
+    expect(nestedWestFrames[index].width).toBeGreaterThanOrEqual(nestedWestFrames[index - 1].width - 0.5)
+    expect(nestedWestFrames[index].left).toBeLessThanOrEqual(nestedWestFrames[index - 1].left + 0.5)
+  }
+  await page.mouse.up()
+  await expect.poll(() => proposalLayoutSaves).toBe(5)
+
+  const beforePan = await viewport.getAttribute('style')
+  await page.keyboard.down('d')
+  await page.waitForTimeout(80)
+  await page.keyboard.up('d')
+  await expect.poll(() => viewport.getAttribute('style')).not.toBe(beforePan)
   await expect(page.locator('button button')).toHaveCount(0)
+
+  // Review completion is the canonical commit, not a local navigation flag.
+  // The exact daemon snapshot returned by finalization must be installed before
+  // the live Floor mounts, including semantic nesting, memberships, and layout.
+  await page.getByRole('button', { name: 'Done Reviewing' }).click()
+  await expect.poll(() => proposalFinalizations).toBe(1)
+  await expect(page.locator('.axiom-toolbar')).toBeVisible()
+  const committed = await page.evaluate(() => {
+    const state = (window as any).__axiomGraphStore.getState()
+    return {
+      systems: state.systems.map((system: any) => ({ id: system.id, name: system.name, parentId: system.parentId })),
+      memberships: state.files
+        .filter((file: any) => file.id === 'file_canvas' || file.id === 'file_layerzoom')
+        .map((file: any) => ({ id: file.id, systemId: file.systemId })),
+      layoutNodeIds: state.floorLayouts.map((layout: any) => layout.nodeId),
+    }
+  })
+  expect(committed.systems).toEqual([
+    { id: 'committed-canvas', name: 'Living Canvas', parentId: null },
+    { id: 'committed-zoom', name: 'Semantic Zoom', parentId: 'committed-canvas' },
+  ])
+  expect(committed.memberships).toEqual([
+    { id: 'file_canvas', systemId: 'committed-canvas' },
+    { id: 'file_layerzoom', systemId: 'committed-zoom' },
+  ])
+  expect(committed.layoutNodeIds).toEqual(expect.arrayContaining([
+    'committed-canvas',
+    'committed-zoom',
+    'file_canvas',
+    'file_layerzoom',
+  ]))
 })
 
 test('preserves tokenized app chrome geometry and toolbar interaction states', async () => {

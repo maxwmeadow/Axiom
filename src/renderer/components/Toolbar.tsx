@@ -14,10 +14,12 @@ interface ToolbarProps {
   projectName?: string
   agentLogOpen: boolean
   onToggleAgentLog: () => void
+  documentsOpen: boolean
+  onToggleDocuments: () => void
 }
 
 export function Toolbar({
-  onSearch, onCloseProject, projectName, agentLogOpen, onToggleAgentLog,
+  onSearch, onCloseProject, projectName, agentLogOpen, onToggleAgentLog, documentsOpen, onToggleDocuments,
 }: ToolbarProps) {
   const { fitView } = useReactFlow()
   const isIndexing = useGraphStore(s => s.isIndexing)
@@ -90,6 +92,17 @@ export function Toolbar({
             </svg>
           </ChromeButton>
           <InvestigationsMenu workspaceId={workspaceId} />
+          <ChromeButton
+            onClick={onToggleDocuments}
+            label="Project documents"
+            visualLabel="Documents"
+            active={documentsOpen}
+            ariaExpanded={documentsOpen}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M6 3h9l3 3v15H6z"/><path d="M15 3v4h4M9 11h6M9 15h6"/>
+            </svg>
+          </ChromeButton>
           <ChromeButton
             onClick={onToggleAgentLog}
             label="Agent log"

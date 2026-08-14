@@ -97,6 +97,19 @@ export function monoTextWidth(text: string, fontSize: number): number {
   return text.length * fontSize * MONO_ADVANCE_EM
 }
 
+/**
+ * Largest mono font that shows an entire single-line label inside `available`.
+ * The small reserve absorbs browser glyph rasterization and fractional layout
+ * rounding, so a mathematically exact fit never loses its final character.
+ */
+export function monoFontFittingWidth(text: string, available: number, ceiling: number): number {
+  const safeCeiling = Number.isFinite(ceiling) ? Math.max(0, ceiling) : 0
+  if (text.length === 0) return safeCeiling
+  const safeAvailable = Number.isFinite(available) ? Math.max(0, available) : 0
+  const widthAtOnePixel = monoTextWidth(text, 1)
+  return Math.min(safeCeiling, safeAvailable * 0.96 / widthAtOnePixel)
+}
+
 /** Largest font whose line box fits `available`. */
 export function fontFittingBand(available: number, ceiling: number): number {
   return Math.max(1, Math.min(ceiling, available / TITLE_LINE_HEIGHT))

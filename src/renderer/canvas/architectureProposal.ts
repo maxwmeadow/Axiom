@@ -42,6 +42,35 @@ export interface ProposalNode extends ProposedSystem {
   children: ProposalNode[]
 }
 
+export interface VisibleProposalNode {
+  node: ProposalNode
+  depth: number
+}
+
+/** Direct plus descendant files, so a container never misleadingly says 0. */
+export function proposalSubtreeFileCount(node: ProposalNode): number {
+  return node.fileCount + node.children.reduce(
+    (total, child) => total + proposalSubtreeFileCount(child),
+    0,
+  )
+}
+
+/** The visual tree order, respecting the branches the reviewer folded. */
+export function flattenVisibleProposalTree(
+  roots: readonly ProposalNode[],
+  collapsed: ReadonlySet<string>,
+): VisibleProposalNode[] {
+  const result: VisibleProposalNode[] = []
+  const walk = (nodes: readonly ProposalNode[], depth: number) => {
+    for (const node of nodes) {
+      result.push({ node, depth })
+      if (!collapsed.has(node.systemKey)) walk(node.children, depth + 1)
+    }
+  }
+  walk(roots, 0)
+  return result
+}
+
 /**
  * Rebuild the tree from the flat rows the daemon returns.
  *

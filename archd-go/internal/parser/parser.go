@@ -135,6 +135,10 @@ func detectLanguage(path string) string {
 		return "ruby"
 	case ".java":
 		return "java"
+	case ".md", ".mdx":
+		return "markdown"
+	case ".txt", ".rst", ".adoc":
+		return "text"
 	default:
 		return "unknown"
 	}

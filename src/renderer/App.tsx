@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react'
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
 
 import { AxiomCanvas } from './canvas/AxiomCanvas'
@@ -6,6 +6,7 @@ import { subscribeToDeltaRefresh } from './canvas/deltaRefresh'
 import { Toolbar } from './components/Toolbar'
 import { StatusBar } from './components/StatusBar'
 import { DetailPanel } from './components/DetailPanel'
+import { DocumentsPanel } from './components/DocumentsPanel'
 import { SearchBar } from './components/SearchBar'
 import { InjectConfirmBanner } from './components/InjectConfirmBanner'
 import { AgentLogPanel } from './components/AgentLogPanel'
@@ -22,6 +23,7 @@ import { ProjectSetupScreen } from './screens/ProjectSetupScreen'
 import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
 import { ConnectAgentScreen } from './screens/ConnectAgentScreen'
 import { readAuthorship } from './canvas/architectureAuthorship.ts'
+import { isCanvasSourceFile } from '../shared/fileKinds'
 
 import { useGraphStore, connectToArchd } from './store/graphStore'
 import { useOnboardingStore } from './store/onboardingStore'
@@ -44,6 +46,7 @@ const APP_PARAMS = new URLSearchParams(window.location.search)
 const E2E_MODE = APP_PARAMS.get('e2e') === '1'
 const E2E_HOME = E2E_MODE && APP_PARAMS.get('home') === '1'
 const E2E_SETUP = E2E_MODE && APP_PARAMS.get('setup') === '1'
+const E2E_CONNECT = E2E_MODE && APP_PARAMS.get('connect') === '1'
 const E2E_REVIEW = E2E_MODE && APP_PARAMS.get('review') === '1'
 const E2E_PROJECT: ProjectConfig = {
   id: 'demo',
@@ -53,6 +56,14 @@ const E2E_PROJECT: ProjectConfig = {
   languageOverrides: {},
   layoutPreferences: { zoom: 1, panX: 0, panY: 0 },
   openedAt: 0,
+}
+// The deterministic canvas fixture predates inferred-system filtering. Its
+// six named systems are authored test data, not classifier guesses; stamp that
+// explicitly so E2E continues to exercise the full Floor rather than silently
+// turning into a one-system fixture.
+const E2E_SNAPSHOT = {
+  ...demoSnapshot,
+  systems: demoSnapshot.systems.map(system => ({ ...system, source: 'user' as const })),
 }
 
 // Which project was open when we last closed. Absent means the user backed out
@@ -83,6 +94,7 @@ function projectIsReady(config: ProjectConfig): boolean {
 export default function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [agentLogOpen, setAgentLogOpen] = useState(false)
+  const [documentsOpen, setDocumentsOpen] = useState(false)
   const [currentProject, setCurrentProject] = useState<ProjectConfig | null>(
     E2E_MODE && !E2E_HOME && !E2E_SETUP ? E2E_PROJECT : null
   )
@@ -110,13 +122,14 @@ export default function App() {
       isIndexing: s.isIndexing,
     })))
   const [browsingWithoutAgent, setBrowsingWithoutAgent] = useState<string | null>(null)
+  const sourceGraphFiles = useMemo(() => graphFiles.filter(isCanvasSourceFile), [graphFiles])
   // Authored, not "unnamed": a project mid-index has no files yet, and asking
   // whether its map is guesswork answers "no" for the wrong reason — there is
   // nothing there to be guesswork. What matters is whether anyone has decided
   // what this codebase's parts are, which is false until they have.
   const architectureIsAuthored = readAuthorship({
     systems: graphSystems,
-    files: graphFiles,
+    files: sourceGraphFiles,
   }).authored > 0
 
   const {
@@ -145,7 +158,7 @@ export default function App() {
       }
       setStoreProject(E2E_PROJECT)
       setConnectionStatus('connected')
-      applySnapshot(demoSnapshot)
+      applySnapshot(E2E_SNAPSHOT)
       // E2E-only affordance: expose the store so tests can drive live patches
       // (graph:patch choreography) deterministically without a real daemon.
       ;(window as unknown as { __axiomGraphStore?: unknown }).__axiomGraphStore = useGraphStore
@@ -393,6 +406,7 @@ export default function App() {
     setCurrentProject(null)
     setStoreProject(null)
     setReviewActive(false)
+    setDocumentsOpen(false)
   }, [setStoreProject])
 
   const openProjectDialog = useCallback(async () => {
@@ -453,13 +467,18 @@ export default function App() {
   // A codebase nobody has mapped starts here. Everything the map can say is
   // downstream of an agent having read it, so this is the work rather than a
   // detour from it.
-  if (currentProject && !architectureIsAuthored && browsingWithoutAgent !== currentProject.id) {
+  if (currentProject && (E2E_CONNECT || (!E2E_MODE && !architectureIsAuthored && browsingWithoutAgent !== currentProject.id))) {
     return (
       <ConnectAgentScreen
         project={currentProject}
-        fileCount={graphFiles.length}
+        fileCount={sourceGraphFiles.length}
         indexing={graphIndexing}
-        onContinue={() => setBrowsingWithoutAgent(currentProject.id)}
+        onReview={() => setBrowsingWithoutAgent(currentProject.id)}
+        onSkip={() => {
+          setBrowsingWithoutAgent(currentProject.id)
+          localStorage.setItem(`review_completed_${currentProject.id}`, 'true')
+          setReviewActive(false)
+        }}
         onBack={closeProject}
       />
     )
@@ -474,7 +493,7 @@ export default function App() {
           localStorage.setItem(`review_completed_${currentProject.id}`, 'true')
           setReviewActive(false)
         }}
-        onBack={closeProject}
+        onBack={() => setBrowsingWithoutAgent(null)}
       />
     )
   }
@@ -489,6 +508,8 @@ export default function App() {
           projectName={currentProject.name}
           agentLogOpen={agentLogOpen}
           onToggleAgentLog={() => setAgentLogOpen(open => !open)}
+          documentsOpen={documentsOpen}
+          onToggleDocuments={() => setDocumentsOpen(open => !open)}
         />
 
         {/* Sheet rail + canvas area */}
@@ -500,6 +521,8 @@ export default function App() {
           <ErrorBoundary>
             <AxiomCanvas />
           </ErrorBoundary>
+
+          {documentsOpen && <DocumentsPanel onClose={() => setDocumentsOpen(false)} />}
 
           {/* Paint servers every node references. Defined once; renders nothing. */}
           <PaperTextureDefs />

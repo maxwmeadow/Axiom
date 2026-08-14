@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { containPointWithin, planCanvasDrop } from './dropPersistence.ts'
+import { frameOwnContentRect } from './nodeGeometry.ts'
 
 const node = (id, overrides = {}) => ({
   id,
@@ -276,6 +277,57 @@ test('a newcomer adopts the size its new siblings already use', () => {
   const incoming = plan.updates.find(update => update.nodeId === 'incoming')
   // Sibling world scale 0.5 inside a target of world scale 1.
   assert.equal(incoming.scale, 0.5)
+})
+
+test('size parity is collision-checked at the expanded settled size', () => {
+  const target = node('system', { type: 'system', style: { width: 900, height: 400 } })
+  const residentA = node('a', {
+    type: 'file', parentId: 'system', style: { width: 220, height: 110 }, data: { worldScale: 1 },
+  })
+  const residentB = node('b', {
+    type: 'file', parentId: 'system', style: { width: 220, height: 110 }, data: { worldScale: 1 },
+  })
+  // At its dragged size this fits in the gap. At sibling parity it doubles and
+  // overlaps resident B unless placement is recomputed after expansion.
+  const dragged = node('incoming', {
+    type: 'file', selected: true, style: { width: 110, height: 55 }, data: { worldScale: 0.5 },
+  })
+  const plan = planCanvasDrop({
+    workspaceId: 'workspace',
+    draggedNodeId: 'incoming',
+    targetNodeId: 'system',
+    allNodes: [target, residentA, residentB, dragged],
+    absolutePositions: new Map([
+      ['system', { x: 0, y: 0 }],
+      ['a', { x: 60, y: 80 }],
+      ['b', { x: 500, y: 80 }],
+      ['incoming', { x: 350, y: 80 }],
+    ]),
+    systemIds: new Set(['system']),
+    fileIds: new Set(['a', 'b', 'incoming']),
+    infraIds: new Set(),
+    floorLayouts: [],
+  })
+
+  const settled = plan.updates.find(update => update.nodeId === 'incoming')
+  assert.ok(settled)
+  const rect = {
+    x: settled.positionX,
+    y: settled.positionY,
+    width: settled.width * settled.scale,
+    height: settled.height * settled.scale,
+  }
+  assert.equal(rect.width, 220)
+  assert.equal(rect.height, 110)
+  const content = frameOwnContentRect(target)
+  assert.ok(rect.x >= content.x && rect.y >= content.y)
+  assert.ok(rect.x + rect.width <= content.x + content.width)
+  assert.ok(rect.y + rect.height <= content.y + content.height)
+  const overlaps = (left, right) =>
+    left.x < right.x + right.width && left.x + left.width > right.x &&
+    left.y < right.y + right.height && left.y + left.height > right.y
+  assert.equal(overlaps(rect, { x: 60, y: 80, width: 220, height: 110 }), false)
+  assert.equal(overlaps(rect, { x: 500, y: 80, width: 220, height: 110 }), false)
 })
 
 test('invalid projected scales cannot corrupt persisted geometry', () => {

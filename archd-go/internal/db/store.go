@@ -676,6 +676,11 @@ func AssignFileToSystem(db *sql.DB, fileID, systemID string) error {
 	return err
 }
 
+func ClearFileSystem(db *sql.DB, fileID string) error {
+	_, err := db.Exec(`UPDATE files SET system_id=NULL WHERE id=?`, fileID)
+	return err
+}
+
 func UpdateFilePosition(db *sql.DB, id string, x, y float64) error {
 	_, err := db.Exec(`UPDATE files SET position_x=?, position_y=? WHERE id=?`, x, y, id)
 	return err

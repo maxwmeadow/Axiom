@@ -169,7 +169,7 @@ export function buildDropFrame({
       node.id !== target?.id),
     ...roots,
   ]
-  const placementRects = layoutRoots.map(root => ({
+  const droppedRects = layoutRoots.map(root => ({
     id: root.id,
     ...nodeWorldRect(root, absolutePositions.get(root.id) ?? root.position),
   }))
@@ -198,6 +198,25 @@ export function buildDropFrame({
   const siblingWorldScale = siblingWorldScales.length > 0
     ? siblingWorldScales[Math.floor(siblingWorldScales.length / 2)]
     : null
+  // Collision, containment, sliding, repacking, and compression must all see
+  // the newcomer's SETTLED size. Using the rectangle under the pointer here
+  // let a small node find a legal slot and only afterwards expand to sibling
+  // parity, overlapping a resident or extending beyond its parent.
+  const placementRects = droppedRects.map(rect => {
+    if (!incomingIds.has(rect.id) || siblingWorldScale === null) return rect
+    const root = roots.find(candidate => candidate.id === rect.id)
+    if (!root) return rect
+    const currentWorldScale = positiveFinite(
+      (root.data as Record<string, unknown>).worldScale,
+      siblingWorldScale,
+    )
+    const parityFactor = siblingWorldScale / Math.max(0.0001, currentWorldScale)
+    return {
+      ...rect,
+      width: rect.width * parityFactor,
+      height: rect.height * parityFactor,
+    }
+  })
   // Header-aware, exactly like the resize clamp and the resize minimum. Using
   // `contentRect`'s flat defaults here made a drop and a resize disagree about
   // where a frame's usable space begins.
@@ -245,6 +264,9 @@ export function buildDropFrame({
   // A drop that already sits clear keeps its exact position, as before.
   const directOffset = target && destination && incomingBounds
     ? (() => {
+        if (incomingBounds.width > destination.width || incomingBounds.height > destination.height) {
+          return null
+        }
         const clamped = containPointWithin(incomingBounds, incomingBounds, destination)
         return collidesAt(clamped, incomingBounds)
           ? null
@@ -290,7 +312,7 @@ export function buildDropFrame({
           // Content box in the target's OWN canonical space.
           ownContent: frameOwnContentRect(target),
           occupied: occupiedRects.map(rect => toContentSpace(rect, targetAbsolute, targetContentScale)),
-          incoming: incomingSizeAtSiblingScale(incomingBounds, roots, siblingWorldScale, targetContentScale),
+          incoming: incomingSizeInContentSpace(incomingBounds, targetContentScale),
           origin: toContentSpace(incomingBounds, targetAbsolute, targetContentScale),
           interiorScale: targetInteriorScale,
           // The legibility floor binds on the SMALLEST child, so a frame that
@@ -362,21 +384,14 @@ function toContentSpace(rect: Rect, containerAbsolute: Point, contentScale: numb
  * The newcomer adopts its new siblings' scale rather than keeping its own, so
  * the size compression has to make room for is the size it will actually be.
  */
-function incomingSizeAtSiblingScale(
+function incomingSizeInContentSpace(
   incomingBounds: Rect,
-  roots: readonly Node[],
-  siblingWorldScale: number | null,
   contentScale: number,
 ): { width: number; height: number } {
   const scale = Math.max(0.0001, contentScale)
-  if (siblingWorldScale === null || roots.length === 0) {
-    return { width: incomingBounds.width / scale, height: incomingBounds.height / scale }
-  }
-  const ownWorldScale = positiveFinite((roots[0].data as Record<string, unknown>).worldScale)
-  const resized = siblingWorldScale / ownWorldScale
   return {
-    width: (incomingBounds.width * resized) / scale,
-    height: (incomingBounds.height * resized) / scale,
+    width: incomingBounds.width / scale,
+    height: incomingBounds.height / scale,
   }
 }
 
@@ -580,7 +595,10 @@ export function planCanvasDrop({
   // reparent itself is visually a no-op and every correction after it animates.
   const arrivalById = new Map<string, { x: number; y: number; scale: number }>()
   for (const root of writtenRoots) {
-    const rect = frame.placementRects.find(candidate => candidate.id === root.id)!
+    // Arrival is the pointer-up frame at the node's original size. The frame's
+    // placement rect is intentionally the later parity-adjusted size used for
+    // collision planning, so reconstruct the unadjusted rectangle here.
+    const rect = nodeWorldRect(root, absolutePositions.get(root.id) ?? root.position)
     const ownWorldScale = positiveFinite((root.data as Record<string, unknown>).worldScale)
     arrivalById.set(root.id, frame.target
       ? {

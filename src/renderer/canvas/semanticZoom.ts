@@ -132,6 +132,23 @@ export function applyZoomVisibility(nodes: Node[], zoom: number): Node[] {
 }
 
 export function makeFullyVisible(node: Node): Node {
+  const style = node.style ?? {}
+  const data = node.data as Record<string, unknown>
+  // Review deliberately keeps every node visible. Returning a fresh object for
+  // an already-visible node defeated React Flow's per-node identity boundary,
+  // so unrelated proposal responses could restamp the node component during a
+  // resize even though none of its visible state changed.
+  if (node.hidden === false &&
+      node.draggable === true &&
+      node.selectable === true &&
+      (node.className ?? '') === '' &&
+      style.opacity === 1 &&
+      style.pointerEvents === 'all' &&
+      data.selfScale === 1 &&
+      data.selfBlur === 0 &&
+      data.childrenVisible === 1) {
+    return node
+  }
   return {
     ...node,
     hidden: false,

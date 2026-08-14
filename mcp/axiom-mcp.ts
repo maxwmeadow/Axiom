@@ -33,6 +33,11 @@ function generateUUID(): string {
 // Stable for this MCP process: starting another task supersedes only this
 // client's forgotten session, never another agent working in parallel.
 const workOwnerKey = generateUUID()
+const connectionId = generateUUID()
+const hostArgument = process.argv.find(argument => argument.startsWith('--axiom-host='))
+const agentHostId = (
+  process.env.AXIOM_AGENT_HOST ?? hostArgument?.slice('--axiom-host='.length) ?? 'unknown'
+).trim() || 'unknown'
 interface ActiveWorkSession extends WorktreeContext {
   id: string
 }
@@ -114,6 +119,7 @@ async function postAgentAction(
       body: JSON.stringify({
         workspaceId,
         cwd: process.cwd(),
+        agent: agentHostId,
         rootId: session?.rootId,
         branch: session?.branch,
         sessionId: session?.id,
@@ -2152,8 +2158,7 @@ Steps to execute:
 
 // ─── Start ─────────────────────────────────────────────────────────────────
 
-// Announce this agent's presence for whichever project Axiom currently has
-// open, and keep doing so if that changes.
+// Renew this MCP process's presence lease for whichever project Axiom has open.
 //
 // A single announcement at startup only covers one ordering: agent first, then
 // project. Start Claude Code before opening the project in Axiom -- which is
@@ -2161,45 +2166,65 @@ Steps to execute:
 // announced itself against no project at all, then never spoke again. Axiom sat
 // on "waiting for an agent" beside a client that plainly said connected.
 //
-// So presence is re-checked rather than declared once. The active project is
-// read fresh each time, and an announcement is made whenever it changes, which
-// includes the case of it appearing for the first time. Unchanged projects are
-// not re-announced, so the action log does not fill with heartbeats.
+// Presence itself is a short lease, not an action-log inference. Heartbeats do
+// not fill history, and they recover automatically after an Axiom/archd restart
+// or workspace database reset while this same agent process stays alive.
 let announcedWorkspace: string | null = null
 
-async function announcePresence() {
+async function renewPresence() {
   let workspaceId: string
   try {
     workspaceId = getActiveProject().workspaceId
   } catch {
     return // No project open yet. Try again on the next tick.
   }
-  if (!workspaceId || workspaceId === announcedWorkspace) return
+  if (!workspaceId) return
   try {
-    await fetch(`${API_BASE}/api/agent/action`, {
+    const heartbeat = await fetch(`${API_BASE}/api/agent/presence`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         workspaceId,
-        cwd: process.cwd(),
-        tool: 'connect',
-        kind: 'session',
-        summary: 'Agent connected to Axiom',
-        targets: [],
-        durationMs: 0,
-        status: 'ok',
+        connectionId,
+        hostId: agentHostId,
       }),
     })
-    await postAgentActivity(workspaceId, 'Agent MCP server connected', 'success')
-    announcedWorkspace = workspaceId
+    if (!heartbeat.ok) return
+
+    const lease = await heartbeat.json() as { newLease?: boolean }
+
+    // Keep one durable event per workspace/process visit so Axiom can also say
+    // which harness connected before after the live lease expires. A new lease
+    // also means archd restarted or forgot its in-memory presence state, so
+    // restore that durable record without writing on every heartbeat.
+    if (workspaceId !== announcedWorkspace || lease.newLease) {
+      const announcement = await fetch(`${API_BASE}/api/agent/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          cwd: process.cwd(),
+          agent: agentHostId,
+          tool: 'connect',
+          kind: 'session',
+          summary: 'Agent connected to Axiom',
+          targets: [],
+          durationMs: 0,
+          status: 'ok',
+        }),
+      })
+      if (!announcement.ok) return
+      await postAgentActivity(workspaceId, 'Agent MCP server connected', 'success')
+      announcedWorkspace = workspaceId
+    }
   } catch {
     // archd may not be up yet; the next tick retries.
   }
 }
 
 async function main() {
-  void announcePresence()
-  const presence = setInterval(() => { void announcePresence() }, 5_000)
+  void renewPresence()
+  const presence = setInterval(() => { void renewPresence() }, 5_000)
   presence.unref?.()
   const transport = new StdioServerTransport()
   await server.connect(transport)

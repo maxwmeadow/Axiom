@@ -46,7 +46,7 @@ func collectSourcePaths(root db.Root, ignoredPaths []string) ([]string, error) {
 			}
 			return nil
 		}
-		if supportedExts[strings.ToLower(filepath.Ext(path))] {
+		if IsSupportedSourceFile(path) {
 			paths = append(paths, path)
 		}
 		return nil

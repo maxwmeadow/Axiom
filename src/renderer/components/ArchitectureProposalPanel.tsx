@@ -6,8 +6,9 @@ import {
   blockedReason,
   buildProposalTree,
   describeProgress,
+  flattenVisibleProposalTree,
+  proposalSubtreeFileCount,
   readProgress,
-  type ProposalNode,
 } from '../canvas/architectureProposal.ts'
 import { raiseInvitation, resolveInterruption } from '../store/interruptionStore.ts'
 
@@ -29,15 +30,16 @@ import { raiseInvitation, resolveInterruption } from '../store/interruptionStore
 
 const INVITATION = 'architecture-proposal'
 
-export function ArchitectureProposalPanel() {
+export function ArchitectureProposalPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const workspaceId = useGraphStore(state => state.currentProject?.id ?? '')
   const {
-    proposal, reviewing, cursor, refusals, deciding, error,
-    load, decide, beginReview, endReview, setCursor,
+    proposal, reviewing, cursor, selectedSystemKey, refusals, deciding, error,
+    load, decide, beginReview, endReview, setCursor, selectSystem,
   } = useProposalStore(useShallow(state => ({
     proposal: state.proposal,
     reviewing: state.reviewing,
     cursor: state.cursor,
+    selectedSystemKey: state.selectedSystemKey,
     refusals: state.refusals,
     deciding: state.deciding,
     error: state.error,
@@ -46,13 +48,20 @@ export function ArchitectureProposalPanel() {
     beginReview: state.beginReview,
     endReview: state.endReview,
     setCursor: state.setCursor,
+    selectSystem: state.selectSystem,
   })))
 
   const [rejecting, setRejecting] = useState<string | null>(null)
   const [reason, setReason] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const listRef = useRef<HTMLOListElement>(null)
 
-  useEffect(() => { void load(workspaceId) }, [workspaceId, load])
+  // The dedicated review screen owns its initial load so it can draw the
+  // proposal canvas and this list from one response. The floating workbench
+  // panel still owns its own lifecycle.
+  useEffect(() => {
+    if (!embedded) void load(workspaceId)
+  }, [workspaceId, load, embedded])
 
   const systems = proposal?.systems ?? []
   const bySystemKey = useMemo(
@@ -64,19 +73,23 @@ export function ArchitectureProposalPanel() {
 
   // Flattened in display order so j/k walks what the eye walks, rather than
   // the order the daemon happened to return.
-  const ordered = useMemo(() => {
-    const out: Array<{ node: ProposalNode; depth: number }> = []
-    const walk = (nodes: ProposalNode[], depth: number) => {
-      for (const node of nodes) {
-        out.push({ node, depth })
-        walk(node.children, depth + 1)
-      }
-    }
-    walk(tree, 0)
-    return out
-  }, [tree])
+  const ordered = useMemo(
+    () => flattenVisibleProposalTree(tree, collapsed),
+    [tree, collapsed],
+  )
 
-  const active = Math.min(cursor, Math.max(ordered.length - 1, 0))
+  const selectedIndex = selectedSystemKey
+    ? ordered.findIndex(({ node }) => node.systemKey === selectedSystemKey)
+    : -1
+  const active = selectedIndex >= 0
+    ? selectedIndex
+    : Math.min(cursor, Math.max(ordered.length - 1, 0))
+
+  const focusIndex = useCallback((index: number) => {
+    const bounded = Math.max(0, Math.min(index, ordered.length - 1))
+    setCursor(bounded)
+    selectSystem(ordered[bounded]?.node.systemKey ?? null)
+  }, [ordered, setCursor, selectSystem])
 
   const approve = useCallback((systemKey: string) => {
     void decide(systemKey, 'approved')
@@ -89,9 +102,11 @@ export function ArchitectureProposalPanel() {
     setReason('')
   }, [decide, reason])
 
+  const reviewOpen = embedded || reviewing
+
   // Keyboard triage, matching the Morning Delta so there is one way to review.
   useEffect(() => {
-    if (!reviewing) return
+    if (!reviewOpen) return
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
@@ -101,10 +116,10 @@ export function ArchitectureProposalPanel() {
       const current = ordered[active]?.node
       if (event.key === 'j' || event.key === 'ArrowDown') {
         event.preventDefault()
-        setCursor(Math.min(active + 1, ordered.length - 1))
+        focusIndex(active + 1)
       } else if (event.key === 'k' || event.key === 'ArrowUp') {
         event.preventDefault()
-        setCursor(Math.max(active - 1, 0))
+        focusIndex(active - 1)
       } else if (event.key === 'Enter' && current) {
         event.preventDefault()
         approve(current.systemKey)
@@ -112,24 +127,43 @@ export function ArchitectureProposalPanel() {
         event.preventDefault()
         setRejecting(current.systemKey)
         setReason('')
-      } else if (event.key === 'Escape') {
+      } else if (event.key === 'Escape' && !embedded) {
         endReview()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [reviewing, active, ordered, setCursor, endReview, approve])
+  }, [reviewOpen, active, ordered, focusIndex, endReview, approve, embedded])
+
+  // Selecting a deeply nested box on the canvas opens its ancestor path in
+  // the rail, so the two review surfaces cannot disagree about what is active.
+  useEffect(() => {
+    if (!selectedSystemKey) return
+    const parents = new Map(systems.map(system => [
+      system.systemKey,
+      system.parentRefType === 'proposed_system' ? system.parentRefId ?? null : null,
+    ]))
+    setCollapsed(current => {
+      const next = new Set(current)
+      let parent = parents.get(selectedSystemKey) ?? null
+      while (parent) {
+        next.delete(parent)
+        parent = parents.get(parent) ?? null
+      }
+      return next.size === current.size && [...next].every(key => current.has(key)) ? current : next
+    })
+  }, [selectedSystemKey, systems])
 
   useEffect(() => {
-    if (!reviewing) return
+    if (!reviewOpen) return
     const node = listRef.current?.children[active] as HTMLElement | undefined
     node?.scrollIntoView({ block: 'nearest' })
-  }, [reviewing, active])
+  }, [reviewOpen, active])
 
   // The offer to review is a tenant of the interruption lane, like every other
   // thing that wants attention. It never opens itself: an agent finishing a
   // proposal while you are mid-thought must not seize the screen.
-  const waiting = Boolean(proposal) && !reviewing && progress.pending > 0
+  const waiting = !embedded && Boolean(proposal) && !reviewing && progress.pending > 0
   useEffect(() => {
     if (!waiting || !proposal) {
       resolveInterruption(INVITATION)
@@ -143,16 +177,19 @@ export function ArchitectureProposalPanel() {
     )
   }, [waiting, proposal, progress.pending, beginReview])
 
-  if (!reviewing || !proposal) return null
+  if (!reviewOpen || !proposal) return null
 
   return (
-    <aside className="axiom-proposal axiom-proposal--panel" aria-label="Proposed architecture">
+    <aside
+      className={`axiom-proposal ${embedded ? 'axiom-proposal--embedded' : 'axiom-proposal--panel'}`}
+      aria-label="Proposed architecture"
+    >
       <header className="axiom-proposal__header">
         <span className="axiom-proposal__mode">Proposed architecture</span>
         <span className="axiom-proposal__progress">{describeProgress(progress)}</span>
-        <button type="button" className="axiom-proposal__close" onClick={endReview} aria-label="Close review">
+        {!embedded && <button type="button" className="axiom-proposal__close" onClick={endReview} aria-label="Close review">
           ×
-        </button>
+        </button>}
       </header>
 
       {proposal.rationale && (
@@ -165,6 +202,8 @@ export function ArchitectureProposalPanel() {
           const blocked = blockedReason(node, bySystemKey)
           const refusal = refusals[node.systemKey]
           const busy = deciding.includes(node.systemKey)
+          const isActive = index === active
+          const branchFiles = proposalSubtreeFileCount(node)
           return (
             <li
               key={node.systemKey}
@@ -172,25 +211,44 @@ export function ArchitectureProposalPanel() {
               data-active={index === active || undefined}
               data-decision={node.decision}
               style={{ paddingLeft: `${12 + depth * 16}px` }}
-              onClick={() => setCursor(index)}
+              onClick={() => focusIndex(index)}
             >
               <div className="axiom-proposal__row">
+                {node.children.length > 0 ? (
+                  <button
+                    type="button"
+                    className="axiom-proposal__toggle"
+                    aria-label={`${collapsed.has(node.systemKey) ? 'Expand' : 'Collapse'} ${node.name}`}
+                    aria-expanded={!collapsed.has(node.systemKey)}
+                    onClick={event => {
+                      event.stopPropagation()
+                      setCollapsed(current => {
+                        const next = new Set(current)
+                        if (next.has(node.systemKey)) next.delete(node.systemKey)
+                        else next.add(node.systemKey)
+                        return next
+                      })
+                    }}
+                  >
+                    {collapsed.has(node.systemKey) ? '>' : 'v'}
+                  </button>
+                ) : <span className="axiom-proposal__toggle-spacer" />}
                 <span className="axiom-proposal__name">{node.name}</span>
                 <span className="axiom-proposal__count">
-                  {node.fileCount} {node.fileCount === 1 ? 'file' : 'files'}
+                  {branchFiles} {branchFiles === 1 ? 'file' : 'files'}{node.children.length > 0 ? ' in branch' : ''}
                 </span>
               </div>
 
-              {node.description && (
+              {isActive && node.description && (
                 <p className="axiom-proposal__purpose">{node.description}</p>
               )}
 
-              {node.decision === 'rejected' && node.rejectionReason && (
+              {isActive && node.decision === 'rejected' && node.rejectionReason && (
                 <p className="axiom-proposal__sentback">Sent back: {node.rejectionReason}</p>
               )}
 
-              {node.decision === 'pending' && rejecting === node.systemKey && (
-                <div className="axiom-proposal__reject">
+              {isActive && node.decision === 'pending' && rejecting === node.systemKey && (
+                <div className="axiom-proposal__reject" onClick={event => event.stopPropagation()}>
                   <textarea
                     autoFocus
                     value={reason}
@@ -206,8 +264,8 @@ export function ArchitectureProposalPanel() {
                 </div>
               )}
 
-              {node.decision === 'pending' && rejecting !== node.systemKey && (
-                <div className="axiom-proposal__actions">
+              {isActive && node.decision === 'pending' && rejecting !== node.systemKey && (
+                <div className="axiom-proposal__actions" onClick={event => event.stopPropagation()}>
                   <button
                     type="button"
                     className="axiom-proposal__approve"
@@ -228,7 +286,7 @@ export function ArchitectureProposalPanel() {
 
               {/* A refusal is a sentence next to the control, never a disabled
                   button that explains nothing. */}
-              {(refusal || blocked) && node.decision === 'pending' && (
+              {isActive && (refusal || blocked) && node.decision === 'pending' && (
                 <p className="axiom-proposal__refusal">{refusal || blocked}</p>
               )}
             </li>
@@ -237,7 +295,9 @@ export function ArchitectureProposalPanel() {
       </ol>
 
       <footer className="axiom-proposal__footer">
-        <span>J K move · Enter approve · R send back · Esc leave</span>
+        <span>{embedded
+          ? 'W A S D pan · J K review · Enter approve · R send back'
+          : 'J K move · Enter approve · R send back · Esc leave'}</span>
       </footer>
     </aside>
   )

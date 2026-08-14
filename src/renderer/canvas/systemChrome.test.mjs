@@ -4,6 +4,7 @@ import {
   MONO_ADVANCE_EM,
   chipStrokeWidth,
   TITLE_LINE_HEIGHT,
+  monoFontFittingWidth,
   monoTextWidth,
   systemTabChrome,
 } from './systemChrome.ts'
@@ -140,6 +141,29 @@ test('a name is only ever truncated when the shell genuinely cannot hold it', ()
 test('mono advance and line height are the two constants everything depends on', () => {
   assert.ok(MONO_ADVANCE_EM > 0.5 && MONO_ADVANCE_EM < 0.7)
   assert.equal(monoTextWidth('abc', 10), 3 * 10 * MONO_ADVANCE_EM)
+})
+
+test('covered titles shrink to show the complete name instead of ellipsizing', () => {
+  const names = [
+    'Signal Preparation',
+    'Longitudinal Tracking and Trend Persistence',
+    'Frontal Asymmetry Measurement and Scoring',
+  ]
+  for (const available of [72, 120, 180, 320]) {
+    for (const name of names) {
+      const font = monoFontFittingWidth(name, available, 48)
+      assert.ok(font > 0, `${name} lost its covered-title font at ${available}px`)
+      assert.ok(
+        monoTextWidth(name, font) <= available * 0.96 + 1e-9,
+        `${name} does not fit its covered title at ${available}px`,
+      )
+    }
+  }
+})
+
+test('covered title autofit preserves the intended size when the name already fits', () => {
+  assert.equal(monoFontFittingWidth('Validation', 400, 36), 36)
+  assert.equal(monoFontFittingWidth('', 0, 36), 36)
 })
 
 test('tab height is independent of the frame width', () => {

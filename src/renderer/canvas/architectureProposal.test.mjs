@@ -5,6 +5,8 @@ import {
   buildProposalTree,
   checkDecision,
   describeProgress,
+  flattenVisibleProposalTree,
+  proposalSubtreeFileCount,
   readProgress,
 } from './architectureProposal.ts'
 
@@ -33,6 +35,19 @@ test('a flat response becomes a tree', () => {
   assert.equal(roots[0].children.length, 2)
   const nodes = roots[0].children.find(c => c.systemKey === 'nodes')
   assert.equal(nodes.children[0].name, 'Node Shell')
+})
+
+test('review tree counts descendant files and hides only folded descendants', () => {
+  const roots = buildProposalTree([
+    system('root', { fileCount: 0 }),
+    system('child', { parentRefType: 'proposed_system', parentRefId: 'root', depth: 1, fileCount: 2 }),
+    system('leaf', { parentRefType: 'proposed_system', parentRefId: 'child', depth: 2, fileCount: 3 }),
+  ])
+  assert.equal(proposalSubtreeFileCount(roots[0]), 5)
+  assert.deepEqual(
+    flattenVisibleProposalTree(roots, new Set(['child'])).map(({ node, depth }) => [node.systemKey, depth]),
+    [['root', 0], ['child', 1]],
+  )
 })
 
 test('a candidate whose parent is missing is shown at the top, never dropped', () => {

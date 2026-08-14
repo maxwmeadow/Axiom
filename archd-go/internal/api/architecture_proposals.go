@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"axiom.local/archd/internal/db"
 )
@@ -30,6 +31,19 @@ type decideArchitectureProposalSystemRequest struct {
 	DecidedBy       string `json:"decidedBy"`
 }
 
+type saveArchitectureProposalLayoutsRequest struct {
+	WorkspaceID string                          `json:"workspaceId"`
+	Revision    int                             `json:"revision"`
+	Layouts     []db.ArchitectureProposalLayout `json:"layouts"`
+}
+
+type finalizeArchitectureProposalRequest struct {
+	WorkspaceID            string `json:"workspaceId"`
+	Revision               int    `json:"revision"`
+	DecidedBy              string `json:"decidedBy"`
+	EstablishDeltaBaseline bool   `json:"establishDeltaBaseline"`
+}
+
 func (s *Server) registerArchitectureProposalRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/architecture-proposals", s.handleArchitectureProposals)
 	mux.HandleFunc("/api/architecture-proposals/", s.handleArchitectureProposalByID)
@@ -43,7 +57,7 @@ func proposalErrorStatus(err error) int {
 	if strings.Contains(message, "stale proposal revision") || strings.Contains(message, "already ") || strings.Contains(message, "must be approved first") || strings.Contains(message, "UNIQUE constraint") {
 		return http.StatusConflict
 	}
-	if strings.Contains(message, "required") || strings.Contains(message, "invalid") || strings.Contains(message, "does not exist") || strings.Contains(message, "does not belong") || strings.Contains(message, "unique file path") || strings.Contains(message, "proposal depth") {
+	if strings.Contains(message, "required") || strings.Contains(message, "invalid") || strings.Contains(message, "does not exist") || strings.Contains(message, "does not belong") || strings.Contains(message, "unique file path") || strings.Contains(message, "proposal depth") || strings.Contains(message, "parent must") || strings.Contains(message, "not editable") || strings.Contains(message, "hierarchy cycle") {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
@@ -130,6 +144,88 @@ func (s *Server) handleArchitectureProposalByID(w http.ResponseWriter, r *http.R
 		}
 		s.hub.Broadcast("architecture:proposal", map[string]any{"workspaceId": request.WorkspaceID, "proposalId": proposalID})
 		jsonOK(w, proposal)
+		return
+	}
+	if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "layouts" {
+		var request saveArchitectureProposalLayoutsRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			jsonError(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		sqlDB, err := s.dbFor(request.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		proposal, err := db.ApplyArchitectureProposalLayouts(sqlDB, proposalID, request.WorkspaceID, request.Revision, request.Layouts)
+		if err != nil {
+			jsonError(w, err.Error(), proposalErrorStatus(err))
+			return
+		}
+		s.hub.Broadcast("architecture:proposal", map[string]any{"workspaceId": request.WorkspaceID, "proposalId": proposalID, "layout": true})
+		jsonOK(w, proposal)
+		return
+	}
+	if r.Method == http.MethodPost && len(parts) == 2 && parts[1] == "finalize" {
+		var request finalizeArchitectureProposalRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			jsonError(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		sqlDB, err := s.dbFor(request.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		proposal, err := db.FinalizeArchitectureProposal(sqlDB, proposalID, request.WorkspaceID, request.Revision, request.DecidedBy)
+		if err != nil {
+			jsonError(w, err.Error(), proposalErrorStatus(err))
+			return
+		}
+		snapshot, err := db.GetCanvasSnapshot(sqlDB, request.WorkspaceID)
+		if err != nil {
+			jsonError(w, err.Error(), proposalErrorStatus(err))
+			return
+		}
+		var deltaBaselineAt int64
+		var deltaRootID string
+		if request.EstablishDeltaBaseline {
+			rootID := ""
+			if proposal.RootID != nil {
+				rootID = *proposal.RootID
+			}
+			root, rootErr := resolveWorkspaceRoot(sqlDB, request.WorkspaceID, rootID, "")
+			if rootErr != nil {
+				jsonError(w, rootErr.Error(), http.StatusNotFound)
+				return
+			}
+			deltaBaselineAt = time.Now().UnixMilli()
+			deltaRootID = root.ID
+			if _, snapshotErr := s.saveDeltaSnapshotForRoot(sqlDB, root, deltaBaselineAt); snapshotErr != nil {
+				jsonError(w, snapshotErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			if watermarkErr := db.SetDeltaReviewedAtForRoot(
+				sqlDB, request.WorkspaceID, root.ID, deltaBaselineAt,
+			); watermarkErr != nil {
+				jsonError(w, watermarkErr.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		s.hub.Broadcast("architecture:proposal", map[string]any{"workspaceId": request.WorkspaceID, "proposalId": proposalID, "finalized": true})
+		s.hub.BroadcastSnapshot(snapshot)
+		if deltaBaselineAt > 0 {
+			s.hub.Broadcast("delta:ready", map[string]any{
+				"workspaceId": request.WorkspaceID,
+				"rootId":      deltaRootID,
+				"baselineAt":  deltaBaselineAt,
+			})
+		}
+		jsonOK(w, map[string]any{
+			"proposal":        proposal,
+			"snapshot":        snapshot,
+			"deltaBaselineAt": deltaBaselineAt,
+		})
 		return
 	}
 	if r.Method == http.MethodPost && len(parts) == 4 && parts[1] == "systems" && parts[3] == "decision" {

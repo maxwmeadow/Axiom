@@ -57,6 +57,7 @@ test('makeFullyVisible overrides temporary semantic-zoom hiding', () => {
   assert.equal(visible.data.selfScale, 1)
   assert.equal(visible.data.selfBlur, 0)
   assert.equal(visible.data.childrenVisible, 1)
+  assert.equal(makeFullyVisible(visible), visible)
 })
 
 test('a zoom change that alters nothing reuses the exact same node objects', () => {

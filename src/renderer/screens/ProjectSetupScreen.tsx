@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ProjectConfig } from '../../shared/types'
 import { completeSourceBoundaries } from '../../shared/projectLifecycle'
+import { classifyProjectFile, type ProjectFileKind } from '../../shared/fileKinds'
 import { WorkbenchTitleBar } from '../components/ui/WorkbenchTitleBar'
 
 interface DirEntry {
@@ -13,6 +14,7 @@ interface TreeNode {
   name: string
   path: string
   isDirectory: boolean
+  kind: ProjectFileKind
   children?: TreeNode[]
   excluded: boolean
   expanded: boolean
@@ -34,13 +36,25 @@ function shouldAutoExclude(name: string): boolean {
 }
 
 function makeTreeNode(entry: DirEntry): TreeNode {
+  const kind = classifyProjectFile(entry.name, entry.isDirectory)
   return {
     name: entry.name,
     path: entry.path,
     isDirectory: entry.isDirectory,
-    excluded: shouldAutoExclude(entry.name),
+    kind,
+    excluded: shouldAutoExclude(entry.name) || kind === 'unsupported',
     expanded: false,
   }
+}
+
+function foldersFirst(entries: DirEntry[]): DirEntry[] {
+  return [...entries].sort((left, right) => {
+    if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1
+    const leftExcluded = shouldAutoExclude(left.name)
+    const rightExcluded = shouldAutoExclude(right.name)
+    if (leftExcluded !== rightExcluded) return leftExcluded ? 1 : -1
+    return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+  })
 }
 
 interface ProjectSetupScreenProps {
@@ -62,20 +76,12 @@ export function ProjectSetupScreen({ baseConfig, onConfirm, onCancel }: ProjectS
 
     if (!window.axiom) {
       setLoading(false)
-      return () => {
-        active = false
-      }
+      return () => { active = false }
     }
 
     void window.axiom.listDir(rootPath)
       .then(entries => {
-        if (!active) return
-        setTree(
-          entries
-            .filter(entry => entry.isDirectory)
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map(makeTreeNode)
-        )
+        if (active) setTree(foldersFirst(entries).map(makeTreeNode))
       })
       .catch(() => {
         if (active) setLoadError('Axiom could not read this project directory.')
@@ -84,9 +90,7 @@ export function ProjectSetupScreen({ baseConfig, onConfirm, onCancel }: ProjectS
         if (active) setLoading(false)
       })
 
-    return () => {
-      active = false
-    }
+    return () => { active = false }
   }, [rootPath])
 
   const toggleExclude = useCallback((nodePath: string) => {
@@ -95,16 +99,12 @@ export function ProjectSetupScreen({ baseConfig, onConfirm, onCancel }: ProjectS
 
   const toggleExpand = useCallback(async (nodePath: string) => {
     const node = findNode(tree, nodePath)
-    if (!node) return
+    if (!node?.isDirectory) return
 
-    if (node.isDirectory && !node.children && window.axiom) {
+    if (!node.children && window.axiom) {
       try {
         const entries = await window.axiom.listDir(nodePath)
-        const children = entries
-          .filter(entry => entry.isDirectory)
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map(makeTreeNode)
-        setTree(previous => setChildren(previous, nodePath, children))
+        setTree(previous => setChildren(previous, nodePath, foldersFirst(entries).map(makeTreeNode)))
       } catch {
         setLoadError(`Axiom could not read ${node.name}.`)
         return
@@ -115,7 +115,7 @@ export function ProjectSetupScreen({ baseConfig, onConfirm, onCancel }: ProjectS
   }, [tree])
 
   const excludedPaths = useMemo(() => collectExcluded(tree), [tree])
-  const includedCount = useMemo(() => countIncluded(tree), [tree])
+  const included = useMemo(() => countIncludedKinds(tree), [tree])
 
   const handleConfirm = () => {
     onConfirm({
@@ -128,101 +128,84 @@ export function ProjectSetupScreen({ baseConfig, onConfirm, onCancel }: ProjectS
     <main className="axiom-onboarding axiom-project-setup">
       <WorkbenchTitleBar context="Project Setup" status="PRE-INDEX" />
 
-      <div className="axiom-onboarding__board">
-        <header className="axiom-onboarding__heading">
-          <button className="axiom-onboarding__back" onClick={onCancel} aria-label="Back to project navigator">
+      <div className="axiom-source-setup">
+        <header className="axiom-source-setup__header">
+          <button className="axiom-source-setup__back" onClick={onCancel} aria-label="Back to projects">
             <span aria-hidden="true">←</span>
-            Project Navigator
+            Projects
           </button>
-          <div className="axiom-onboarding__step">STEP 01 / INDEX SCOPE</div>
-          <h1>Choose source boundaries</h1>
-          <p>
-            Select the directories that belong in the architectural model. Generated output and common dependency
-            folders are excluded automatically.
-          </p>
-          <code className="axiom-onboarding__path" title={rootPath}>{rootPath}</code>
+          <div className="axiom-source-setup__intro">
+            <div>
+              <p className="axiom-source-setup__eyebrow">Choose what Axiom reads</p>
+              <h1>Set up {projectName}</h1>
+              <p className="axiom-source-setup__description">
+                Source files are included by default. Common generated and dependency folders are skipped automatically;
+                documentation stays searchable outside the canvas, and unsupported assets are never indexed.
+              </p>
+            </div>
+            <code className="axiom-source-setup__path" title={rootPath}>{rootPath}</code>
+          </div>
         </header>
 
-        <div className="axiom-setup__workspace">
-          <section className="axiom-setup__tree-panel" aria-labelledby="directory-tree-title">
-            <header>
-              <div>
-                <span>PROJECT DIRECTORY</span>
-                <h2 id="directory-tree-title">{projectName}</h2>
-              </div>
-              <small>CHECKED DIRECTORIES WILL BE INDEXED</small>
-            </header>
+        <section className="axiom-source-browser" aria-labelledby="source-browser-title">
+          <header className="axiom-source-browser__header">
+            <div>
+              <p>Project contents</p>
+              <h2 id="source-browser-title">Files and folders</h2>
+            </div>
+            <div className="axiom-source-browser__legend" aria-label="Selection key">
+              <span><i className="axiom-source-browser__legend-check" aria-hidden="true" /> Source → canvas</span>
+              <span>Documents → library</span>
+              <span>Unsupported → skipped</span>
+            </div>
+          </header>
 
-            {loadError && (
-              <div className="axiom-setup__notice axiom-setup__notice--error" role="alert">
-                {loadError}
+          {loadError && <div className="axiom-source-setup__notice" role="alert">{loadError}</div>}
+
+          <div className="axiom-setup-tree axiom-source-browser__tree" role="tree" aria-label="Project files and folders">
+            {loading ? (
+              <div className="axiom-setup-tree__state" role="status">
+                <span className="axiom-setup-tree__busy" aria-hidden="true" />
+                Reading project contents…
               </div>
+            ) : tree.length === 0 ? (
+              <div className="axiom-setup-tree__state">This project is empty.</div>
+            ) : (
+              tree.map(node => (
+                <TreeRow
+                  key={node.path}
+                  node={node}
+                  depth={0}
+                  onToggleExclude={toggleExclude}
+                  onToggleExpand={toggleExpand}
+                />
+              ))
             )}
+          </div>
 
-            <div className="axiom-setup-tree" role="tree" aria-label="Project directories">
-              {loading ? (
-                <div className="axiom-setup-tree__state" role="status">
-                  <span className="axiom-setup-tree__busy" aria-hidden="true" />
-                  Reading directory structure…
-                </div>
-              ) : tree.length === 0 ? (
-                <div className="axiom-setup-tree__state">No subdirectories were found.</div>
-              ) : (
-                tree.map(node => (
-                  <TreeRow
-                    key={node.path}
-                    node={node}
-                    depth={0}
-                    onToggleExclude={toggleExclude}
-                    onToggleExpand={toggleExpand}
-                  />
-                ))
-              )}
+          <footer className="axiom-source-browser__footer">
+            <div className="axiom-source-browser__summary" aria-live="polite">
+              <strong>
+                {included.files} source {included.files === 1 ? 'file' : 'files'} and {included.documents} {included.documents === 1 ? 'document' : 'documents'} selected
+              </strong>
+              <span>
+                {excludedPaths.length === 0 ? 'Nothing excluded' : `${excludedPaths.length} ${excludedPaths.length === 1 ? 'item' : 'items'} excluded`}
+                {included.unsupported > 0 ? ` · ${included.unsupported} unsupported skipped` : ''}
+              </span>
             </div>
-          </section>
-
-          <aside className="axiom-setup__summary" aria-label="Index summary">
-            <div className="axiom-setup__summary-heading">
-              <span>INDEX PLAN</span>
-              <strong>{loading ? 'SCANNING' : 'READY'}</strong>
-            </div>
-
-            <dl className="axiom-setup__metrics">
-              <SummaryRow label="Project" value={projectName} />
-              <SummaryRow label="Included directories" value={String(includedCount)} />
-              <SummaryRow label="Excluded directories" value={String(excludedPaths.length)} />
-            </dl>
-
-            {excludedPaths.length > 0 && (
-              <div className="axiom-setup__excluded">
-                <h3>EXCLUDED PATHS</h3>
-                <ul>
-                  {excludedPaths.slice(0, 12).map(path => (
-                    <li key={path} title={path}>{relativeIgnoredPath(path, rootPath)}</li>
-                  ))}
-                </ul>
-                {excludedPaths.length > 12 && <small>+{excludedPaths.length - 12} additional paths</small>}
-              </div>
-            )}
-
-            <div className="axiom-setup__summary-note">
-              <span aria-hidden="true">i</span>
-              <p>You can change ignore rules later by reopening project setup.</p>
-            </div>
-
             <button
-              className="axiom-onboarding__primary"
+              className="axiom-source-setup__submit"
               onClick={handleConfirm}
               disabled={loading || Boolean(loadError && tree.length === 0)}
             >
               <span>
-                <strong>Start Indexing</strong>
-                <small>Build the live architecture baseline</small>
+                <strong>Index this project</strong>
+                <small>You can change this later</small>
               </span>
               <span aria-hidden="true">→</span>
             </button>
-          </aside>
-        </div>
+          </footer>
+        </section>
       </div>
     </main>
   )
@@ -237,6 +220,13 @@ interface TreeRowProps {
 
 function TreeRow({ node, depth, onToggleExclude, onToggleExpand }: TreeRowProps) {
   const depthClass = `axiom-setup-tree__row--depth-${Math.min(depth, 8)}`
+  const kindLabel = node.kind === 'source'
+    ? 'Source'
+    : node.kind === 'document'
+      ? 'Document'
+      : node.kind === 'unsupported'
+        ? 'Unsupported'
+        : 'Folder'
 
   return (
     <div
@@ -244,16 +234,20 @@ function TreeRow({ node, depth, onToggleExclude, onToggleExpand }: TreeRowProps)
       role="treeitem"
       aria-level={depth + 1}
       aria-expanded={node.isDirectory ? node.expanded : undefined}
+      data-kind={node.kind}
     >
       <div className={`axiom-setup-tree__row ${depthClass}${node.excluded ? ' axiom-setup-tree__row--excluded' : ''}`}>
-        <button
-          className="axiom-setup-tree__expand"
-          onClick={() => void onToggleExpand(node.path)}
-          aria-label={`${node.expanded ? 'Collapse' : 'Expand'} ${node.name}`}
-          disabled={!node.isDirectory}
-        >
-          <span aria-hidden="true">›</span>
-        </button>
+        {node.isDirectory ? (
+          <button
+            className="axiom-setup-tree__expand"
+            onClick={() => void onToggleExpand(node.path)}
+            aria-label={`${node.expanded ? 'Collapse' : 'Expand'} ${node.name}`}
+          >
+            <span aria-hidden="true">›</span>
+          </button>
+        ) : (
+          <span className="axiom-setup-tree__expand-spacer" aria-hidden="true" />
+        )}
 
         <label className="axiom-setup-tree__check">
           <input
@@ -261,13 +255,22 @@ function TreeRow({ node, depth, onToggleExclude, onToggleExpand }: TreeRowProps)
             checked={!node.excluded}
             onChange={() => onToggleExclude(node.path)}
             aria-label={`Include ${node.name}`}
+            disabled={node.kind === 'unsupported'}
           />
           <span aria-hidden="true" />
         </label>
 
-        <span className={node.expanded ? 'axiom-setup-tree__folder axiom-setup-tree__folder--open' : 'axiom-setup-tree__folder'} aria-hidden="true" />
+        <span
+          className={node.isDirectory
+            ? `axiom-setup-tree__folder${node.expanded ? ' axiom-setup-tree__folder--open' : ''}`
+            : 'axiom-setup-tree__file'}
+          aria-hidden="true"
+        />
         <span className="axiom-setup-tree__name" title={node.path}>{node.name}</span>
-        <span className="axiom-setup-tree__state-label">{node.excluded ? 'EXCLUDED' : 'INDEX'}</span>
+        <span className="axiom-setup-tree__kind">{kindLabel}</span>
+        <span className="axiom-setup-tree__state-label">
+          {node.kind === 'unsupported' ? 'Skipped' : node.kind === 'document' ? 'Documents' : node.excluded ? 'Excluded' : 'Included'}
+        </span>
       </div>
 
       {node.expanded && node.children && (
@@ -285,22 +288,6 @@ function TreeRow({ node, depth, onToggleExclude, onToggleExpand }: TreeRowProps)
       )}
     </div>
   )
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt>{label}</dt>
-      <dd title={value}>{value}</dd>
-    </div>
-  )
-}
-
-function relativeIgnoredPath(path: string, rootPath: string): string {
-  return path
-    .replace(/[/\\]\*\*$/, '')
-    .replace(rootPath, '')
-    .replace(/^[/\\]/, '')
 }
 
 function findNode(nodes: TreeNode[], targetPath: string): TreeNode | undefined {
@@ -334,8 +321,11 @@ function collectExcluded(nodes: TreeNode[]): string[] {
   const result: string[] = []
   const visit = (branch: TreeNode[]) => {
     for (const node of branch) {
+      // Unsupported files are rejected by Axiom's global file policy. They are
+      // not project-specific ignore choices and must not bloat ignoredPaths.
+      if (node.kind === 'unsupported') continue
       if (node.excluded) {
-        result.push(`${node.path}/**`)
+        result.push(node.isDirectory ? `${node.path}/**` : node.path)
       } else if (node.children) {
         visit(node.children)
       }
@@ -345,16 +335,21 @@ function collectExcluded(nodes: TreeNode[]): string[] {
   return result
 }
 
-function countIncluded(nodes: TreeNode[]): number {
-  let count = 0
+function countIncludedKinds(nodes: TreeNode[]): { folders: number; files: number; documents: number; unsupported: number } {
+  const result = { folders: 0, files: 0, documents: 0, unsupported: 0 }
   const visit = (branch: TreeNode[]) => {
     for (const node of branch) {
-      if (!node.excluded) {
-        count += 1
-        if (node.children) visit(node.children)
+      if (node.kind === 'unsupported') {
+        result.unsupported += 1
+        continue
       }
+      if (node.excluded) continue
+      if (node.kind === 'folder') result.folders += 1
+      else if (node.kind === 'document') result.documents += 1
+      else if (node.kind === 'source') result.files += 1
+      if (node.children) visit(node.children)
     }
   }
   visit(nodes)
-  return count
+  return result
 }

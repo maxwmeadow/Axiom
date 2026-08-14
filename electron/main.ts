@@ -1,12 +1,12 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage } from 'electron'
 import { join } from 'path'
 import { spawn, ChildProcess } from 'child_process'
-import { createHash } from 'crypto'
 import os from 'os'
 import fs from 'fs'
 import type { ProjectConfig, WsMessage } from '../src/shared/types'
 import { completeSourceBoundaries, mergePersistedProjectConfig } from '../src/shared/projectLifecycle'
-import { buildHosts, detectHosts } from './agentInstallers'
+import { buildHosts, detectHosts, inspectHostConfiguration } from './agentInstallers'
+import { createProjectId, findProjectByRoot, removeProjectData } from './projectRegistry'
 
 // electron-vite sets VITE_DEV_SERVER_URL in dev/preview mode only
 const IS_DEV = !!process.env.VITE_DEV_SERVER_URL
@@ -45,15 +45,6 @@ function upsertRecentProject(config: ProjectConfig): void {
   if (idx >= 0) projects[idx] = mergePersistedProjectConfig(projects[idx], config)
   else projects.unshift(config)
   saveRecentProjects(projects.slice(0, 20))
-}
-
-// A workspace's stable id is derived from its full path. It MUST hash the whole
-// path: the old `base64(path).slice(0,16)` only captured the first ~12 bytes, so
-// every project under the same parent (e.g. C:\Users\<name>\…) collided onto one
-// id — and therefore one shared archd database. A path hash keeps it stable per
-// project (reopening finds the same db) while being unique across projects.
-function projectIdFromPath(rootPath: string): string {
-  return createHash('sha256').update(rootPath).digest('hex').slice(0, 16)
 }
 
 // Turn a user-typed project name into a safe folder name: drop path-invalid
@@ -267,7 +258,8 @@ function setupIPC(): void {
     if (result.canceled || !result.filePaths[0]) return null
 
     const rootPath = result.filePaths[0]
-    const id = projectIdFromPath(rootPath)
+    const existing = findProjectByRoot(loadRecentProjects(), rootPath)
+    const id = existing?.id ?? createProjectId()
     const freshConfig: ProjectConfig = {
       id,
       name: rootPath.split(/[/\\]/).pop() ?? 'Project',
@@ -277,7 +269,6 @@ function setupIPC(): void {
       layoutPreferences: { zoom: 1, panX: 0, panY: 0 },
       openedAt: Date.now(),
     }
-    const existing = loadRecentProjects().find(project => project.id === id)
     let config = mergePersistedProjectConfig(existing, freshConfig)
     // Opening a genuinely empty folder is equivalent to creating a new
     // project: there is no source scope to decide yet.
@@ -322,7 +313,7 @@ function setupIPC(): void {
       throw new Error(`A non-empty folder named "${safe}" already exists here.`)
     }
     fs.mkdirSync(rootPath, { recursive: true })
-    const id = projectIdFromPath(rootPath)
+    const id = createProjectId()
     const config: ProjectConfig = completeSourceBoundaries({
       id,
       name: safe,
@@ -339,17 +330,11 @@ function setupIPC(): void {
   // Get recent projects
   ipcMain.handle('project:list-recent', () => loadRecentProjects())
 
-  // Remove a project from the recent list and delete its per-project database directory.
-  // We call DELETE /api/workspace/:id first so archd releases the SQLite file lock
-  // (critical on Windows — rmSync will silently fail on a locked file otherwise).
+  // Deleting is a verified lifecycle boundary. Keep the recent entry if any
+  // daemon or filesystem step fails so the UI cannot claim data was removed.
   ipcMain.handle('project:remove', async (_event, projectId: string) => {
-    const projects = loadRecentProjects().filter(p => p.id !== projectId)
-    saveRecentProjects(projects)
-    try {
-      await fetch(`http://127.0.0.1:${ARCHD_API_PORT}/api/workspace/${projectId}`, { method: 'DELETE' })
-    } catch { /* archd may not be running; proceed with directory delete anyway */ }
-    const projectDataDir = join(os.homedir(), '.axiom', 'data', projectId)
-    try { fs.rmSync(projectDataDir, { recursive: true, force: true }) } catch { /* ignore */ }
+    await removeProjectData({ projectId, dataDir: DATA_DIR, apiPort: ARCHD_API_PORT })
+    saveRecentProjects(loadRecentProjects().filter(project => project.id !== projectId))
   })
 
   // Send a mutation intent to archd
@@ -405,19 +390,23 @@ function setupIPC(): void {
   })
 
   // Which agents are on this machine, and what each install would touch.
-  ipcMain.handle('agent:hosts', () => {
+  ipcMain.handle('agent:hosts', (_event, projectRoot?: string) => {
     const present = detectHosts()
-    return buildHosts().map(host => ({
-      id: host.id,
-      label: host.label,
-      detected: present[host.id] === true,
-      configPath: host.configPath(),
-      command: host.command ?? null,
-    }))
+    return buildHosts().map(host => {
+      const configuration = inspectHostConfiguration(host, projectRoot)
+      return {
+        id: host.id,
+        label: host.label,
+        detected: present[host.id] === true,
+        configPath: host.configPath(),
+        command: host.command ?? null,
+        ...configuration,
+      }
+    })
   })
 
-  // Install Axiom into one agent: its MCP server entry, and its slash command
-  // where the host has such a thing. An action, not an instruction.
+  // Install Axiom into one agent: its MCP server entry and reusable workflow
+  // where the host supports one. An action, not an instruction.
   ipcMain.handle('agent:install', (_event, hostId: string, projectRoot?: string) => {
     const host = buildHosts().find(candidate => candidate.id === hostId)
     if (!host) return { ok: false, detail: `Unknown agent "${hostId}".`, paths: [] }
@@ -465,9 +454,9 @@ function setupIPC(): void {
 }
 
 
-// The body of the /axiom-map slash command. Kept beside the installer so the
-// command a user runs and the instructions Axiom means to give are the same
-// text, rather than two copies that drift.
+// The body of Axiom's architecture-mapping workflow. Kept beside the installer
+// so the workflow a user invokes and the instructions Axiom means to give are
+// the same text, rather than two copies that drift.
 const NAME_ARCHITECTURE_COMMAND = `# Axiom — map this codebase's architecture
 
 Map this codebase's architecture for its owner, who is watching a spatial map

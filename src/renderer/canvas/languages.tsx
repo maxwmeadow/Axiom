@@ -24,6 +24,7 @@ export const LANGUAGES: LanguageDefinition[] = [
   { id: 'cpp', label: 'C / C++', extensions: ['.c', '.cc', '.cpp', '.cxx', '.h', '.hpp'], preferredExtension: '.cpp', short: 'C++', color: '#00599c', textColor: '#fff', icon: 'cplusplus' },
   { id: 'ruby', label: 'Ruby', extensions: ['.rb'], preferredExtension: '.rb', short: 'RB', color: '#cc342d', textColor: '#fff', icon: 'ruby' },
   { id: 'java', label: 'Java / OpenJDK', extensions: ['.java'], preferredExtension: '.java', short: 'JV', color: '#f89820', textColor: '#fff', icon: 'openjdk' },
+  { id: 'markdown', label: 'Markdown', extensions: ['.md', '.mdx'], preferredExtension: '.md', short: 'MD', color: '#5f6f78', textColor: '#fff', icon: 'markdown' },
 ]
 
 const byExtension = new Map(LANGUAGES.flatMap(language => language.extensions.map(ext => [ext, language] as const)))
