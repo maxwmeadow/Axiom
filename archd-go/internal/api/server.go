@@ -2,20 +2,20 @@
 //
 // Endpoint map:
 //
-//	GET  /ws                           — WebSocket upgrade (renderer connects here)
-//	GET  /api/snapshot/:workspaceId    — full canvas snapshot
-//	POST /api/workspace                — create or open a workspace + root (opens per-project DB)
-//	DELETE /api/workspace/:id          — close and permanently delete workspace-owned data
-//	POST /api/systems                  — create / upsert a system
-//	PUT  /api/systems/:id              — update system (name, parent, description)
-//	DELETE /api/systems/:id?workspace= — delete system
-//	POST /api/systems/:id/position?workspace= — update canvas position
-//	POST /api/files/:id/assign         — assign file to system  {systemId, workspaceId}
-//	POST /api/files/:id/position       — update file canvas position  {x, y, workspaceId}
-//	PUT  /api/files/:id/size           — update file canvas size  {w, h, workspaceId}
-//	GET  /api/files/:id/symbols?workspace= — get symbols for a file
-//	POST /api/infra                    — create infra node
-//	GET  /api/call-path?from=&to=&workspace= — trace call path between two files
+//	GET  /ws                           - WebSocket upgrade (renderer connects here)
+//	GET  /api/snapshot/:workspaceId    - full canvas snapshot
+//	POST /api/workspace                - create or open a workspace + root (opens per-project DB)
+//	DELETE /api/workspace/:id          - close and permanently delete workspace-owned data
+//	POST /api/systems                  - create / upsert a system
+//	PUT  /api/systems/:id              - update system (name, parent, description)
+//	DELETE /api/systems/:id?workspace= - delete system
+//	POST /api/systems/:id/position?workspace= - update canvas position
+//	POST /api/files/:id/assign         - assign file to system  {systemId, workspaceId}
+//	POST /api/files/:id/position       - update file canvas position  {x, y, workspaceId}
+//	PUT  /api/files/:id/size           - update file canvas size  {w, h, workspaceId}
+//	GET  /api/files/:id/symbols?workspace= - get symbols for a file
+//	POST /api/infra                    - create infra node
+//	GET  /api/call-path?from=&to=&workspace= - trace call path between two files
 package api
 
 import (
@@ -229,7 +229,7 @@ func (s *Server) dbFor(workspaceID string) (*sql.DB, error) {
 	d, ok := s.dbs[workspaceID]
 	s.mu.RUnlock()
 	if !ok {
-		// Attempt to open lazily — the DB may exist on disk from a previous session.
+		// Attempt to open lazily - the DB may exist on disk from a previous session.
 		return s.openDB(workspaceID)
 	}
 	return d, nil
@@ -279,7 +279,7 @@ func (s *Server) closeDB(workspaceID string) {
 
 // startWatcher attaches a live fsnotify watcher to a root so saves re-index
 // the file, feed the activity engine, and patch the canvas in real time.
-// Idempotent per root — re-opening a workspace reuses the running watcher.
+// Idempotent per root - re-opening a workspace reuses the running watcher.
 func (s *Server) startWatcher(sqlDB *sql.DB, root db.Root) {
 	s.mu.Lock()
 	s.roots[root.ID] = root
@@ -837,14 +837,14 @@ func (s *Server) handleAgentActivity(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "bad request", 400)
 		return
 	}
-	// Every MCP tool call posts here — that signal attributes watcher-detected
+	// Every MCP tool call posts here - that signal attributes watcher-detected
 	// file edits in the next ~90s to the agent (activity engine).
 	activity.MarkAgent(body.WorkspaceID)
 	s.hub.Broadcast("agent:activity", body)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
-// handleActivityHotspots returns files ranked by decayed live-edit activity —
+// handleActivityHotspots returns files ranked by decayed live-edit activity -
 // "where is the code changing right now". GET /api/activity/hotspots?workspace=&limit=
 func (s *Server) handleActivityHotspots(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -879,7 +879,7 @@ func (s *Server) handleActivityHotspots(w http.ResponseWriter, r *http.Request) 
 		entries[i] = activity.ScoreEntry{ID: f.ID, Score: f.ActivityScore, AtMs: f.ActivityAt}
 	}
 	norm := activity.Normalize(entries, now)
-	// Empty must serialize as [] — a quiet workspace is a normal answer, and a
+	// Empty must serialize as [] - a quiet workspace is a normal answer, and a
 	// null here crashes every client that iterates the result.
 	hots := []hotspot{}
 	for _, f := range files {

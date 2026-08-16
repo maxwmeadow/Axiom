@@ -1,5 +1,5 @@
 /**
- * Axiom Architecture Seeder — Project Radial
+ * Axiom Architecture Seeder - Project Radial
  *
  * This script calls the Axiom agent API (http://localhost:7743) directly
  * to demonstrate the agent-first architecture workflow. Run this while
@@ -51,7 +51,7 @@ async function main() {
     console.error('   Expected: http://localhost:7743/health')
     process.exit(1)
   }
-  console.log(`✓ Connected — ${health.fileCount} files, ${health.nodeCount} nodes`)
+  console.log(`✓ Connected - ${health.fileCount} files, ${health.nodeCount} nodes`)
 
   // ── 2. Get raw files so we can assign them to systems ───────────────────
   console.log('\n📂 Loading indexed files...')
@@ -59,7 +59,7 @@ async function main() {
   console.log(`  Found ${files.length} files across ${new Set(files.map(f => f.language)).size} languages`)
 
   // ── 3. Categorize files by path patterns ────────────────────────────────
-  // This is what an AI agent does — but here we do it with path matching
+  // This is what an AI agent does - but here we do it with path matching
   // for a predictable demo. A real agent would read the content/symbols.
   const bySystem: Record<string, string[]> = {
     'AI & NPC Behavior':    [],
@@ -96,7 +96,7 @@ async function main() {
 
   for (const [name, fps] of Object.entries(bySystem)) {
     if (fps.length === 0) {
-      console.log(`  ⚠️  Skipping "${name}" — no matching files`)
+      console.log(`  ⚠️  Skipping "${name}" - no matching files`)
       continue
     }
     const descriptions: Record<string, string> = {
@@ -133,7 +133,7 @@ async function main() {
 
   // ── 6. Summary ──────────────────────────────────────────────────────────
   console.log('\n✅ Architecture mapped!')
-  console.log('   Switch to Axiom — the canvas should now show semantic systems.')
+  console.log('   Switch to Axiom - the canvas should now show semantic systems.')
   console.log('   Zoom in on any system to see its files appear inside it.')
   console.log('\n   Systems created:')
   for (const [name, id] of Object.entries(systemIds)) {

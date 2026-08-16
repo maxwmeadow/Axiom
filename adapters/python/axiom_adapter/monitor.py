@@ -1,4 +1,4 @@
-"""sys.monitoring (PEP 669) integration — streaming mode.
+"""sys.monitoring (PEP 669) integration - streaming mode.
 
 Watched functions are matched by (absolute file path, symbol name, line range)
 against each code object's co_filename / co_name / co_firstlineno. Name AND
@@ -36,7 +36,7 @@ _call_stack: contextvars.ContextVar[tuple] = contextvars.ContextVar(
 )
 
 # Set by an injection wrapper (inject.py) for the duration of the perturbed
-# call — stamps every event in the perturbed subtree with the injection id so
+# call - stamps every event in the perturbed subtree with the injection id so
 # the canvas can color downstream paths green/red.
 _active_inject: contextvars.ContextVar[str] = contextvars.ContextVar(
     "axiom_active_inject", default=""
@@ -126,7 +126,7 @@ class Monitor:
         if self._tool_id is not None:
             return True
         mon = sys.monitoring
-        # Never take DEBUGGER_ID — the user's IDE debugger keeps working.
+        # Never take DEBUGGER_ID - the user's IDE debugger keeps working.
         for tid in (mon.OPTIMIZER_ID, mon.PROFILER_ID, mon.COVERAGE_ID):
             try:
                 mon.use_tool_id(tid, "axiom")
@@ -135,7 +135,7 @@ class Monitor:
             except ValueError:
                 continue
         if self._tool_id is None:
-            print("[axiom] no free sys.monitoring tool id — watches disabled", file=sys.stderr)
+            print("[axiom] no free sys.monitoring tool id - watches disabled", file=sys.stderr)
             return False
         mon.register_callback(self._tool_id, mon.events.PY_START, self._on_start)
         mon.register_callback(self._tool_id, mon.events.PY_RETURN, self._on_return)
@@ -201,7 +201,7 @@ class Monitor:
                 "kind": "rate_limit",
                 "watchId": w.id,
                 "ts": int(time.time() * 1000),
-                "message": f"exceeded {MAX_CALLS_PER_SEC} calls/sec — watch auto-disabled",
+                "message": f"exceeded {MAX_CALLS_PER_SEC} calls/sec - watch auto-disabled",
             })
             return sys.monitoring.DISABLE
 
@@ -279,7 +279,7 @@ class Monitor:
         returns (traceId, durationMs). Searches from the top so a suspended
         generator/coroutine entry sitting mid-stack (its return fires out of
         LIFO order) still resolves to the right trace. For generators the
-        duration includes suspended time — it is wall time, not CPU time."""
+        duration includes suspended time - it is wall time, not CPU time."""
         stack = _call_stack.get()
         for i in range(len(stack) - 1, -1, -1):
             if stack[i][0] == w.id:

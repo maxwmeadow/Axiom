@@ -10,8 +10,8 @@ const ROOT = 'C:\\Users\\maxst\\VSCodeProjects\\axiom-loop-test'
 const pass = []
 const fail = []
 const check = (label, ok, detail = '') => {
-  ;(ok ? pass : fail).push(label + (detail ? ` — ${detail}` : ''))
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`)
+  ;(ok ? pass : fail).push(label + (detail ? ` - ${detail}` : ''))
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` - ${detail}` : ''}`)
 }
 
 const api = async (path, init) => {

@@ -32,7 +32,7 @@ export const demoSnapshot: CanvasSnapshot = {
       parentId: null,
       source: 'directory',
       color: '#10b981',
-      description: 'Go parser daemon — file indexer, watcher, REST API',
+      description: 'Go parser daemon - file indexer, watcher, REST API',
       agentNotes: null,
       depth: 0,
       positionX: 0,

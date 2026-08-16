@@ -1,20 +1,20 @@
-// Variable reference (def-use) extraction — the static half of Axiom's
+// Variable reference (def-use) extraction - the static half of Axiom's
 // "variable references" primitive (plan Phase 7; renamed from data-flow
 // slicing after hostile review: tree-sitter is file-scoped and has no type
 // resolver, so cross-file linking is name-based heuristics, labeled as such).
 //
 // Kinds:
 //
-//	def   — a binding is introduced: let/const/var declarator, Go := / var
+//	def   - a binding is introduced: let/const/var declarator, Go := / var
 //	        spec, import bindings, with-as / range targets
-//	param — function/method/lambda parameter
-//	write — an existing binding is reassigned/updated: assignment LHS,
+//	param - function/method/lambda parameter
+//	write - an existing binding is reassigned/updated: assignment LHS,
 //	        augmented assignment, x++/x--  (Python plain assignment is
-//	        classified 'write' — the language has no declaration syntax)
-//	read  — any other identifier occurrence (member-access property names,
+//	        classified 'write' - the language has no declaration syntax)
+//	read  - any other identifier occurrence (member-access property names,
 //	        object keys, declaration names, and this/self/cls are excluded)
 //
-// Supported: typescript, tsx, jsx, javascript, python, go — the languages the
+// Supported: typescript, tsx, jsx, javascript, python, go - the languages the
 // runtime layer traces. Others return nil.
 package parser
 
@@ -149,10 +149,10 @@ func (e *varRefExtractor) markBindingPattern(n *sitter.Node, kind string) {
 	switch n.Type() {
 	case "identifier", "shorthand_property_identifier_pattern":
 		e.mark(n, kind)
-	case "pair_pattern": // { key: binding } — key is a property name
+	case "pair_pattern": // { key: binding } - key is a property name
 		e.exclude(n.ChildByFieldName("key"))
 		e.markBindingPattern(n.ChildByFieldName("value"), kind)
-	case "assignment_pattern": // binding = default — default value is a read
+	case "assignment_pattern": // binding = default - default value is a read
 		e.markBindingPattern(n.ChildByFieldName("left"), kind)
 	case "default_parameter", "typed_default_parameter": // Python: x=1 / x: T = 1
 		e.markBindingPattern(n.ChildByFieldName("name"), kind)
@@ -225,7 +225,7 @@ func (e *varRefExtractor) walk(n *sitter.Node) {
 	// ── defs ──
 	case "variable_declarator": // JS/TS: let/const/var X = …
 		e.markBindingPattern(n.ChildByFieldName("name"), "def")
-	case "for_in_statement": // JS/TS: for (const x of/in …) — x isn't a declarator
+	case "for_in_statement": // JS/TS: for (const x of/in …) - x isn't a declarator
 		if l := n.ChildByFieldName("left"); l != nil {
 			if n.ChildByFieldName("kind") != nil { // const/let/var present → binding
 				e.markBindingPattern(l, "def")
@@ -294,7 +294,7 @@ func (e *varRefExtractor) walk(n *sitter.Node) {
 				}
 			}
 		}
-	case "import_statement": // Python: import a.b — binds first segment
+	case "import_statement": // Python: import a.b - binds first segment
 		for i := 0; i < int(n.NamedChildCount()); i++ {
 			c := n.NamedChild(i)
 			if c.Type() == "dotted_name" {
@@ -376,7 +376,7 @@ func (e *varRefExtractor) walk(n *sitter.Node) {
 		if kind, ok := e.classified[n.ID()]; ok {
 			e.add(n, kind)
 		} else {
-			// bare identifier, or { a } object-literal shorthand — a read
+			// bare identifier, or { a } object-literal shorthand - a read
 			e.add(n, "read")
 		}
 		return

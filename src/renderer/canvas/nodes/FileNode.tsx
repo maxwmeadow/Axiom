@@ -155,7 +155,7 @@ function RuntimeTooltip({ runtime, color }: { runtime: RuntimeNodeState; color: 
       {runtime.lastReturn && <Row label="→" value={runtime.lastReturn} valueColor="#22c55e" />}
       {runtime.lastException && <Row label="✗" value={runtime.lastException} valueColor="#ef4444" />}
       {runtime.rateLimited && (
-        <div style={{ marginTop: 4, color: '#f59e0b' }}>rate-limited — watch auto-disabled</div>
+        <div style={{ marginTop: 4, color: '#f59e0b' }}>rate-limited - watch auto-disabled</div>
       )}
     </div>
   )
@@ -201,14 +201,14 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       : livingSignal.fx?.kind === 'flow-remove'
         ? 'LINK REMOVED'
         : 'IMPACT'
-  // Apparent zoom of this node on screen — a depth-2 node at viewport zoom 2
+  // Apparent zoom of this node on screen - a depth-2 node at viewport zoom 2
   // looks like a depth-0 node at zoom 0.5. Detail states gate on this.
   // Resolved by the semantic-zoom pass. Reading the raw zoom here would make
   // this node re-render on every frame of a zoom animation.
   const detailRevealed = d.detailRevealed ?? false
   // Heat is a percentile rank within the workspace, so a small/fresh project
   // spreads scores across the whole range and everything reads "hot". Keep the
-  // bar high and muted — a just-written file is NEW (green pulse), not hot.
+  // bar high and muted - a just-written file is NEW (green pulse), not hot.
   const churnColor = churn > 0.82 ? '#b8563f' : churn > 0.62 ? '#a8803c' : 'transparent'
   // Unified shape vocabulary (Rev 2b): class-first header when the file IS its
   // class; cylinder/hexagon files get a shape backdrop over the same card.
@@ -219,7 +219,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
   const classFirst = d.shape === 'class' && !!d.displayName &&
     d.displayName.toLowerCase().replace(/[_-]/g, '') !== stem
   // Shape = structure: classes wear the chamfered classbox; cylinder/hexagon
-  // only via explicit override (never guessed). Plain files are 'box' — every
+  // only via explicit override (never guessed). Plain files are 'box' - every
   // card renders through the SAME ShapeBackdrop so chrome cannot fork.
   const shellShape = d.shape === 'class' ? 'classbox' as const
     : d.shape === 'cylinder' || d.shape === 'hexagon' ? d.shape : 'box' as const
@@ -227,8 +227,8 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
   // hairline by default, activity heat and states shift the whole silhouette.
   // Morning Delta review paints the same perimeter channel: during a review
   // the question is "what changed", so the diff outranks the heat reading it
-  // would otherwise show. Colors match the living choreography exactly —
-  // green created, teal edited — so a mark and a live event read as one
+  // would otherwise show. Colors match the living choreography exactly -
+  // green created, teal edited - so a mark and a live event read as one
   // vocabulary rather than two.
   // An agent reading this file. Deliberately a soft outer halo, not a border
   // treatment: attention must never be mistaken for a change. The perimeter
@@ -356,7 +356,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
   // available once the detailed state has faded in.
   const detailAlpha = detailRevealed ? 1 : 0
 
-  // Muted workbench ink for symbol kinds — reads as engraved type on parchment,
+  // Muted workbench ink for symbol kinds - reads as engraved type on parchment,
   // not neon. (Runtime state, not symbol kind, is what glows on this canvas.)
   const renderSymbolIcon = (kind: string) => {
     switch (kind.toLowerCase()) {
@@ -426,7 +426,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
           the node box so every file node looks identical in its own frame. */}
       <div
         // ONE chrome system: the ShapeBackdrop draws surface, silhouette,
-        // shadow, and state for every shape — no CSS-class fork, ever.
+        // shadow, and state for every shape - no CSS-class fork, ever.
         style={{
           width: `${100 / s}%`,
           height: `${100 / s}%`,
@@ -461,7 +461,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
         transition: 'opacity 0.25s ease',
         pointerEvents: detailAlpha > 0.8 ? 'auto' : 'none',
       }}>
-        {/* Language icon ALWAYS — class-ness is expressed by the node SHAPE
+        {/* Language icon ALWAYS - class-ness is expressed by the node SHAPE
             (chamfered classbox), never by hijacking the icon slot. */}
         <div style={{
           display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0,
@@ -489,10 +489,10 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
           fontFamily: 'var(--font-mono)',
         }} />
         </div>
-          {/* class-first: the file IS its class — class name leads; the real
+          {/* class-first: the file IS its class - class name leads; the real
               filename lives in the hover tooltip, never cramped inline. */}
       </div>
-      {/* Line count — a quiet figure tucked under the corner cut, not a badge
+      {/* Line count - a quiet figure tucked under the corner cut, not a badge
           shouting from the header. */}
       {d.lineCount > 0 && (
         <span style={{
@@ -512,7 +512,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       </>
 
       {(
-        /* State 1: Compact — line count lives in the header, only churn here */
+        /* State 1: Compact - line count lives in the header, only churn here */
         <div style={{
           position: 'absolute',
           inset: shellShape === 'cylinder' ? '15px 14px 13px' : '10px 14px',
@@ -819,7 +819,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
           pointerEvents: 'none',
         }} />
       )}
-      {/* Live edit landed: the file was just rewritten — a one-shot teal
+      {/* Live edit landed: the file was just rewritten - a one-shot teal
           perimeter pulse so the change is visible on the map. */}
       {d.fx?.kind === 'edit' && (
         <div key={`fx-${d.fx.key}`} style={{

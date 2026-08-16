@@ -4,7 +4,7 @@
 // validateAmount and blow up downstream in charge().
 
 function validateAmount(amount) {
-  // BUG: should be `amount <= 0` — negatives pass validation.
+  // BUG: should be `amount <= 0` - negatives pass validation.
   if (amount === 0) {
     throw new Error('Amount must be positive')
   }

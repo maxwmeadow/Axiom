@@ -1,4 +1,4 @@
-// Injection (perturbation) lifecycle — the archd side of Inspect-Perturb-Validate.
+// Injection (perturbation) lifecycle - the archd side of Inspect-Perturb-Validate.
 //
 // State machine:
 //
@@ -8,7 +8,7 @@
 //	      └──2min timeout──▶ expired     └──cancel──▶ removed
 //
 // The agent's inject_value MCP call returns immediately with pending_confirm;
-// the user approves on the canvas (warn-and-confirm model — plan §Safe
+// the user approves on the canvas (warn-and-confirm model - plan §Safe
 // Perturbation). AXIOM_AUTO_CONFIRM_INJECT=1 skips confirmation for headless
 // use and tests.
 package runtime
@@ -148,7 +148,7 @@ func (m *Manager) ConfirmInject(workspaceID, id string, approved bool) (*Inject,
 	sessions := m.sessionsForLocked(workspaceID)
 	if len(sessions) == 0 {
 		inj.Status = "error"
-		inj.Error = "no runtime session connected — launch the target first"
+		inj.Error = "no runtime session connected - launch the target first"
 		cp := *inj
 		m.mu.Unlock()
 		m.broadcastInject(cp)
@@ -227,7 +227,7 @@ func (m *Manager) handleInjectEvent(sess *Session, ae AdapterEvent) {
 		}
 	case "inject_error":
 		// With several sessions in a workspace, one process may lack the
-		// module while another armed and fired successfully — a session's
+		// module while another armed and fired successfully - a session's
 		// error must not overwrite a fired outcome.
 		if inj.Status != "fired" {
 			inj.Status = "error"

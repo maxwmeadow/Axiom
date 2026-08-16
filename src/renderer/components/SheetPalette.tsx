@@ -1,4 +1,4 @@
-// SheetPalette — the UML stencil sidebar, shown when a sheet layer is active.
+// SheetPalette - the UML stencil sidebar, shown when a sheet layer is active.
 // Drag a stencil onto the canvas to place it; the new element opens straight
 // into its inline name editor. Small semantic shape set by design.
 export interface StencilDef {
@@ -10,7 +10,7 @@ export interface StencilDef {
 }
 
 export const STENCILS: StencilDef[] = [
-  { id: 'class', label: 'Class', kind: 'class', shape: 'box', hint: 'Compartment box — functions/methods inside' },
+  { id: 'class', label: 'Class', kind: 'class', shape: 'box', hint: 'Compartment box - functions/methods inside' },
   { id: 'file', label: 'File', kind: 'file', shape: 'box', hint: 'A source file to be created' },
   { id: 'system', label: 'System', kind: 'system', shape: 'folder', hint: 'Package/module grouping' },
   { id: 'service', label: 'Service', kind: 'service', shape: 'hexagon', hint: 'Service / API surface' },
@@ -47,7 +47,7 @@ export function SheetPalette() {
       {STENCILS.map(stencil => (
         <div
           key={stencil.id}
-          title={`${stencil.hint} — drag onto the canvas`}
+          title={`${stencil.hint} - drag onto the canvas`}
           draggable
           onDragStart={event => {
             event.dataTransfer.setData('application/axiom-stencil', JSON.stringify(stencil))

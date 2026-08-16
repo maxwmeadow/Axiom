@@ -86,7 +86,7 @@ export function ReplayBar() {
           <strong title={replay.name}>{replay.name}</strong>
         </div>
         <code className="axiom-replay__revision">
-          {replay.branch}@{replay.commit ? replay.commit.slice(0, 8) : '—'}
+          {replay.branch}@{replay.commit ? replay.commit.slice(0, 8) : '-'}
         </code>
         <button type="button" className="axiom-replay__close" onClick={close} aria-label="Exit replay">×</button>
       </header>

@@ -1,8 +1,8 @@
-// ASM — Axiom Sheet Markup: the textual rendering of a sheet for agents,
+// ASM - Axiom Sheet Markup: the textual rendering of a sheet for agents,
 // who cannot see the canvas (UML_UX_PLAN.md "How agents see sheets").
 // Durable URI refs (file://relpath, sys://name-path, infra://service/name),
 // containment by indentation, health as bracket tags, notes block-indented.
-// Layout is topological only — x/y never appears.
+// Layout is topological only - x/y never appears.
 package api
 
 import (
@@ -344,7 +344,7 @@ func renderSheetASM(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "sheet: %q — rev %d", sheet.Name, sheet.Revision)
+	fmt.Fprintf(&b, "sheet: %q - rev %d", sheet.Name, sheet.Revision)
 	if ghosts > 0 {
 		fmt.Fprintf(&b, " · %d ghost", ghosts)
 	}
@@ -373,7 +373,7 @@ func renderSheetASM(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 	}
 	writeFileLine := func(indent string, e db.SheetElement) {
 		if e.Tombstoned() {
-			// Ref gone, only the cached label remains — could have been any type.
+			// Ref gone, only the cached label remains - could have been any type.
 			fmt.Fprintf(&b, "%s%s [TOMBSTONE: deleted]\n", indent, e.Label)
 			return
 		}
@@ -417,7 +417,7 @@ func renderSheetASM(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 		}
 	}
 
-	// Loose files (not nested under a rendered system) and tombstones —
+	// Loose files (not nested under a rendered system) and tombstones -
 	// a tombstoned element has all refs NULL, only its cached label remains.
 	for _, e := range elements {
 		if renderedFiles[e.ID] {
@@ -456,7 +456,7 @@ func renderSheetASM(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 }
 
 // renderBuildSpec renders a sheet's PLANNED elements as an agent build spec
-// (UML_UX_PLAN.md REVISION 2 — "the sheet as prompt"): target additions with
+// (UML_UX_PLAN.md REVISION 2 - "the sheet as prompt"): target additions with
 // paths and member signature tables, structural intent edges, and precise
 // live-context links so the agent doesn't search-hallucinate.
 func renderBuildSpec(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
@@ -484,7 +484,7 @@ func renderBuildSpec(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Build spec — sheet %q (rev %d)\n", sheet.Name, sheet.Revision)
+	fmt.Fprintf(&b, "# Build spec - sheet %q (rev %d)\n", sheet.Name, sheet.Revision)
 	if sheet.Purpose != nil && *sheet.Purpose != "" {
 		fmt.Fprintf(&b, "Purpose: %s\n", *sheet.Purpose)
 	}
@@ -527,7 +527,7 @@ func renderBuildSpec(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 			}
 			fmt.Fprintf(&b, "- [%s] `%s`", mark, m.Signature)
 			if m.Intent != "" {
-				fmt.Fprintf(&b, " — %s", m.Intent)
+				fmt.Fprintf(&b, " - %s", m.Intent)
 			}
 			b.WriteString("\n")
 		}
@@ -566,7 +566,7 @@ func renderBuildSpec(sqlDB *sql.DB, sheet *db.Sheet) (string, error) {
 			}
 			fmt.Fprintf(&b, "- %s %s %s", src, e.Kind, dst)
 			if e.Note != "" {
-				fmt.Fprintf(&b, " — %s", e.Note)
+				fmt.Fprintf(&b, " - %s", e.Note)
 			}
 			b.WriteString("\n")
 		}

@@ -144,7 +144,7 @@ func isGenericFilename(base string) bool {
 }
 
 // tfidfStopWords are words that carry no clustering signal.
-// Generic programming verbs and short conjunctions only — domain words
+// Generic programming verbs and short conjunctions only - domain words
 // (manager, controller, etc.) are left in because their IDF naturally
 // down-weights them when ubiquitous, and they DO signal clusters when rare.
 var tfidfStopWords = map[string]bool{

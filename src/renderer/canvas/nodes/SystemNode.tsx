@@ -176,7 +176,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
   const totalCount = directChildCount
   // Authoritative and canonical: "how far has the user resized this frame from
   // its design size", with no world-scale term on either side. It must NOT be
-  // recomputed here from `width`/`height` — those are world-scaled, which would
+  // recomputed here from `width`/`height` - those are world-scaled, which would
   // fold nesting depth in a second time (DEPTH_TITLE_PX already carries it) and
   // would make the chrome grow whenever the frame compressed its interior.
   // The sheet layer does not project one, so fall back to the local canonical
@@ -190,13 +190,13 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
         d.presentationBaseHeight ?? height ?? 420,
       )
 
-  // Preview offset — applied as translate so the node visually floats to its predicted post-drop
+  // Preview offset - applied as translate so the node visually floats to its predicted post-drop
   // position without moving the React Flow logical position (handles stay at original spot).
   const previewOffset = d.previewOffset as { x: number; y: number } | null | undefined
   const translateX = previewOffset?.x ?? 0
   const translateY = previewOffset?.y ?? 0
 
-  // All pixel values proportional to titlePx so every depth renders identically —
+  // All pixel values proportional to titlePx so every depth renders identically -
   // only world-space scale differs between depths.
   const depthIdx = Math.min(depth ?? 0, DEPTH_TITLE_PX.length - 1)
   const titlePx  = DEPTH_TITLE_PX[depthIdx] * presentationScale
@@ -223,7 +223,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
     </>
   )
 
-  // Folder silhouette (Rev 2b): the node outline IS the UML package shape —
+  // Folder silhouette (Rev 2b): the node outline IS the UML package shape -
   // tab across the top-left holding the title, body below. Proportional to
   // the node so it reads at every zoom, unlike a fixed-px decoration.
   // The React Flow node frame is the single geometry owner. Reading the shell
@@ -239,7 +239,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
   }
   // Mirror NodeShell's folder proportions (the sheet-layer look): slim tab
   // with the tiny SYSTEM label, title full-width below. CONSTRAINT: the whole
-  // chrome (tab + title band) must fit inside the grid's reserved gap — the
+  // chrome (tab + title band) must fit inside the grid's reserved gap - the
   // layout gives exactly one gridGap of headroom and eight drag/snap sites
   // assume it, so the chrome scales to the budget, never the other way.
   // All tab geometry comes from one swept, tested model. Crucially it takes
@@ -279,7 +279,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
     </svg>
   }
 
-  // Big centered title — the collapsed identity. Fades out as contents reveal.
+  // Big centered title - the collapsed identity. Fades out as contents reveal.
   const bigTitleCeiling = Math.max(0.5, Math.min(
     shellSize.w * 0.11,
     shellSize.h * 0.2,
@@ -334,7 +334,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
       // Exactly the chip's band: the title sits wholly within the tab.
       top: tabBandTop,
       // Must be the model's inset, not `padX`. padX is derived from titlePx,
-      // which rides presentationScale = min(w/designW, h/designH) — so using
+      // which rides presentationScale = min(w/designW, h/designH) - so using
       // it here moved the title sideways whenever the frame's HEIGHT changed.
       left: chrome.titleLeft,
       width: chrome.titleWidth,
@@ -381,7 +381,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
     </div>
   )
 
-  // Opaque panel fill per depth — deeper nesting sits one step "higher" on the board.
+  // Opaque panel fill per depth - deeper nesting sits one step "higher" on the board.
   const basePanelBg = `var(--panel-${Math.min(depth ?? 0, 3)})`
   const panelBg = isDeploymentBoundary
     ? `color-mix(in srgb, ${color} 12%, ${basePanelBg})`
@@ -431,7 +431,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
       <div className="axiom-system-node__shell" style={{
         position: 'absolute',
         inset: 0,
-        // The folder SVG owns ALL chrome — a rect background/border here would
+        // The folder SVG owns ALL chrome - a rect background/border here would
         // fill the tab notch and fight the silhouette (the "two systems" bug).
         background: 'transparent',
         transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
@@ -462,7 +462,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
         />
         {/* Folder card stock, clipped to the folder itself by sharing its path,
             so the tab and its cut are textured too. A system is what you keep
-            files in, so it is heavier board with grain running the other way —
+            files in, so it is heavier board with grain running the other way -
             the material says "container" before any label does. */}
         <path
           className="axiom-shape-texture"
@@ -476,7 +476,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
           <line x1={deploymentCorner * 0.46} y1={deploymentCorner + 3} x2={deploymentCorner * 0.46} y2={shellSize.h - deploymentCorner - 3} stroke={color} strokeWidth={2.5} />
           <line x1={deploymentCorner * 0.78} y1={deploymentCorner + 3} x2={deploymentCorner * 0.78} y2={shellSize.h - deploymentCorner - 3} stroke={color} strokeWidth={1} opacity={0.45} />
         </> : <line x1={2} y1={2} x2={2} y2={shellSize.h - 2} stroke={color} strokeWidth={3} />}
-        {/* item count — a small bordered chip nested INSIDE the tab at its
+        {/* item count - a small bordered chip nested INSIDE the tab at its
             right end, right edge slanted to echo the tab's cut. */}
         {!isDeploymentBoundary && totalCount > 0 && (() => {
           // The chip is a sibling of the frame's own chrome, so it shares the
@@ -487,7 +487,7 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
           //    close;
           //  - its TOP and RIGHT borders stand off the tab's top border and
           //    slanted cut by the same gap. Because the cut is slanted, an
-          //    equal *visual* gap needs a larger horizontal offset — hence the
+          //    equal *visual* gap needs a larger horizontal offset - hence the
           //    edge-length term below, which converts a perpendicular gap into
           //    the horizontal one that produces it.
           const yT = tabBandTop

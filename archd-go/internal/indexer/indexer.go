@@ -90,7 +90,7 @@ func IndexRoot(sqlDB *sql.DB, h *hub.Hub, root db.Root, ignoredPaths []string) e
 	}
 
 	total := len(paths)
-	log.Printf("[indexer] root %s — %d source files after ignore filtering", root.Path, total)
+	log.Printf("[indexer] root %s - %d source files after ignore filtering", root.Path, total)
 
 	// Map relPath → existing file record (for deduplication / position preservation).
 	existing, err := buildExistingMap(sqlDB, root.ID)
@@ -355,7 +355,7 @@ func ReindexFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error 
 	}
 	sort.Strings(touchedNames)
 
-	// Reconcile planned UML elements against the new reality — this is how
+	// Reconcile planned UML elements against the new reality - this is how
 	// the user's drawn boxes turn green as the agent builds them.
 	if changed, err := db.ReconcilePlanned(sqlDB, root.WorkspaceID); err == nil {
 		for _, p := range changed {
@@ -435,7 +435,7 @@ func RemoveFile(sqlDB *sql.DB, h *hub.Hub, root db.Root, absPath string) error {
 		return err
 	}
 
-	// Capture labels while the file and its membership still exist — the
+	// Capture labels while the file and its membership still exist - the
 	// journal has to be able to describe what was lost after it is gone.
 	labeler := newSystemLabeler(sqlDB, root)
 	lostSystemID, lostSystemName := labeler.systemOf(file.ID)
@@ -511,7 +511,7 @@ func recordActivity(sqlDB *sql.DB, workspaceID string, prev *db.File, prevSyms [
 		prevScore, prevAt = prev.ActivityScore, prev.ActivityAt
 	}
 	if hash == prevHash {
-		return "", false // formatter/editor no-op save — not activity
+		return "", false // formatter/editor no-op save - not activity
 	}
 
 	newSyms, _ := db.GetSymbolsByFile(sqlDB, file.ID)
@@ -554,7 +554,7 @@ func diffSymbols(before, after []db.Symbol) int {
 		if span, ok := old[k]; !ok {
 			delta++ // added
 		} else if span[0] != s.LineStart || span[1] != s.LineEnd {
-			delta++ // moved/resized — its body changed or code shifted through it
+			delta++ // moved/resized - its body changed or code shifted through it
 		}
 	}
 	for k := range old {
@@ -582,11 +582,11 @@ func normalizedChurn(sqlDB *sql.DB, workspaceID, fileID string) (float64, error)
 //
 // Shape is what a node IS, not where it came from. Inferred each parse;
 // files.shape_override (user/agent) always wins at display time. Guardrail:
-// when unsure, it's a plain box — a wrong box is invisible, a wrong cylinder
+// when unsure, it's a plain box - a wrong box is invisible, a wrong cylinder
 // is a lie.
 
 // Shape is only inferred from STRUCTURE the parser proved (the symbol table)
-// — never from filename/path heuristics; guessing "cylinder" off a directory
+// - never from filename/path heuristics; guessing "cylinder" off a directory
 // name is exactly the dumb-tool behavior Axiom exists to replace. Cylinder/
 // hexagon exist on live files only via explicit shape_override (user/agent),
 // where they are declared, not guessed.
@@ -710,7 +710,7 @@ func aggregateVarRefs(fileID string, refs []parser.VarRef) []db.VarRefRow {
 	}
 	for name, a := range reads {
 		if len(name) < 2 && !nonRead[name] {
-			continue // single-char pure-read (loop counters etc.) — noise
+			continue // single-char pure-read (loop counters etc.) - noise
 		}
 		out = append(out, db.VarRefRow{
 			FileID:          fileID,
@@ -729,7 +729,7 @@ func aggregateVarRefs(fileID string, refs []parser.VarRef) []db.VarRefRow {
 // Resolution strategy (language-agnostic, works for any codebase):
 //
 //  1. Build an inverted symbol index: functionName → []fileID that define it.
-//     Any name NOT in this index is a built-in, stdlib, or external call — naturally filtered.
+//     Any name NOT in this index is a built-in, stdlib, or external call - naturally filtered.
 //
 //  2. Unique match (high confidence): exactly one project file defines the name → record the call.
 //
@@ -830,15 +830,15 @@ func buildCallGraph(sqlDB *sql.DB, root db.Root, rawCallsMap *sync.Map) error {
 
 	for callerFileID, calls := range rawCalls {
 		counts := make(map[callKey]int)
-		imported := fileImports[callerFileID] // may be nil — that's fine
+		imported := fileImports[callerFileID] // may be nil - that's fine
 
 		for _, call := range calls {
 			candidates := symbolToFiles[call.CalleeName]
 			if len(candidates) == 0 {
-				continue // not a project symbol — built-in or external
+				continue // not a project symbol - built-in or external
 			}
 
-			// Remove self-calls. Allocate a new slice — candidates shares its
+			// Remove self-calls. Allocate a new slice - candidates shares its
 			// backing array with the symbolToFiles map value, so filtering
 			// in place (candidates[:0]) would corrupt the shared index.
 			filtered := make([]string, 0, len(candidates))
@@ -854,10 +854,10 @@ func buildCallGraph(sqlDB *sql.DB, root db.Root, rawCallsMap *sync.Map) error {
 			var resolved []string
 			switch len(filtered) {
 			case 1:
-				// Unique match — only one project file defines this name.
+				// Unique match - only one project file defines this name.
 				resolved = filtered
 			default:
-				// Ambiguous — try to narrow using import relationships.
+				// Ambiguous - try to narrow using import relationships.
 				if len(imported) > 0 {
 					for _, fid := range filtered {
 						if imported[fid] {
@@ -1160,9 +1160,9 @@ func clusterLevel(plan *clusterPlan, root db.Root, input cluster.ClusterInput, p
 
 	log.Printf("[cluster] clusterLevel depth=%d files=%d parentID=%v", depth, len(files), parentID != nil)
 
-	// Too small to subdivide or at depth cap — assign directly to parent.
+	// Too small to subdivide or at depth cap - assign directly to parent.
 	if (len(files) < minClusterFiles && parentID != nil) || depth >= maxClusterDepth {
-		log.Printf("[cluster] depth=%d: too small (%d files) or at depth cap — assigning directly to parent", depth, len(files))
+		log.Printf("[cluster] depth=%d: too small (%d files) or at depth cap - assigning directly to parent", depth, len(files))
 		return assignAll(plan, files, parentID)
 	}
 
@@ -1370,7 +1370,7 @@ func buildCSharpDependenciesForFile(sqlDB *sql.DB, root db.Root, f db.File, nsTo
 		}
 		dstIDs, ok := nsToIDs[imp]
 		if !ok {
-			continue // external namespace — no matching file in the project
+			continue // external namespace - no matching file in the project
 		}
 		for _, dstID := range dstIDs {
 			if dstID == f.ID {
@@ -1482,7 +1482,7 @@ func rebuildDependenciesForFileWithIndex(sqlDB *sql.DB, root db.Root, f db.File,
 	for _, imp := range result.Imports {
 		dstID, ok := resolveImportFileID(f, imp, relToID)
 		if !ok || dstID == f.ID {
-			continue // external module — skip
+			continue // external module - skip
 		}
 		d := db.Dependency{
 			WorkspaceID:    root.WorkspaceID,

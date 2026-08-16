@@ -18,7 +18,7 @@ def main() -> None:
     currencies = ["USD", "EUR", "GBP"]
     while True:
         # Most payments are fine; occasionally a refund path produces a
-        # negative amount that the validator should reject — but doesn't.
+        # negative amount that the validator should reject - but doesn't.
         amount = round(random.uniform(5.0, 500.0), 2)
         if random.random() < 0.2:
             amount = -amount

@@ -87,7 +87,7 @@ export function StatusBar() {
           title="You set this delta aside. Nothing has been acknowledged yet."
         >
           <span className="axiom-status-bar__lamp" aria-hidden="true" />
-          <span>Delta set aside — review</span>
+          <span>Delta set aside - review</span>
         </button>
       )}
 

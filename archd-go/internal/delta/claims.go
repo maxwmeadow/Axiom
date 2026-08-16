@@ -9,7 +9,7 @@ import (
 // A Claim is the unit of architectural review.
 //
 // The first version of this feature listed raw journal changes, and a single
-// architectural fact — "Api now depends on Storage" — arrived as five separate
+// architectural fact - "Api now depends on Storage" - arrived as five separate
 // rows: one per call site, plus the import that came with them. That is a log,
 // not a diff. Nobody reviews five rows to learn one thing.
 //
@@ -47,7 +47,7 @@ const (
 )
 
 // Base severities. These rank what a change means structurally, before any
-// evidence weighting. Deliberately coarse — precision here would be invented.
+// evidence weighting. Deliberately coarse - precision here would be invented.
 var claimSeverity = map[ClaimKind]int{
 	ClaimCoupling:      7,
 	ClaimHubTransition: 8,
@@ -89,7 +89,7 @@ type Claim struct {
 	CreatesCycle bool `json:"createsCycle"`
 	// Internal claims stay hidden until the user asks for internal churn.
 	Internal bool `json:"internal"`
-	// FocusSystemIDs are what the camera frames — for a boundary claim the
+	// FocusSystemIDs are what the camera frames - for a boundary claim the
 	// boundary IS the claim, so both systems must be on screen.
 	FocusSystemIDs []string `json:"focusSystemIds,omitempty"`
 	// FocusFileIDs are framed when no system context applies.
@@ -113,7 +113,7 @@ type Claim struct {
 
 // SystemTopology is the CURRENT system-level dependency graph, supplied by the
 // caller (which has database access). It exists so a new coupling can be
-// checked for closing a cycle — the journal alone cannot know that.
+// checked for closing a cycle - the journal alone cannot know that.
 type SystemTopology map[string]map[string]bool
 
 // ArchitectureSnapshot is the exact system graph at one delta boundary.

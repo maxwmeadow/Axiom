@@ -150,7 +150,7 @@ test('sheet ops route correctly', async () => {
 
 test('infra catalog and creation route correctly', async () => {
   // The service must exist in the registry, so read the catalog rather than
-  // guessing a name — guessing is what a real agent would get wrong too.
+  // guessing a name - guessing is what a real agent would get wrong too.
   const catalog = await client.callTool('get_architecture', { scope: 'infra_catalog' })
   assert.equal(catalog.isError, false, catalog.text)
   const services = Array.isArray(catalog.payload)

@@ -1,5 +1,5 @@
 /**
- * archd — Axiom's local background daemon
+ * archd - Axiom's local background daemon
  *
  * Owns the ASM graph, watches the filesystem, serves the WebSocket hub
  * for the canvas, and serves the GQP HTTP API for AI agents.
@@ -51,7 +51,7 @@ async function startProject(config: ProjectConfig): Promise<void> {
   // Agent API is started once and reused; getter always resolves to current project's store
   if (!agentApiClose) {
     const api = startAgentApi(() => {
-      if (!state) throw new Error('[archd] No active project — open a project first')
+      if (!state) throw new Error('[archd] No active project - open a project first')
       return state.store
     }, wsHub, 7743)
     agentApiClose = api.close

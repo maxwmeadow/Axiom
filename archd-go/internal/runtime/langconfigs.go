@@ -1,14 +1,14 @@
 // Language configs for the generic DAP session (plan Phase 10).
 //
-//	C++  — gdb 14+ `--interpreter=dap`, function breakpoints.  LIVE-VERIFIED.
-//	Ruby — rdbg (debug gem) DAP over TCP, native breakpoints.  LIVE-VERIFIED
-//	       (call attribution; args unavailable — rdbg stackTrace bug, see below).
-//	Java — Microsoft java-debug adapter jar, source breakpoints.  Config provided;
-//	       requires the adapter jar (AXIOM_JAVA_DEBUG_JAR) — that adapter normally
+//	C++  - gdb 14+ `--interpreter=dap`, function breakpoints.  LIVE-VERIFIED.
+//	Ruby - rdbg (debug gem) DAP over TCP, native breakpoints.  LIVE-VERIFIED
+//	       (call attribution; args unavailable - rdbg stackTrace bug, see below).
+//	Java - Microsoft java-debug adapter jar, source breakpoints.  Config provided;
+//	       requires the adapter jar (AXIOM_JAVA_DEBUG_JAR) - that adapter normally
 //	       runs inside the JDT language server, so standalone use is environment-
 //	       specific and not verified here.
 //
-// Adding a language is this file plus a launch-detection clause — the session
+// Adding a language is this file plus a launch-detection clause - the session
 // machinery in daplang.go is shared.
 package runtime
 
@@ -59,12 +59,12 @@ var cppConfig = dapLangConfig{
 // rdbg quirks handled here:
 //   - DAP setBreakpoints is rejected for the main script ("… is not available"),
 //     so breakpoints are set natively with `-e "break file:line"` (external
-//     breakpoint mode) — these bind to method entry and hit on every call.
+//     breakpoint mode) - these bind to method entry and hit on every call.
 //   - the program runs from the command line and rdbg starts it on
 //     configurationDone, so no launch/attach request is sent (requestType none).
 //   - stackTrace HANGS on stopped worker threads (an rdbg threading bug), so we
 //     attribute the call from the stopped event's breakpoint description instead
-//     of stackTrace. Consequence: Ruby is call-only — argument VALUES are not
+//     of stackTrace. Consequence: Ruby is call-only - argument VALUES are not
 //     available (would require the frame/scopes stackTrace can't return here).
 //
 // rdbg is a Ruby script, so we invoke it through the ruby interpreter.
@@ -82,7 +82,7 @@ var rubyConfig = dapLangConfig{
 			rdbg = filepath.Join(filepath.Dir(rubyPath), "rdbg")
 		}
 		argv := []string{rubyPath, rdbg, "--open=vscode", "--port", fmt.Sprintf("%d", port)}
-		// Native file:line breakpoints on each watched method's def line — rdbg
+		// Native file:line breakpoints on each watched method's def line - rdbg
 		// binds these to method entry, so they hit on every call.
 		for _, w := range watches {
 			argv = append(argv, "-e", fmt.Sprintf("break %s:%d", filepath.ToSlash(w.RelPath), w.LineStart))
@@ -107,7 +107,7 @@ var javaConfig = dapLangConfig{
 	requestType:    "launch",
 	threadPrefix:   "thread",
 	findDebugger: func() (string, error) {
-		// The adapter jar is required — validate it up front so we never spawn
+		// The adapter jar is required - validate it up front so we never spawn
 		// `java -jar ""` and hang the handshake waiting on a dead process.
 		jar := os.Getenv("AXIOM_JAVA_DEBUG_JAR")
 		if jar == "" {
@@ -157,7 +157,7 @@ func findOnPath(name, envVar string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("%s not found — install it or set %s", name, envVar)
+	return "", fmt.Errorf("%s not found - install it or set %s", name, envVar)
 }
 
 // LangForCommand is the exported entry point used by the api package to detect
@@ -222,7 +222,7 @@ func javaMainClass(command []string) (string, []string) {
 		case arg == "-cp" || arg == "-classpath" || arg == "--class-path" || arg == "-p" || arg == "--module-path":
 			i++ // skip the flag's value
 		case strings.HasPrefix(arg, "-"):
-			// JVM flag (-Xmx…, -D…, -ea, …) — skip
+			// JVM flag (-Xmx…, -D…, -ea, …) - skip
 		default:
 			// first non-flag token is the main class
 			return arg, command[i+1:]

@@ -1,7 +1,7 @@
 // Package activity is the live edit-activity engine: the heartbeat of the
 // "always-true map". Every watcher-detected save becomes a weighted edit
 // burst; scores decay exponentially so yesterday's hotspot cools off on its
-// own. This replaces git-commit churn — commits capture finished work, but
+// own. This replaces git-commit churn - commits capture finished work, but
 // most of the interesting signal is live edits (especially agent edits)
 // between commits.
 //
@@ -17,7 +17,7 @@
 //     and weighted 0.5x so automated refactoring loops don't pin every file
 //     red; human edits weigh 1.0x.
 //
-// This package is a leaf — it deliberately imports no other axiom packages so
+// This package is a leaf - it deliberately imports no other axiom packages so
 // db, indexer, and api can all use it without cycles.
 package activity
 
@@ -35,10 +35,10 @@ const halfLifeMs = 24 * 60 * 60 * 1000
 // Lambda is the exponential decay constant (per millisecond).
 var Lambda = math.Ln2 / float64(halfLifeMs)
 
-// burstWindowMs — saves within this window collapse into one logged burst.
+// burstWindowMs - saves within this window collapse into one logged burst.
 const burstWindowMs = 5 * 60 * 1000
 
-// agentWindowMs — an edit within this long after agent MCP activity is
+// agentWindowMs - an edit within this long after agent MCP activity is
 // attributed to the agent.
 const agentWindowMs = 90 * 1000
 
@@ -108,7 +108,7 @@ func ActorFor(workspaceID string) string {
 
 // RecordBurst logs an edit burst in the activity log and returns the file's
 // new raw score + its decay anchor (now). The caller persists the pair on the
-// file row (db.UpdateFileActivity) and broadcasts — this package never writes
+// file row (db.UpdateFileActivity) and broadcasts - this package never writes
 // tables it doesn't own.
 func RecordBurst(db *sql.DB, workspaceID, fileID, actor string, weight float64, linesDelta, symbolsDelta int, prevScore float64, prevAt int64) (newScore float64, nowMs int64, err error) {
 	now := time.Now().UnixMilli()
@@ -139,7 +139,7 @@ func RecordBurst(db *sql.DB, workspaceID, fileID, actor string, weight float64, 
 
 // ─── Normalization ────────────────────────────────────────────────────────────
 
-// minDisplayScore — files below this decayed score render as cold (0).
+// minDisplayScore - files below this decayed score render as cold (0).
 // Prevents a quiet project from painting its only recent edit red.
 const minDisplayScore = 0.25
 
@@ -153,7 +153,7 @@ type ScoreEntry struct {
 // Normalize maps raw decayed scores to 0..1 percentile ranks within the
 // workspace, so red/orange thresholds work on quiet and busy projects alike.
 // Files under the absolute floor are omitted (render cold). A single hot file
-// ranks 1.0 — it IS the hotspot of this workspace.
+// ranks 1.0 - it IS the hotspot of this workspace.
 func Normalize(entries []ScoreEntry, nowMs int64) map[string]float64 {
 	type hotEntry struct {
 		id string

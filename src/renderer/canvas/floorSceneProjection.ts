@@ -68,7 +68,7 @@ export function projectFloorNodes({
   /**
    * How far the user has resized this frame away from its authored design size.
    *
-   * Both terms are CANONICAL — neither carries world scale — so the value says
+   * Both terms are CANONICAL - neither carries world scale - so the value says
    * nothing about nesting depth and nothing about interior compression. That
    * isolation is the whole point: chrome sized from it cannot react to a
    * container shrinking its contents, and depth stays expressed exactly once,
@@ -90,7 +90,7 @@ export function projectFloorNodes({
     const base = defaultSize(id)
     // Children are authored in the frame's CONTENT space. The minimum size is a
     // statement about the frame's OWN space, so interior compression has to be
-    // folded in here — a compressed interior genuinely does need less room.
+    // folded in here - a compressed interior genuinely does need less room.
     const interior = geometry.interiorScale
     const childRects = (siblingsByParent.get(id) ?? []).flatMap(childId => {
       const child = geometryById.get(childId)
@@ -122,7 +122,7 @@ export function projectFloorNodes({
   return descriptors.map(descriptor => {
     const { id, parentId, geometry, worldScale, contentScale, depth } = descriptor
     // A child sits in its parent's CONTENT space, so its position rides the
-    // parent's contentScale — not the parent's own world scale. The two are
+    // parent's contentScale - not the parent's own world scale. The two are
     // equal for every frame that does not compress its interior.
     const parentContentScale = parentId ? (contentScaleById.get(parentId) ?? worldScaleById.get(parentId) ?? 1) : 1
     const position = { x: geometry.x * parentContentScale, y: geometry.y * parentContentScale }

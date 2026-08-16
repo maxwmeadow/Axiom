@@ -228,7 +228,7 @@ export function minimumContainerSize(
   const right = Math.max(...children.map(child => child.x + child.width))
   const bottom = Math.max(...children.map(child => child.y + child.height))
 
-  // The minimum is the box that contains the children, plus insets — nothing
+  // The minimum is the box that contains the children, plus insets - nothing
   // more. It must never be derived from the container's *current* size: doing
   // that made the minimum track whatever width the frame already had, so a
   // container whose children sat near its left edge reported a minimum equal
@@ -244,7 +244,7 @@ export function minimumContainerSize(
     width: Math.max(floor.width, right + overhangLeft + insets.right),
     height: Math.max(floor.height, bottom + overhangTop + insets.bottom),
     // A west or north handle moves the frame ORIGIN, and children are
-    // compensated to stay visually put — so their local coordinates slide
+    // compensated to stay visually put - so their local coordinates slide
     // negative and the frame walks off their left/top edge. The east/south
     // minimum above cannot express that, because it is measured from an origin
     // those handles are moving. The constraint there is instead how far the

@@ -90,7 +90,7 @@ type CanvasMessage struct {
 
 // SheetNameTaken reports whether another sheet in the workspace already carries
 // this name. Two sheets with the same name are indistinguishable in the rail,
-// in dispatch history, and in anything an agent reads back — so the name is an
+// in dispatch history, and in anything an agent reads back - so the name is an
 // identity, not a label. Comparison ignores case and surrounding space because
 // "First Increment" and "first increment " are the same sheet to a human.
 func SheetNameTaken(db *sql.DB, workspaceID, name, excludeID string) (bool, error) {

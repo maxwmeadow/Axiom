@@ -1,4 +1,4 @@
-// NodeShell — the unified shape shell every canvas node converges on
+// NodeShell - the unified shape shell every canvas node converges on
 // (UML_UX_PLAN.md Revision 2b: node = Shell × Body × Status).
 //
 // Geometry is drawn as an inline SVG path INSIDE the node's bounding box:
@@ -36,7 +36,7 @@ const INSETS: Record<ShellShape, { top: number; right: number; bottom: number; l
 function shellPath(shape: ShellShape, w: number, h: number): string {
   switch (shape) {
     case 'classbox': {
-      // The class silhouette: chamfered top corners — the compartment box
+      // The class silhouette: chamfered top corners - the compartment box
       // with its "corners cut", distinct at a glance from a plain file card.
       const c = 11
       return `M ${c} 1 L ${w - c} 1 L ${w - 1} ${c} L ${w - 1} ${h - 1} L 1 ${h - 1} L 1 ${c} Z`
@@ -72,15 +72,15 @@ function cylinderRimPath(w: number): string {
   return `M 1 ${ry + 1} A ${w / 2 - 1} ${ry} 0 0 0 ${w - 1} ${ry + 1}`
 }
 
-// ShapeBackdrop — the fluid variant for nodes whose size is owned by the
+// ShapeBackdrop - the fluid variant for nodes whose size is owned by the
 // layout engine (file cards in the grid): absolutely fills the parent and
 // draws the shell path behind existing content. Parent must be
 // position:relative with its own background suppressed.
 // Chrome spec (design consult, 2026-07): one drop-shadow for every card
 // shape; accent/heat expressed as a PERIMETER stroke color shift (quiet =
 // hairline, hot/selected = full accent), never an asymmetric bar glued to
-// one edge — the silhouette IS the highlight surface.
-// Hard warm-gray offset shadow — a card pinned to the parchment board, never
+// one edge - the silhouette IS the highlight surface.
+// Hard warm-gray offset shadow - a card pinned to the parchment board, never
 // a soft black glow (which muddies on a light surface). Mirrors the mockup's
 // `3px 3px 0` material pass.
 export const CARD_SHADOW = 'drop-shadow(3px 3px 0 rgba(86,91,85,0.38))'
@@ -197,7 +197,7 @@ export function NodeShell({
     if (!el) return
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect()
-      // getBoundingClientRect is zoom-scaled inside ReactFlow — use offset* instead
+      // getBoundingClientRect is zoom-scaled inside ReactFlow - use offset* instead
       setSize({ w: el.offsetWidth || r.width, h: el.offsetHeight || r.height })
     })
     ro.observe(el)
@@ -232,7 +232,7 @@ export function NodeShell({
           style={{ filter: CARD_SHADOW, transition: 'stroke-opacity 0.2s ease' }}
         />
         {/* Paper stock, clipped to the silhouette by sharing the shell path.
-            Planned elements are the only nodes that take it — see the SHEET
+            Planned elements are the only nodes that take it - see the SHEET
             STOCK block: a sheet's material marks what is PROPOSED, so live
             code must look identical whichever surface you view it on. */}
         <path

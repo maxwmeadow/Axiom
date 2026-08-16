@@ -1,4 +1,4 @@
-// SheetRail — the drafting-cabinet drawer labels: The Floor pinned on top,
+// SheetRail - the drafting-cabinet drawer labels: The Floor pinned on top,
 // sheets beneath (UML_UX_PLAN.md "Navigation: the sheet rail").
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useShallow } from 'zustand/react/shallow'
@@ -113,7 +113,7 @@ export function SheetRail() {
         <span className="axiom-sheet-rail__section-rule" />
       </div>
 
-      {/* The Floor — the live master canvas, always pinned. */}
+      {/* The Floor - the live master canvas, always pinned. */}
       <button
         className={`${railButtonClass(activeSheetId === null)} axiom-sheet-rail__button--floor`}
         aria-current={activeSheetId === null ? 'page' : undefined}

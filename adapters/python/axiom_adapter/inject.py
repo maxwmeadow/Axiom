@@ -1,4 +1,4 @@
-"""Value injection (perturbation) — the proxy-wrapper pattern.
+"""Value injection (perturbation) - the proxy-wrapper pattern.
 
 Instead of mutating frame locals from a monitoring callback (impossible pre-
 PEP 667), the target function OBJECT is temporarily replaced with a wrapper
@@ -12,12 +12,12 @@ function object is rebound (and restored afterwards); methods are rebound on
 their class.
 
 Safety (plan §Safe Perturbation, revised):
-- values must be JSON primitives or flat list/dict of primitives — anything
+- values must be JSON primitives or flat list/dict of primitives - anything
   else is refused at arm time with an inject_error event
 - the parameter must exist in the function signature (checked at arm time)
 - one-shot by default; the wrapper restores all bindings before invoking the
   original so recursion or concurrent calls see the injection at most once
-- the wrapper never raises on adapter bugs — worst case it calls through
+- the wrapper never raises on adapter bugs - worst case it calls through
 
 Correlation: while the injected call runs, a contextvar carries the injection
 id; the Monitor stamps it onto call/return/exception events so the canvas can
@@ -68,7 +68,7 @@ def _unwrap_code(obj):
 
 
 def _loaded_modules() -> list:
-    """Snapshot sys.modules defensively — another thread importing during
+    """Snapshot sys.modules defensively - another thread importing during
     list() can raise 'dictionary changed size during iteration'."""
     for _ in range(3):
         try:
@@ -178,7 +178,7 @@ class Injector:
         value = spec.get("value")
 
         if not _validate_value(value):
-            self._error(inject_id, f"value of type {type(value).__name__} refused — "
+            self._error(inject_id, f"value of type {type(value).__name__} refused - "
                         "only primitives or flat list/dict of primitives can be injected")
             return
 
@@ -189,7 +189,7 @@ class Injector:
             int(spec.get("lineEnd", 0)),
         )
         if original is None:
-            self._error(inject_id, f"function {symbol!r} not found in loaded modules — "
+            self._error(inject_id, f"function {symbol!r} not found in loaded modules - "
                         "is the module imported yet?")
             return
 

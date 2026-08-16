@@ -46,7 +46,7 @@ export function AgentLane() {
 
     // Deferred, not immediate. Resolving these two fetches during the canvas's
     // first paint lands a render inside React Flow's initial fitView window and
-    // moves the camera — the Floor came up framed differently depending on how
+    // moves the camera - the Floor came up framed differently depending on how
     // busy the main thread happened to be. This panel is background context;
     // it is never needed in the first frame, and the 4s refresh below makes one
     // deferred load free.

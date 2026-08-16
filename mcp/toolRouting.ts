@@ -13,7 +13,7 @@
  *   SPLIT when the question genuinely differs.
  *
  * So the twelve graph reads become one `get_architecture` with a `scope`,
- * while `search_symbols` and `get_call_path` stay separate — different
+ * while `search_symbols` and `get_call_path` stay separate - different
  * questions, different mental models, and each schema stays small. A single
  * polymorphic mega-tool would trade a token saving for a worse one, since a
  * giant discriminated union costs more schema than the tools it replaced.
@@ -216,7 +216,7 @@ export function routeTool(name: string, args: Record<string, any>): RoutedCall |
   }
 }
 
-/** Every legacy tool a consolidated tool can reach — used to assert coverage. */
+/** Every legacy tool a consolidated tool can reach - used to assert coverage. */
 export function coveredLegacyTools(): string[] {
   return [
     ...Object.values(ARCHITECTURE_SCOPES),

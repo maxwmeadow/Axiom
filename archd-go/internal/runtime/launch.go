@@ -1,6 +1,6 @@
 // Target process launching. The agent (via MCP) or the UI asks archd to start
 // the user's application with the language adapter pre-loaded through
-// environment injection — zero changes to the user's codebase.
+// environment injection - zero changes to the user's codebase.
 //
 // For Python: the adapter directory (containing sitecustomize.py and the
 // axiom_adapter package) is prepended to PYTHONPATH. CPython's site module
@@ -174,7 +174,7 @@ func (m *Manager) pruneExitedTargetsLocked() {
 }
 
 // pumpTargetOutput forwards child output line-by-line. Lines longer than
-// maxTargetLineLen are truncated but the pipe keeps draining — abandoning the
+// maxTargetLineLen are truncated but the pipe keeps draining - abandoning the
 // read (bufio.Scanner's ErrTooLong behavior) would block the child on a full
 // pipe forever.
 func (m *Manager) pumpTargetOutput(t *Target, r io.Reader, stream string) {

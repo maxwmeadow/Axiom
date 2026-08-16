@@ -64,8 +64,8 @@ export interface ProposalLayout {
 /**
  * What the daemon actually returns: a header whose candidates live inside the
  * current round, since rounds are immutable and numbered. The panel wants one
- * flat thing to render, so the translation happens here — at the boundary,
- * once — rather than every component learning the wire format.
+ * flat thing to render, so the translation happens here - at the boundary,
+ * once - rather than every component learning the wire format.
  *
  * This mattered: reading `systems` off the header found nothing and the panel
  * rendered an empty review, which looks exactly like "the agent proposed

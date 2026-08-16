@@ -1,5 +1,5 @@
 // Sheet names are identity, not decoration. The rail, the dispatch history, and
-// every agent reading a work order refer to a sheet by name — two sheets called
+// every agent reading a work order refer to a sheet by name - two sheets called
 // "First Increment" make all three ambiguous. archd enforces uniqueness; these
 // helpers let the UI agree with it before the round trip, so the user is offered
 // a free name instead of a rejection.
@@ -24,7 +24,7 @@ export function findSheetByName<T extends NamedSheet>(
 }
 
 /**
- * `base` if it is free, otherwise "base 2", "base 3", … — the first name that
+ * `base` if it is free, otherwise "base 2", "base 3", … - the first name that
  * nothing else holds. Suggesting a name beats refusing one the user hasn't
  * typed yet.
  */

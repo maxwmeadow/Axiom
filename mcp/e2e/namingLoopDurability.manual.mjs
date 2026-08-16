@@ -15,7 +15,7 @@ const pass = []
 const fail = []
 const check = (label, ok, detail = '') => {
   ;(ok ? pass : fail).push(label)
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`)
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` - ${detail}` : ''}`)
 }
 const api = async (path, init) => {
   const res = await fetch(API + path, init)

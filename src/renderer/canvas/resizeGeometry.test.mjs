@@ -137,7 +137,7 @@ test('container minimum is the box around its children plus insets', () => {
 test('the minimum never depends on the container\'s current size', () => {
   // Regression: the old formula included `container.width - left`, so a frame
   // whose children hugged its left edge reported a minimum equal to its own
-  // width and refused to narrow at all — however much empty space it had.
+  // width and refused to narrow at all - however much empty space it had.
   const children = [
     { x: 10, y: 60, width: 220, height: 110 },
     { x: 10, y: 200, width: 220, height: 110 },

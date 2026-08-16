@@ -3,7 +3,7 @@
 // Spawns several worker goroutines that each call processPayment, so the
 // delve-based tracer can be tested for per-goroutine call attribution.
 //
-//	go run .            — run normally
+//	go run .            - run normally
 //	(launched by Axiom via dlv dap for tracing)
 package main
 

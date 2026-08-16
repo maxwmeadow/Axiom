@@ -1,4 +1,4 @@
-# Codex overnight brief — Phase 4: Trustworthy realization
+# Codex overnight brief - Phase 4: Trustworthy realization
 
 You are working in a **git worktree** at `C:\Users\maxst\VSCodeProjects\axiom-codex`
 on branch `codex/realization`, branched from `2cc492e`.
@@ -9,7 +9,7 @@ worktree, and do not switch branches.
 
 First thing: run `npm install` here. The worktree has no `node_modules`
 (gitignored), and you will need it for `tsc` and the renderer tests. It is
-slow — native modules plus `electron-rebuild` — so start it before anything
+slow - native modules plus `electron-rebuild` - so start it before anything
 else.
 
 ---
@@ -38,8 +38,8 @@ more trusted. Fix the truth first.
 - Matches a planned node to a file by **suffix-tolerant lowercase path**.
 - Matches members by **bare lowercase symbol name** via `memberName(...)`.
 
-Meanwhile the renderer captures genuinely structured metadata — visibility,
-parameters, return types, endpoints — in `src/renderer/store/sheetStore.ts` and
+Meanwhile the renderer captures genuinely structured metadata - visibility,
+parameters, return types, endpoints - in `src/renderer/store/sheetStore.ts` and
 `src/renderer/canvas/nodes/UmlMetadataPanel.tsx`.
 
 Result: a planned `interface RateLimiter { allow(key: string): boolean }` flips
@@ -72,7 +72,7 @@ Verify the structured contract, not the name:
   a coincidental suffix match is distinguishable from an exact one.
 
 Where the planned member declares nothing structured, fall back to today's
-name match — a diagram that only named a method should not suddenly stop
+name match - a diagram that only named a method should not suddenly stop
 realizing. Partial contracts are normal; treat missing detail as "not asserted",
 never as "mismatch".
 
@@ -93,7 +93,7 @@ about what evidence promotes something to `FLEXED` rather than `DRIFTED`.
 
 ### C. Indexer corroboration
 
-Agent-reported mappings are **evidence, not truth** — your phrase, and it is
+Agent-reported mappings are **evidence, not truth** - your phrase, and it is
 correct. Any mapping an agent claims must be confirmed against what the indexer
 actually parsed before it can reach `MATCHED`. An uncorroborated claim is at
 best `UNKNOWN`.
@@ -114,21 +114,21 @@ Work only in these:
 
 The other agent is actively editing these:
 
-- `mcp/**` — all of it
-- `archd-go/internal/api/**` — **except** `delta.go`
+- `mcp/**` - all of it
+- `archd-go/internal/api/**` - **except** `delta.go`
 - `archd-go/internal/db/agentlog.go`, `journal.go`, `worksession.go`
 - `src/renderer/canvas/agentAction*`, `agentAttentionProjection*`
 - `src/renderer/components/AgentLogPanel.tsx`, `Toolbar.tsx`
 - `src/renderer/App.tsx`
-- `src/renderer/store/graphStore.ts` — **except** the delta slice, if you truly
+- `src/renderer/store/graphStore.ts` - **except** the delta slice, if you truly
   must; prefer not to
 
-## Shared files — append only
+## Shared files - append only
 
-- `src/shared/types.ts` — add new types at the **end**, in your own section.
+- `src/shared/types.ts` - add new types at the **end**, in your own section.
   Do not reformat or reorder anything that exists.
-- `src/renderer/styles/global.css` — same rule: append a new section at the end.
-- `archd-go/internal/db/db.go` — you should need **no** schema change;
+- `src/renderer/styles/global.css` - same rule: append a new section at the end.
+- `archd-go/internal/db/db.go` - you should need **no** schema change;
   `planned_nodes` already carries structured members. If you genuinely need
   one, add it at the end of the additive-migration list and change nothing else.
 
@@ -140,7 +140,7 @@ The other agent is actively editing these:
    records behavior that is intentionally tuned. Do not regress it.
 2. **One consequence, one animation.** Two live streams reach the canvas and
    only the semantic stream may animate. If you find yourself adding an
-   animation, check `src/renderer/canvas/agentActionVisual.ts` first — the rule
+   animation, check `src/renderer/canvas/agentActionVisual.ts` first - the rule
    is encoded there with tests. Double-firing animations is a known hazard the
    contract explicitly forbids.
 3. **Run `npm run build:archd` after every Go change.** TDM-GCC produces broken

@@ -168,7 +168,7 @@ test('the header states a task, not a status', () => {
   )
   assert.equal(
     describeProgress(readProgress([system('a', { decision: 'approved', fileCount: 40 })])),
-    'All 1 approved — 40 files placed',
+    'All 1 approved - 40 files placed',
   )
   assert.equal(describeProgress(readProgress([])), 'Nothing proposed yet.')
 })

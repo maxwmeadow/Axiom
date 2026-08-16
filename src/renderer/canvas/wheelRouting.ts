@@ -7,7 +7,7 @@
  * over most of a revealed node, including lists too short to scroll at all.
  *
  * Instead a region claims the wheel only while it can actually consume it. The
- * list scrolls until it reaches a boundary, then the canvas resumes zooming —
+ * list scrolls until it reaches a boundary, then the canvas resumes zooming -
  * the same chaining behavior a browser gives nested scroll areas.
  */
 export interface WheelScrollMetrics {

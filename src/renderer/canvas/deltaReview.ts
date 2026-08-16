@@ -124,7 +124,7 @@ export function buildDeltaReview(
 /**
  * The agent's own words for why a claim exists. Falls back from the closing
  * summary to the declared goal, because an in-flight session has a goal but no
- * summary yet. Returns null when nobody narrated the change — the panel says
+ * summary yet. Returns null when nobody narrated the change - the panel says
  * so explicitly rather than pretending the silence means nothing.
  */
 export function claimRationale(
@@ -204,7 +204,7 @@ function illuminated<T extends MarkableNode>(nodes: T[], targets: string[]): Set
 
 /**
  * Stamps marks and ghosting onto canvas nodes as a projection, never as canvas
- * state — the same discipline the living FX layer uses. Layout, selection and
+ * state - the same discipline the living FX layer uses. Layout, selection and
  * zoom passes cannot overwrite a review in progress, and ending the review
  * restores the untouched nodes automatically.
  */
@@ -243,7 +243,7 @@ export function applyDeltaMarks<T extends MarkableNode>(
 
 /**
  * The one-line headline. It counts CLAIMS, because that is what the user is
- * being asked to review — counting raw events is what made the first version
+ * being asked to review - counting raw events is what made the first version
  * say "5 cross-boundary edges" about a single new dependency.
  */
 export function deltaHeadline(review: DeltaReview): string {

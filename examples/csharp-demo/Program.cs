@@ -2,7 +2,7 @@
 //
 // Several worker tasks each call ProcessPayment (a synchronous method) so the
 // netcoredbg-based tracer can be exercised for call attribution + argument
-// reading. Kept synchronous on purpose — async methods lift arguments into
+// reading. Kept synchronous on purpose - async methods lift arguments into
 // compiler-generated state-machine fields (documented Phase 9 limitation).
 using System;
 using System.Threading;

@@ -19,8 +19,8 @@ export interface FrameGeometry {
   /**
    * The scale this frame imposes on its CONTENTS, on top of its own. It is
    * deliberately NOT part of the frame's own rendered size, so a container can
-   * compress what it holds without its own geometry — or anything derived from
-   * that geometry, chrome included — moving at all.
+   * compress what it holds without its own geometry - or anything derived from
+   * that geometry, chrome included - moving at all.
    */
   interiorScale: number
 }
@@ -53,7 +53,7 @@ export interface ReferenceFrameTransform {
 }
 
 export interface WorldFrame extends Rect {
-  /** World scale of the frame itself — drives its own width/height. */
+  /** World scale of the frame itself - drives its own width/height. */
   scale: number
   /** World scale this frame hands to its children. */
   contentScale: number
@@ -71,9 +71,9 @@ export const DEFAULT_FRAME_SCALE = 1
  * THE gap. One number for every clearance inside a frame: between two
  * occupants, and between an occupant and the frame's own edge.
  *
- * Six different values used to express this idea — 12 for a drop slide, 36 for
+ * Six different values used to express this idea - 12 for a drop slide, 36 for
  * a newly indexed node, 36 for a fresh pack, 42 for tidy, 28 for the frame
- * inset — so the same arrangement packed differently depending on which code
+ * inset - so the same arrangement packed differently depending on which code
  * path produced it. Every in-frame path now reads this constant. Changing the
  * breathing room of the whole canvas is changing this line.
  */
@@ -89,7 +89,7 @@ export const FRAME_ROOT_GAP = 96
 /**
  * The only spacing a HAND-PLACED node has to respect.
  *
- * The gaps above are how Axiom arranges things when it is the one deciding —
+ * The gaps above are how Axiom arranges things when it is the one deciding -
  * a fresh pack, a tidy, a newly indexed file. They are preferences about how a
  * machine-authored layout should look. They are NOT laws, and treating them as
  * laws is what made a dropped node fly a hundred units away from a system it
@@ -97,7 +97,7 @@ export const FRAME_ROOT_GAP = 96
  * got rejected anyway for sitting inside a moat that only exists for tidiness.
  *
  * When a person places a node, where they let go is where it goes. The single
- * exception is that two nodes may not share a line — at zero clearance two
+ * exception is that two nodes may not share a line - at zero clearance two
  * borders stack into one thick stroke and the boundary between two nodes stops
  * being readable. A few units of daylight is all that takes, so this is small
  * and, unlike the packing gaps, does not scale with nesting: it exists to keep
@@ -105,13 +105,13 @@ export const FRAME_ROOT_GAP = 96
  */
 export const DROP_CLEARANCE = 6
 
-/** World-space title font sizes per depth — fixed, no counter-scaling. */
+/** World-space title font sizes per depth - fixed, no counter-scaling. */
 export const DEPTH_TITLE_PX = [24, 14, 10, 8]
 
 /**
  * The band a system/platform frame's tab occupies, in the frame's CANONICAL
  * space. Delegates to `systemTabHeight`, the chrome's own authority, rather
- * than restating the formula — the two used to disagree by more than 2x, which
+ * than restating the formula - the two used to disagree by more than 2x, which
  * is what made the gap above a frame's first child several times the gap on
  * every other side.
  *
@@ -128,7 +128,7 @@ export function frameChromeBand(canonicalHeight: number, depth: number, worldSca
 /**
  * The insets a frame's occupants must respect. Three sides are the plain gap.
  * The top is the tab plus that same gap, because a system frame's top border
- * is not where its usable space begins — the tab sits between them. That is
+ * is not where its usable space begins - the tab sits between them. That is
  * the only asymmetry, and it is exactly as tall as the tab really is.
  */
 export function frameContentInsets(
@@ -187,8 +187,8 @@ export function contentRect(
 
 /**
  * The usable interior of a frame, with the tab band accounted for. Every path
- * that asks "where may a child sit inside this frame?" — drop placement, resize
- * clamping, resize minimums, packing, tidy — must go through here, so they can
+ * that asks "where may a child sit inside this frame?" - drop placement, resize
+ * clamping, resize minimums, packing, tidy - must go through here, so they can
  * never disagree about where the frame's usable space begins.
  */
 export function contentRectFor(

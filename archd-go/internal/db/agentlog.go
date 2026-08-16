@@ -9,7 +9,7 @@ import (
 // The agent action log is the record of what an agent DID, as opposed to what
 // changed on disk.
 //
-// The structural journal answers "how is the architecture different now" — it
+// The structural journal answers "how is the architecture different now" - it
 // deliberately ignores anything that changed nothing. This log answers a
 // different question: "what is my agent doing right now, and what did it do?"
 // A read changes nothing and still matters enormously, because watching an
@@ -21,7 +21,7 @@ import (
 
 // Action kinds, coarse enough to drive distinct canvas choreography.
 const (
-	ActionRead    = "read"    // inspecting the graph — an attention signal
+	ActionRead    = "read"    // inspecting the graph - an attention signal
 	ActionTrace   = "trace"   // following a path through the code
 	ActionWrite   = "write"   // curating the architecture itself
 	ActionPlan    = "plan"    // forward loop: planning, dispatch, replies

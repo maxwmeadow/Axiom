@@ -2,7 +2,7 @@
  * Every rule about what is selected on the canvas.
  *
  * There is exactly ONE authoritative set. Nothing else may add to it on the way
- * to the screen — a projection that ORs in some other notion of a "current"
+ * to the screen - a projection that ORs in some other notion of a "current"
  * node is how a node stays highlighted after the user has moved on, and how a
  * later drag silently picks it up and moves it too.
  *
@@ -20,8 +20,8 @@
  * The first two are React Flow's, applied on pointer DOWN and arriving here as
  * ordered select changes. Axiom must reconcile them, never recompute them:
  * deriving the modifier toggle a second time in the click handler undid the
- * first one, so a modifier click appeared to do nothing while a plain click —
- * which lands in the same place however many times it is applied — looked fine.
+ * first one, so a modifier click appeared to do nothing while a plain click -
+ * which lands in the same place however many times it is applied - looked fine.
  * The rest of the rules are Axiom's, and live here as pure functions.
  */
 import type { Node, NodeChange } from '@xyflow/react'
@@ -65,7 +65,7 @@ export function isAdditiveEvent(event: {
 
 /**
  * Beginning a drag. Grabbing something that was not part of the selection makes
- * it the selection — you are acting on that node, not on whatever you last
+ * it the selection - you are acting on that node, not on whatever you last
  * touched. Grabbing something already in a multi-selection keeps the group, so
  * dragging one member moves them all.
  *

@@ -1,10 +1,10 @@
-// C#/.NET runtime tracing via netcoredbg (plan Phase 9, general .NET — not Unity).
+// C#/.NET runtime tracing via netcoredbg (plan Phase 9, general .NET - not Unity).
 //
 // Mirrors the delve integration: archd is a DAP CLIENT connecting to
 // `netcoredbg --interpreter=vscode --server=PORT`, over the same TCP DAP
 // client. Same empirically-established constraints as Go (see Phase 3): DAP
 // breakpoints are BLOCKING (CoreCLR suspends all managed threads on a hit), so
-// this is INSPECTION MODE only — low-frequency watches, call events only (no
+// this is INSPECTION MODE only - low-frequency watches, call events only (no
 // return events; step-out under the thread pool is a freeze/deadlock trap).
 //
 // Unlike Go, C# watches bind by SOURCE (file:line) rather than function name:
@@ -218,7 +218,7 @@ func (s *DotnetSession) setBreakpoints() error {
 		byFile[w.AbsPath] = append(byFile[w.AbsPath], w)
 	}
 	if len(byFile) == 0 {
-		log.Printf("netcoredbg: session %s has no watches — no breakpoints set", s.ID)
+		log.Printf("netcoredbg: session %s has no watches - no breakpoints set", s.ID)
 		return nil
 	}
 	total := 0
@@ -267,7 +267,7 @@ func (s *DotnetSession) handleStopped(body json.RawMessage) {
 		return
 	}
 	if !strings.Contains(st.Reason, "breakpoint") {
-		// pause / step / entry / exception — resume so the process never wedges.
+		// pause / step / entry / exception - resume so the process never wedges.
 		s.resume(st.ThreadID)
 		return
 	}
@@ -299,7 +299,7 @@ func (s *DotnetSession) handleStopped(body json.RawMessage) {
 }
 
 // resume continues the process after a stop. CoreCLR freezes all managed
-// threads on a hit, so a failed continue permanently wedges the target — log
+// threads on a hit, so a failed continue permanently wedges the target - log
 // it loudly rather than swallowing it.
 func (s *DotnetSession) resume(threadID int) {
 	if _, err := s.client.request("continue", map[string]any{"threadId": threadID}); err != nil {
@@ -337,7 +337,7 @@ func (s *DotnetSession) inspect(threadID int) (string, string, json.RawMessage) 
 			break
 		}
 	}
-	// Fall back to the first scope with variables — async methods surface args
+	// Fall back to the first scope with variables - async methods surface args
 	// under Locals (lifted state-machine fields) rather than an Arguments scope.
 	if argsRef == 0 {
 		for _, sc := range scopes.Scopes {
@@ -372,7 +372,7 @@ func (s *DotnetSession) inspect(threadID int) (string, string, json.RawMessage) 
 // matches and whose [LineStart, LineEnd] contains the line.
 func (s *DotnetSession) matchWatch(framePath string, frameLine int) string {
 	if framePath == "" {
-		return "" // no source info — don't collide with empty-path watches
+		return "" // no source info - don't collide with empty-path watches
 	}
 	fp := normalizePath(framePath)
 	best := ""
@@ -421,7 +421,7 @@ func (s *DotnetSession) finish(status string) {
 	delete(s.mgr.dotnetSessions, s.ID)
 	s.mgr.mu.Unlock()
 
-	log.Printf("netcoredbg: session %s %s — %d breakpoint hits, avg stop→continue %.1fms",
+	log.Printf("netcoredbg: session %s %s - %d breakpoint hits, avg stop→continue %.1fms",
 		s.ID, status, hits, avg)
 	s.mgr.hub.Broadcast("runtime:session", map[string]any{
 		"workspaceId": s.WorkspaceID,
@@ -501,5 +501,5 @@ func findNetcoredbg() (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("netcoredbg not found — install it (winget install Samsung.netcoredbg) or set AXIOM_NETCOREDBG_PATH")
+	return "", fmt.Errorf("netcoredbg not found - install it (winget install Samsung.netcoredbg) or set AXIOM_NETCOREDBG_PATH")
 }

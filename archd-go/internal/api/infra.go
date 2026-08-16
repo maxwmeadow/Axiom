@@ -1,13 +1,13 @@
 // Infra layer HTTP endpoints (INFRA_LAYER_PLAN.md Phase I1).
 //
-//	GET  /api/registry/services              — resolved service registry (categories + services)
-//	GET  /api/infra?workspace=               — list infra nodes + their edges
-//	POST /api/infra                          — create/upsert an infra node
-//	PUT  /api/infra/:id                      — update (rename, reskin, config, status)
-//	DELETE /api/infra/:id?workspace=         — delete node (edges cleaned by trigger)
-//	POST /api/infra/:id/position             — move on canvas {x, y, workspaceId}
-//	POST /api/infra/connect                  — create a typed file/system→infra edge
-//	DELETE /api/infra/edge/:id?workspace=    — remove an infra edge
+//	GET  /api/registry/services              - resolved service registry (categories + services)
+//	GET  /api/infra?workspace=               - list infra nodes + their edges
+//	POST /api/infra                          - create/upsert an infra node
+//	PUT  /api/infra/:id                      - update (rename, reskin, config, status)
+//	DELETE /api/infra/:id?workspace=         - delete node (edges cleaned by trigger)
+//	POST /api/infra/:id/position             - move on canvas {x, y, workspaceId}
+//	POST /api/infra/connect                  - create a typed file/system→infra edge
+//	DELETE /api/infra/edge/:id?workspace=    - remove an infra edge
 package api
 
 import (
@@ -60,7 +60,7 @@ func (s *Server) applyService(n *db.InfraNode) error {
 	if n.Service != "" {
 		svc, ok := services.Get(n.Service)
 		if !ok {
-			return fmt.Errorf("unknown service %q — see GET /api/registry/services", n.Service)
+			return fmt.Errorf("unknown service %q - see GET /api/registry/services", n.Service)
 		}
 		n.Category = svc.Category
 		n.Provider = svc.Provider

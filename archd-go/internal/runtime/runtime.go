@@ -137,7 +137,7 @@ const (
 	eventBufferCap   = 5000
 	sessionStaleTime = 30 * time.Second
 	// helloDeadline bounds how long a fresh connection may sit silent before
-	// identifying itself — otherwise a hung client leaks the goroutine+socket
+	// identifying itself - otherwise a hung client leaks the goroutine+socket
 	// forever (pruneLoop only sees registered sessions).
 	helloDeadline = 15 * time.Second
 	// readDeadline is rolled forward on every message; adapters heartbeat
@@ -242,7 +242,7 @@ func (m *Manager) pruneLoop() {
 		}
 		m.mu.Unlock()
 		for _, s := range stale {
-			log.Printf("runtime: session %s (%s pid %d) stale — closing", s.ID, s.Language, s.PID)
+			log.Printf("runtime: session %s (%s pid %d) stale - closing", s.ID, s.Language, s.PID)
 			s.conn.Close() // handleConn's read loop unwinds and removes it
 		}
 	}
@@ -355,7 +355,7 @@ func (m *Manager) handleEvent(sess *Session, ae AdapterEvent) {
 
 // RecordWatchEvent updates watch stats, appends to the ring buffer, and
 // broadcasts a runtime:<kind> event. Shared by the in-process adapter path
-// (TCP) and the delve DAP path — both produce the same normalized events.
+// (TCP) and the delve DAP path - both produce the same normalized events.
 func (m *Manager) RecordWatchEvent(sessionID string, ae AdapterEvent) {
 	m.mu.Lock()
 	w, ok := m.watches[ae.WatchID]
@@ -449,7 +449,7 @@ func (m *Manager) AddWatch(w *Watch) int {
 	}
 	m.watches[w.ID] = w
 	sessions := m.sessionsForLocked(w.WorkspaceID)
-	wCopy := *w // marshal a copy — the live struct is mutated under m.mu by handleEvent
+	wCopy := *w // marshal a copy - the live struct is mutated under m.mu by handleEvent
 	m.mu.Unlock()
 
 	// Send asynchronously: a hung session's 5s write timeout must not stack up
@@ -468,7 +468,7 @@ func (m *Manager) AddWatch(w *Watch) int {
 // read loop unwinds immediately instead of waiting for the stale prune.
 func (m *Manager) sendOrDrop(s *Session, v any) {
 	if err := s.send(v); err != nil {
-		log.Printf("runtime: send to session %s failed (%v) — closing", s.ID, err)
+		log.Printf("runtime: send to session %s failed (%v) - closing", s.ID, err)
 		s.conn.Close()
 	}
 }
@@ -507,7 +507,7 @@ func (m *Manager) RemoveWatch(workspaceID, id, fileID, symbol string) *Watch {
 	return found
 }
 
-// watchesForLocked returns value copies — callers marshal them after the
+// watchesForLocked returns value copies - callers marshal them after the
 // lock is released.
 func (m *Manager) watchesForLocked(workspaceID string) []Watch {
 	out := make([]Watch, 0)
@@ -531,7 +531,7 @@ func (m *Manager) sessionsForLocked(workspaceID string) []*Session {
 
 // Snapshot returns the current runtime state for a workspace: connected
 // sessions, active watches with live stats, launched targets, and the most
-// recent events. Everything is deep-copied under the lock — the caller JSON-
+// recent events. Everything is deep-copied under the lock - the caller JSON-
 // encodes without holding it, while handleEvent keeps mutating the originals.
 func (m *Manager) Snapshot(workspaceID string) map[string]any {
 	m.mu.RLock()

@@ -1,4 +1,4 @@
-# Axiom — Product Plan
+# Axiom - Product Plan
 
 Status: living document. Update the status markers as slices land.
 Established: 2026-07-25 (product reframe). Last updated: 2026-07-30.
@@ -14,7 +14,7 @@ behavior that must not regress), [UML_UX_PLAN.md](UML_UX_PLAN.md),
 
 **Axiom is the shared command surface where a developer and their agents build
 software together.** Bidirectional UML is the *substrate* that makes that
-possible — it is not the product.
+possible - it is not the product.
 
 The framing this replaced was "a bidirectional UML workbench", which sounds
 like documentation you maintain. Nobody opens documentation daily. The reframe
@@ -30,7 +30,7 @@ survives the research:
 
 ### Why this is defensible
 
-By 2026 the spec-driven-development space is crowded — spec-kit, Kiro, BMAD,
+By 2026 the spec-driven-development space is crowded - spec-kit, Kiro, BMAD,
 Cursor, Antigravity all ship "living specifications". **Every one of them is
 text.** None is spatial, and none shows you the system *as it is being built*.
 
@@ -43,25 +43,25 @@ right now, and cannot show which module drifted from what you intended.
 When an agent makes a file, you see it animate in. When a file is edited, you
 see it. When a function is written that calls something, you see the line trace
 to the other file. Semantic *systems* (clustered from real topology, not
-folders) are already a core differentiator — this is **not** literal UML.
+folders) are already a core differentiator - this is **not** literal UML.
 
 ---
 
 ## 2. The daily loop
 
-Mission Control is one surface for planning, reviewing, and prompting — all
+Mission Control is one surface for planning, reviewing, and prompting - all
 visual, all live, all bidirectional.
 
-1. **Morning delta** — open Axiom, see what agents changed while you weren't
+1. **Morning delta** - open Axiom, see what agents changed while you weren't
    watching, rendered as architectural claims. Confirm or reject.
-2. **Watch and steer** — as agents work, the map is live: planned (grey) →
+2. **Watch and steer** - as agents work, the map is live: planned (grey) →
    active (pulsing) → realized (green). See five parallel agents without
    reading a diff.
-3. **Draw the next increment** — sketch the system/class/edge that should
+3. **Draw the next increment** - sketch the system/class/edge that should
    exist next.
-4. **Dispatch** — the drawing becomes a build spec queued through the MCP;
+4. **Dispatch** - the drawing becomes a build spec queued through the MCP;
    agents pick it up, and can post their *own* planned nodes for you to confirm.
-5. **Zoom to truth** — the escape hatch that keeps it honest: any box → its
+5. **Zoom to truth** - the escape hatch that keeps it honest: any box → its
    files → its symbols → source, instantly.
 
 Steps 1 and 2 are why you open it every day. That is where the agents are, and
@@ -90,18 +90,18 @@ constraints, not preferences:
 ## 4. Build sequence
 
 Vertical slices. Each is a real, shippable increment, and each is a view over
-the same event stream — so nothing is throwaway.
+the same event stream - so nothing is throwaway.
 
 | # | Slice | Status |
 |---|---|---|
-| ① | **Living Canvas** — reverse-sync choreography | ✅ Shipped |
-| ② | **Morning Delta** — architectural diff review | ✅ Built (needs live validation) |
-| ③ | **Mission Control** — forward loop, draw → dispatch → green | ✅ Built |
-| ④ | **Onboarding** — first-run delivers the "aha" | ✅ Built |
+| ① | **Living Canvas** - reverse-sync choreography | ✅ Shipped |
+| ② | **Morning Delta** - architectural diff review | ✅ Built (needs live validation) |
+| ③ | **Mission Control** - forward loop, draw → dispatch → green | ✅ Built |
+| ④ | **Onboarding** - first-run delivers the "aha" | ✅ Built |
 
 ---
 
-## ① Living Canvas — ✅ Shipped
+## ① Living Canvas - ✅ Shipped
 
 **Goal:** the map reacts visibly and legibly to real code changes, whoever
 makes them.
@@ -120,7 +120,7 @@ The pipeline already existed (fsnotify watcher → `ReindexFile` →
 - [x] Flows resolve to the nearest visible semantic ancestor at current zoom;
       internal flows surface as one container signal, never a self-loop
 - [x] Symbol-level truth: only edges whose participating symbols actually
-      changed animate — an unrelated edit cannot spray false activity
+      changed animate - an unrelated edit cannot spray false activity
 - [x] Coincident IMPORTS + CALLS renders one pulse, not two
 - [x] Camera: `fitView` capped at `maxZoom 1.0`, debounced reframe-on-growth
       that yields to manual navigation
@@ -137,7 +137,7 @@ The pipeline already existed (fsnotify watcher → `ReindexFile` →
 
 ---
 
-## ② Morning Delta — ✅ Built, ⚠️ needs live validation
+## ② Morning Delta - ✅ Built, ⚠️ needs live validation
 
 **Goal:** answer "what did my agents change while I wasn't watching?" as an
 architectural diff you can act on.
@@ -146,9 +146,9 @@ The problem this solves: live choreography is *transient*. A `graph:patch` only
 reaches a renderer that happens to be attached. The delta is what you get when
 you were not there.
 
-### Done — durable substrate
+### Done - durable substrate
 
-- [x] `structural_events` journal — denormalized, survives deletion of the file
+- [x] `structural_events` journal - denormalized, survives deletion of the file
       it describes, holds no foreign keys into semantic tables
 - [x] **Net effect, not event log**: create+delete cancels, wire+unwire
       cancels, repeated saves collapse
@@ -157,12 +157,12 @@ you were not there.
       never moves backwards; ack covers the window actually shown
 - [x] 30-day retention with prune on read
 - [x] First index is a **baseline**, not a delta. Classifier migrations
-      likewise — they change how Axiom reads code, not the code
-- [x] `ReconcileRoot` — catch-up scan at reopen through the same
+      likewise - they change how Axiom reads code, not the code
+- [x] `ReconcileRoot` - catch-up scan at reopen through the same
       `ReindexFile`/`RemoveFile` paths, so work done while Axiom was **closed**
       produces a true delta. Never re-clusters, never touches layout
 
-### Done — claims (the review unit)
+### Done - claims (the review unit)
 
 The first version listed raw changes and was unreadable: one architectural fact
 arrived as five rows. Claims fixed that.
@@ -173,33 +173,33 @@ arrived as five rows. Claims fixed that.
       twenty files importing one module = one claim, twenty evidence
 - [x] IMPORTS accompanying a CALLS between the same files is not separate
       evidence
-- [x] **Unclassified ≠ a different system** — a file the classifier hasn't
+- [x] **Unclassified ≠ a different system** - a file the classifier hasn't
       placed has no boundary to cross
 - [x] Claim kinds: coupling, decoupling, system added/removed, membership,
       unclassified, internal
-- [x] **Cycle detection** — a coupling that closes a loop through current
+- [x] **Cycle detection** - a coupling that closes a loop through current
       topology outranks everything
 - [x] Ranking by consequence with sub-linear evidence weighting
 - [x] Intra-system churn collapsed to one muted claim per system, hidden by
       default
 - [x] Titles state content ("Api now depends on Storage"), never taxonomy
 
-### Done — narration (bidirectional)
+### Done - narration (bidirectional)
 
 Topology says what moved; only the agent that moved it can say why.
 
 - [x] `work_sessions` table; journal rows use exact declared scope for
       parallel attribution and remain unexplained when ownership is ambiguous
 - [x] MCP tools: **`start_work`**, **`note_work`**, **`finish_work`**
-- [x] Claims show the agent's own words — closing summary, falling back to the
+- [x] Claims show the agent's own words - closing summary, falling back to the
       declared goal while work is in flight
 - [x] Un-narrated agent changes marked **UNEXPLAINED** rather than hidden
 - [x] Starting new work closes that MCP client's forgotten session without
       evicting other agents working in parallel
 
-### Done — review surface
+### Done - review surface
 
-- [x] Docked full-height panel (replaced a horizontal scrubber — review is
+- [x] Docked full-height panel (replaced a horizontal scrubber - review is
       triage, not playback)
 - [x] Panel sets its own type scale; legibility outranks chrome consistency
 - [x] Narration header, then ranked claims, evidence folded away
@@ -208,8 +208,8 @@ Topology says what moved; only the agent that moved it can say why.
       its containers stay lit
 - [x] Claim-aware framing: a boundary claim frames both **systems**; zoom floor
       and ceiling so you never land illegibly
-- [x] Marks reuse the living vocabulary — green created, teal edited, red
-      deleted — and outrank churn heat during review
+- [x] Marks reuse the living vocabulary - green created, teal edited, red
+      deleted - and outrank churn heat during review
 - [x] Delta refreshes when the app regains focus; overlapping reads coalesce,
       active reviews stay stable, and stale workspace responses are ignored
 - [x] Reopen catch-up runs the guarded live-classification pass after file
@@ -223,7 +223,7 @@ Topology says what moved; only the agent that moved it can say why.
 ### Open items
 
 - [ ] End-to-end validation with a real agent session (Antigravity + MCP)
-- [x] **Interface bypass** claims — intentionally rejected: assumes systems declare
+- [x] **Interface bypass** claims - intentionally rejected: assumes systems declare
       public entrypoints, and Axiom's systems are clustered, not declared
 
 ### Where it lives
@@ -241,7 +241,7 @@ attribution: `archd-go/internal/db/worksession.go`.
 
 ---
 
-## ③ Mission Control — ✅ Built
+## ③ Mission Control - ✅ Built
 
 **Goal:** close the forward loop. Planning, prompting and reviewing, all
 visual.
@@ -251,28 +251,28 @@ reverse loop (②) is done; this is map → code.
 
 ### Planned scope
 
-- [x] **Draw the increment** — sketch the system, class, or edge that should
+- [x] **Draw the increment** - sketch the system, class, or edge that should
       exist next (authoring already exists via UML_UX_PLAN Rev 2)
-- [x] **Dispatch** — the active sheet becomes an immutable approved build spec
+- [x] **Dispatch** - the active sheet becomes an immutable approved build spec
       attached to the canvas outbox message agents drain through MCP
-- [x] **Agent proposes** — the agent reads the queue and posts its *own*
+- [x] **Agent proposes** - the agent reads the queue and posts its *own*
       planned nodes describing what it intends to do, for you to confirm
       before it writes code
-- [x] **Confirm / reject** — approval is a first-class gesture on the canvas;
+- [x] **Confirm / reject** - approval is a first-class gesture on the canvas;
       pending proposals are excluded from reconciliation and executable specs,
       and agents poll `get_plan_status` before implementation
-- [x] **Watch it go green** — planned → partial → realized as the agent builds.
+- [x] **Watch it go green** - planned → partial → realized as the agent builds.
       `db.ReconcilePlanned` already drives this on every reindex
-- [x] **Message alongside the drawing** — dispatch carries the user's text,
+- [x] **Message alongside the drawing** - dispatch carries the user's text,
       durable selection refs, exact sheet/Floor context, and approved build spec
-- [x] **Live agent presence** — show which boundaries agents are working right
+- [x] **Live agent presence** - show which boundaries agents are working right
       now, so parallel work is visible without reading diffs
-- [x] **Drift from intent** — agent claims are matched against immutable
+- [x] **Drift from intent** - agent claims are matched against immutable
       dispatched Sheet snapshots and labeled **EXPECTED** or **DRIFT**
 
 ### What ② already set up for this
 
-Claims carry a `sessionId` and assert something *about the architecture* —
+Claims carry a `sessionId` and assert something *about the architecture* -
 which is exactly what intent confirms or denies. Once planned elements exist
 forward, a claim can be matched against one and marked **expected** or
 **unexpected**. That converts the Morning Delta from "what changed" into
@@ -296,15 +296,15 @@ Drift matching: `archd-go/internal/delta/intent.go`,
 
 ---
 
-## ④ Onboarding — ✅ Built
+## ④ Onboarding - ✅ Built
 
 Deliberately last, so it has a real payoff to deliver.
 
-- [x] First run **materializes your real codebase alive** — reverse sync
+- [x] First run **materializes your real codebase alive** - reverse sync
       proving itself, not "configure an index"
-- [x] Then one **draw → dispatch → green** cycle — forward sync proving itself
+- [x] Then one **draw → dispatch → green** cycle - forward sync proving itself
 - [x] Command Deck becomes a daily dashboard: what changed, what your agents
-      are doing, what drifted — not a static launcher
+      are doing, what drifted - not a static launcher
 
 State-driven guide: `src/renderer/components/OnboardingGuide.tsx`.
 Daily read model: `archd-go/internal/api/command_deck.go`.
@@ -316,7 +316,7 @@ Daily read model: `archd-go/internal/api/command_deck.go`.
 Slices ①–④ are shipped. Two agents then ran in parallel worktrees and merged
 cleanly into `main`.
 
-### Trustworthy realization — ✅ (codex/realization)
+### Trustworthy realization - ✅ (codex/realization)
 
 The sharpest problem in the product: green did not mean anything.
 `ReconcilePlanned` matched on suffix-tolerant paths and bare lowercase symbol
@@ -324,26 +324,26 @@ names, so a planned interface reported `realized` whenever any file contained
 a same-named method with any signature.
 
 - [x] Interface-aware reconciliation against the structured contract
-- [x] Five realization states replacing binary expected/unexpected —
+- [x] Five realization states replacing binary expected/unexpected -
       `MATCHED` / `FLEXED` / `DRIFTED` / `MISSING` / `UNKNOWN`
 - [x] Agent-reported mappings corroborated by the indexer before reaching
       `MATCHED`; an uncorroborated claim is `UNKNOWN`
 
-### Agent visibility — ✅ (claude/mcp)
+### Agent visibility - ✅ (claude/mcp)
 
 The half of the Living Canvas that shows what the AGENT is doing, not just
 what the filesystem did.
 
-- [x] `agent_actions` log capturing every MCP call from one dispatch wrapper —
+- [x] `agent_actions` log capturing every MCP call from one dispatch wrapper -
       reads included, since watching an agent trace a path is the point
 - [x] Attention signal: a read lights its targets, surfacing to the nearest
       visible ancestor so a sweep of a large codebase is visible
 - [x] Visual log panel grouped by declared work session
-- [x] **One consequence, one animation** — the semantic stream owns animation,
+- [x] **One consequence, one animation** - the semantic stream owns animation,
       the action stream owns attribution. Encoded and tested in
       `agentActionVisual.ts` so the rule cannot be forgotten
 
-### MCP surface — ✅ (claude/mcp)
+### MCP surface - ✅ (claude/mcp)
 
 - [x] 59 advertised tools → 14 core (+2 behind `AXIOM_MCP_PROFILE=debug`)
 - [x] ~9,600 → ~2,460 tokens per request (74% off)
@@ -351,7 +351,7 @@ what the filesystem did.
 - [x] Guard tests fail the build if the surface, schema budget, or description
       length creeps back
 - [x] E2E harness (`npm run test:mcp`) drives the real MCP over stdio against
-      a real archd on spare ports — it caught two live bugs the unit tests
+      a real archd on spare ports - it caught two live bugs the unit tests
       could not see
 - [x] See [MCP_SURFACE.md](MCP_SURFACE.md)
 
@@ -381,14 +381,14 @@ byte-identical rewrite must not appear; three saves must read as one edited
 file. For narration, instruct the agent to call `start_work` / `note_work` /
 `finish_work` and confirm claims carry its words instead of `UNEXPLAINED`.
 
-### Automated verification — 2026-07-29
+### Automated verification - 2026-07-29
 
-- [x] `go test ./...` from `archd-go` — all backend, database, delta,
+- [x] `go test ./...` from `archd-go` - all backend, database, delta,
       indexing, parser, registry, and watcher packages pass
-- [x] `npm run test:renderer` — 182/182 renderer and shared-logic tests pass
-- [x] `npm run test:e2e` — 20/20 packaged Electron interaction tests pass
-- [x] `npm run build` — main, preload, and renderer production bundles build
-- [x] `git diff --check` — no whitespace errors
+- [x] `npm run test:renderer` - 182/182 renderer and shared-logic tests pass
+- [x] `npm run test:e2e` - 20/20 packaged Electron interaction tests pass
+- [x] `npm run build` - main, preload, and renderer production bundles build
+- [x] `git diff --check` - no whitespace errors
 
 The remaining Antigravity + MCP check is intentionally not represented by a
 mock: this machine has neither an Antigravity command nor a running

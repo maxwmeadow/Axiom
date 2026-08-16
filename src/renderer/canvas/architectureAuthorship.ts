@@ -4,7 +4,7 @@
  * Axiom used to ask only "are any files unclassified", which is a question about
  * coverage, not meaning. A workspace whose every file sat in an auto-generated
  * pile answered "no problem here" while the canvas read Bar, Lane, Phase and
- * Cochange — labels chosen by symbol frequency, which describe nothing a person
+ * Cochange - labels chosen by symbol frequency, which describe nothing a person
  * would recognise as part of their system.
  *
  * So authorship is the signal, not coverage. A system nobody has confirmed is
@@ -34,7 +34,7 @@ export interface Authorship {
 /**
  * Below this share of authored systems the map is treated as unnamed. It is not
  * zero because one hand-named system among ninety guesses is still a map that
- * cannot be read — the offer should stand until naming is actually underway.
+ * cannot be read - the offer should stand until naming is actually underway.
  */
 const AUTHORED_SHARE_FOR_A_NAMED_MAP = 0.5
 
@@ -57,7 +57,7 @@ export function readAuthorship({ systems, files }: AuthorshipInput): Authorship 
     inferred,
     homeless,
     topLevel,
-    // An empty map is not an unnamed map — there is nothing indexed yet to
+    // An empty map is not an unnamed map - there is nothing indexed yet to
     // name, and offering to organise nothing reads as a broken app.
     unnamed: files.length > 0 && !named,
   }

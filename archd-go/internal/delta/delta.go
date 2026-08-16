@@ -55,7 +55,7 @@ type FileChange struct {
 //
 // Cross reports whether the relationship crossed a real system boundary at the
 // time it changed. An endpoint with no system is UNCLASSIFIED, not a different
-// system — a file the classifier has not placed yet has no boundary to cross,
+// system - a file the classifier has not placed yet has no boundary to cross,
 // and treating its empty ID as "some other system" reports drift that does not
 // exist.
 type EdgeChange struct {
@@ -89,7 +89,7 @@ func displaySystem(id, name string) string {
 	return id
 }
 
-// SystemChange is a net change to the system tree itself — the coarsest and
+// SystemChange is a net change to the system tree itself - the coarsest and
 // most consequential kind of drift.
 type SystemChange struct {
 	ID        string `json:"id"`
@@ -117,7 +117,7 @@ type Counts struct {
 // Summary is the whole Morning Delta.
 //
 // Files/Edges/Systems are the raw net changes; Claims is the reviewable view
-// built over them. The UI reads Claims — the raw collections remain because
+// built over them. The UI reads Claims - the raw collections remain because
 // they are what marks the canvas and what any future consumer (MCP, export)
 // would want unaggregated.
 type Summary struct {
@@ -401,7 +401,7 @@ func Aggregate(events []db.StructuralEvent, since, until int64) Summary {
 	sort.SliceStable(summary.Files, func(i, j int) bool {
 		return summary.Files[i].TS > summary.Files[j].TS
 	})
-	// Cross-boundary edges lead — they are the drift worth reviewing.
+	// Cross-boundary edges lead - they are the drift worth reviewing.
 	sort.SliceStable(summary.Edges, func(i, j int) bool {
 		if summary.Edges[i].Cross != summary.Edges[j].Cross {
 			return summary.Edges[i].Cross

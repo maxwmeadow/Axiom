@@ -56,11 +56,11 @@ func (s *Server) handleDataFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A common name without a file scope produces noise — warn (plan open
+	// A common name without a file scope produces noise - warn (plan open
 	// decision #4) but still answer.
 	var warnings []string
 	if len(variable) <= 2 && fileRef == "" {
-		warnings = append(warnings, "very short variable name without a file scope — results may be noisy; pass file= to scope")
+		warnings = append(warnings, "very short variable name without a file scope - results may be noisy; pass file= to scope")
 	}
 
 	hits, err := db.GetVariableFileHits(sqlDB, workspaceID, variable)

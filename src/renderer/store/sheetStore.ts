@@ -1,4 +1,4 @@
-// Sheets — curated diagrams over the live model (UML_UX_PLAN.md U1) plus the
+// Sheets - curated diagrams over the live model (UML_UX_PLAN.md U1) plus the
 // canvas→agent message channel (U-C). The Floor (live master canvas) is
 // activeSheetId === null.
 import { create } from 'zustand'
@@ -15,15 +15,15 @@ const pendingSheetLayoutWrites = new Map<string, number>()
 // after a newer drag and broadcast stale geometry at a higher revision.
 const sheetLayoutSaveQueues = new Map<string, Promise<void>>()
 
-// archd refuses with {"error": "..."}. Surface that sentence — it is written for
-// a person to read — and fall back to the status only when there isn't one.
+// archd refuses with {"error": "..."}. Surface that sentence - it is written for
+// a person to read - and fall back to the status only when there isn't one.
 async function refusalReason(res: Response, fallback: string): Promise<string> {
   const raw = (await res.text()).trim()
   try {
     const parsed = JSON.parse(raw) as { error?: string }
     if (parsed?.error) return parsed.error
   } catch {
-    // Not JSON — a proxy or crash page. The raw text is still the best clue.
+    // Not JSON - a proxy or crash page. The raw text is still the best clue.
   }
   return raw || `${fallback} (${res.status})`
 }
@@ -455,7 +455,7 @@ export const useSheetStore = create<SheetState>((set, get) => ({
 
   updatePlanned: async (workspaceId, n) => {
     const previous = get().layersById[n.sheetId]?.planned.find(planned => planned.id === n.id)
-    // optimistic — the node is the editor, edits must feel instant
+    // optimistic - the node is the editor, edits must feel instant
     set(s => {
       const layer = s.layersById[n.sheetId]
       if (!layer) return s
@@ -491,7 +491,7 @@ export const useSheetStore = create<SheetState>((set, get) => ({
         raiseFailure(
           `planned-update:${n.id}`,
           `Could not save changes to "${previous?.name ?? 'this element'}"`,
-          `${error instanceof Error ? error.message : String(error)} — your edit was rolled back.`,
+          `${error instanceof Error ? error.message : String(error)} - your edit was rolled back.`,
         )
       }
     }
@@ -700,7 +700,7 @@ export const useSheetStore = create<SheetState>((set, get) => ({
   },
 
   // Throws on refusal. The server rejects duplicate names, and "a sheet named X
-  // already exists" is the only useful thing to say at that moment — swallowing
+  // already exists" is the only useful thing to say at that moment - swallowing
   // it into a null would leave the caller guessing that archd was down.
   createSheet: async (workspaceId, name, purpose, fileIds) => {
     const res = await fetch(`${API}/api/sheets`, {

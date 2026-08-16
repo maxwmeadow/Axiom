@@ -7,7 +7,7 @@ import fs from 'fs'
  * instruction.
  *
  * Every host reads a different file in a different format, and the slash
- * command — where the host has such a thing — is a second file somewhere else
+ * command - where the host has such a thing - is a second file somewhere else
  * again. Handing a user a JSON blob and a paragraph is how a working connection
  * becomes a support problem: they must find the file, know whether it merges or
  * replaces, and get the escaping right on a Windows path.
@@ -16,7 +16,7 @@ import fs from 'fs'
  * app writes them. Anything already configured is merged, never overwritten:
  * these files belong to the user and usually contain other servers.
  *
- * A host Axiom cannot write to is not a failure — it reports what it would have
+ * A host Axiom cannot write to is not a failure - it reports what it would have
  * done and where, which is strictly better than the paragraph it replaces.
  */
 
@@ -100,7 +100,7 @@ function installJsonServer(
   if (existing === null) {
     return {
       ok: false,
-      detail: `${path} could not be read as JSON. Fix or move it, then try again — Axiom will not overwrite configuration it cannot understand.`,
+      detail: `${path} could not be read as JSON. Fix or move it, then try again - Axiom will not overwrite configuration it cannot understand.`,
       paths: [path],
     }
   }
@@ -515,7 +515,7 @@ export function buildHosts(
  * Which hosts look present on this machine.
  *
  * Presence is judged by the host's own directory rather than its MCP file,
- * because a host that has never been given a server has no such file yet — and
+ * because a host that has never been given a server has no such file yet - and
  * refusing to install for it would be exactly backwards.
  */
 export function detectHosts(): Record<string, boolean> {

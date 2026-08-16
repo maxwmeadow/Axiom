@@ -5,10 +5,10 @@
  * so a tool added later is captured without anyone remembering to instrument
  * it. This module decides three things about a call:
  *
- *   kind    — how the canvas should react (a read is an attention signal, a
+ *   kind    - how the canvas should react (a read is an attention signal, a
  *             trace animates a path, a write animates the map changing)
- *   targets — which canvas nodes it touched, so the right part lights up
- *   summary — one human line for the visual log
+ *   targets - which canvas nodes it touched, so the right part lights up
+ *   summary - one human line for the visual log
  *
  * It is pure and has no imports, so it can be tested directly.
  */

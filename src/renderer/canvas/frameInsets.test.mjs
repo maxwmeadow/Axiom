@@ -22,7 +22,7 @@ test('three sides are exactly one gap, with no path-specific padding', () => {
   assert.equal(insets.bottom, FRAME_ITEM_GAP)
 })
 
-test('the top is the tab band plus that same gap — the only asymmetry', () => {
+test('the top is the tab band plus that same gap - the only asymmetry', () => {
   for (const depth of [0, 1, 2, 3]) {
     const insets = frameContentInsets(420, depth)
     const band = frameChromeBand(420, depth)

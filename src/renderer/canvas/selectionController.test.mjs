@@ -78,7 +78,7 @@ test('ctrl, cmd and shift all mean "add"; a bare click does not', () => {
 
 test('grabbing an unselected node drops whatever was selected before it', () => {
   // The reported bug: move one node, then grab a different one, and both stayed
-  // selected — so the next drag carried the first node along with it.
+  // selected - so the next drag carried the first node along with it.
   assert.deepEqual([...selectionAfterDragStart(new Set(['moved-earlier']), 'grabbed')], ['grabbed'])
   assert.deepEqual([...selectionAfterDragStart(new Set(['a', 'b', 'c']), 'grabbed')], ['grabbed'])
 })
@@ -98,7 +98,7 @@ test('one gesture at a time: click, drag, then grab something else never accumul
   selection = selectionAfterDragStart(selection, 'B')
   assert.deepEqual([...selection], ['B'])
 
-  // And the scene agrees — A is not left highlighted behind the gesture.
+  // And the scene agrees - A is not left highlighted behind the gesture.
   assert.deepEqual(selectedNodeIds(stampSelection([{ id: 'A' }, { id: 'B' }], selection)), ['B'])
 })
 

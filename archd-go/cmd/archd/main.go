@@ -1,4 +1,4 @@
-// archd — Axiom parser daemon.
+// archd - Axiom parser daemon.
 //
 // Usage:
 //
@@ -47,7 +47,7 @@ func main() {
 	// (newline-delimited JSON) to stream call/return events.
 	rt := runtime.NewManager(h)
 	if os.Getenv("AXIOM_AUTO_CONFIRM_INJECT") == "1" {
-		log.Println("archd: AXIOM_AUTO_CONFIRM_INJECT=1 — injections skip user confirmation")
+		log.Println("archd: AXIOM_AUTO_CONFIRM_INJECT=1 - injections skip user confirmation")
 		rt.SetAutoConfirm(true)
 	}
 	if err := rt.Listen(*runtimePort); err != nil {

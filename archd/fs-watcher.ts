@@ -29,7 +29,7 @@ const DEFAULT_IGNORE = [
   '**/*.meta',       // Unity meta files (text but not code)
 ]
 
-// Chunk size for async batch processing — keeps the event loop responsive
+// Chunk size for async batch processing - keeps the event loop responsive
 const PARSE_CHUNK_SIZE = 30
 
 export interface WatcherEvents {
@@ -102,7 +102,7 @@ export class FsWatcher extends EventEmitter {
       await new Promise<void>(resolve => setImmediate(resolve))
     }
 
-    // Stage 2: build module/directory hierarchy (synchronous — fast SQL batch)
+    // Stage 2: build module/directory hierarchy (synchronous - fast SQL batch)
     const { nodes: modNodes, dependencies: modDeps, fileParentMap } = buildModuleNodes(this.rootPath, allFiles)
     this.store.upsertNodes(modNodes)
     this.store.upsertDependencies(modDeps)

@@ -20,7 +20,7 @@ type CochangePair = [2]string
 // Commit-size weighting: each co-occurrence contributes 1/commitSize instead of 1.
 // A 3-file commit contributes 0.33 per pair; a 50-file commit contributes 0.02.
 // This makes large "sweep" commits (refactors, auto-formatting) contribute very
-// little, while small focused commits — which reveal true architectural coupling —
+// little, while small focused commits - which reveal true architectural coupling -
 // dominate. Returns nil if git is unavailable or there is no history.
 func BuildCochange(rootPath string, files []db.File) map[CochangePair]float64 {
 	relToID := make(map[string]string, len(files))
@@ -89,7 +89,7 @@ func BuildCochange(rootPath string, files []db.File) map[CochangePair]float64 {
 
 	if totalCommits > 0 {
 		avg := float64(totalFiles) / float64(totalCommits)
-		log.Printf("[cochange] %d commits, avg %.1f files/commit — large-commit noise %.0f%%",
+		log.Printf("[cochange] %d commits, avg %.1f files/commit - large-commit noise %.0f%%",
 			totalCommits, avg, math.Max(0, (avg-3)/avg*100))
 	}
 

@@ -1,4 +1,4 @@
-# Axiom — Architecture Reference
+# Axiom - Architecture Reference
 
 > Last updated: 2026-06-22  
 > This document captures the core architectural decisions made during the design phase. It is the source of truth for how Axiom is structured, what each layer means, and how the major subsystems interact.
@@ -7,7 +7,7 @@
 
 ## What Axiom Is
 
-Axiom is a **bidirectional, local-first codebase visualizer**. It maps any codebase into a structured graph, stores that graph locally, exposes it to AI agents via MCP, and displays it on an interactive canvas. The central idea is that expensive LLMs never have to figure out what a codebase is — a human or a previous agent already told Axiom, and the next agent just reads it.
+Axiom is a **bidirectional, local-first codebase visualizer**. It maps any codebase into a structured graph, stores that graph locally, exposes it to AI agents via MCP, and displays it on an interactive canvas. The central idea is that expensive LLMs never have to figure out what a codebase is - a human or a previous agent already told Axiom, and the next agent just reads it.
 
 Two actors have equal write access to the graph: **the human** (via the canvas UI) and **the agent** (via MCP tools). Changes from either are immediately reflected in both the database and the canvas.
 
@@ -25,7 +25,7 @@ A **semantic grouping of files** representing a real feature or domain boundary.
 - `source` field tracks whether a system was created by directory auto-grouping, the user, or an agent
 
 ### 2. File
-An individual source file. The **primary unit of the canvas** — always visible regardless of zoom level.
+An individual source file. The **primary unit of the canvas** - always visible regardless of zoom level.
 
 - Carries: language, path, line count, system assignment, churn score
 - Clicking a file opens its symbol list in the detail panel (symbols are not canvas nodes)
@@ -39,7 +39,7 @@ An external dependency that your code talks to but that isn't source code. Datab
 - Connected to files/systems via edges (a file that talks to Postgres gets a `READS_DB` or `CALLS` edge to the Postgres infra node)
 - Positioned alongside systems on the canvas, not nested inside them
 
-### 4. Call Graph (not a node type — an edge layer)
+### 4. Call Graph (not a node type - an edge layer)
 The output of recursive tree-sitter function call mapping. Every function call in every file is recorded as a directed edge at the symbol level. These edges are **aggregated for display** rather than shown individually.
 
 | Canvas zoom level | What is rendered |
@@ -48,7 +48,7 @@ The output of recursive tree-sitter function call mapping. Every function call i
 | Mid (file view) | File-to-file edges: imports, direct calls |
 | Close (file detail) | Individual function call traces on demand |
 
-The MCP agent uses the raw call graph DB directly for debugging traces — it never needs the canvas to render all 10,000 edges at once.
+The MCP agent uses the raw call graph DB directly for debugging traces - it never needs the canvas to render all 10,000 edges at once.
 
 ---
 
@@ -72,7 +72,7 @@ Removed from the canvas. Symbols exist in the database and are accessible via:
 
 One Axiom **project** = one **workspace** = N code roots.
 
-A workspace can contain a backend repo, a frontend repo, and a Chrome extension repo simultaneously. Each root is parsed by archd independently, but all their systems and files share the same SQLite graph and the same canvas. Cross-root edges (a frontend file calling a backend API) are regular directed edges in the graph — the root origin is metadata on the node, not a structural container.
+A workspace can contain a backend repo, a frontend repo, and a Chrome extension repo simultaneously. Each root is parsed by archd independently, but all their systems and files share the same SQLite graph and the same canvas. Cross-root edges (a frontend file calling a backend API) are regular directed edges in the graph - the root origin is metadata on the node, not a structural container.
 
 The project title in the toolbar is the workspace name ("My SaaS App"). The canvas shows all systems from all roots floating together, with connections between them.
 
@@ -170,7 +170,7 @@ When a workspace is first indexed, Axiom has no system assignments. The default 
 1. archd walks the directory tree and creates one **System per top-level subdirectory**
 2. All files are assigned to their nearest directory-based system
 3. These systems have `source = 'directory'`
-4. The canvas renders them immediately — the user sees a real structure, not a blank canvas
+4. The canvas renders them immediately - the user sees a real structure, not a blank canvas
 5. The status shows: "229 files in 12 auto-systems. Run agent review to organize by feature."
 
 Directory-based systems are the starting point, not the destination. They exist so the canvas is immediately useful before any agent work is done.
@@ -184,18 +184,18 @@ Directory-based systems are the starting point, not the destination. They exist 
 > file from scratch. It was superseded before ever being wired to MCP or the UI
 > and was removed in July 2026. The actual flow:
 
-1. **Indexing clusters automatically (~85%)** — `clusterAndAssign` in the
+1. **Indexing clusters automatically (~85%)** - `clusterAndAssign` in the
    indexer runs hierarchical multi-signal clustering (TF-IDF over symbols +
    git co-change + import connectivity), creating nested systems with
    `source='cluster'` up to 4 levels deep. No LLM involved.
-2. **Agent review finishes the rest** — the `start_review` MCP tool hands the
+2. **Agent review finishes the rest** - the `start_review` MCP tool hands the
    agent audit instructions; it inspects the clustered systems and reorganizes
    using the ad-hoc tools (`get_unclassified_files`, `create_system`,
    `assign_files_to_system`, `update_systems_bulk`, `merge_systems`, …).
 3. Every change broadcasts over WebSocket and the canvas re-renders live.
 
 The proposal pattern from the original design (pending assignments with
-confidence + accept/reject) lives on in the infra layer's detection tray —
+confidence + accept/reject) lives on in the infra layer's detection tray -
 see INFRA_LAYER_PLAN.md.
 
 ---
@@ -238,7 +238,7 @@ Card content:
 - Filename
 - Line count
 - Module badge (which sub-system/directory it came from, if relevant)
-- Churn indicator (thin colored left border — red = high churn)
+- Churn indicator (thin colored left border - red = high churn)
 
 On click: opens detail panel showing file metadata, symbol list, and active call graph edges.
 
@@ -257,7 +257,7 @@ The canvas never renders all call graph edges simultaneously. Edge rendering is 
 
 ## Bidirectionality
 
-Every action has two entry points — one for the user and one for the agent. The database is the single source of truth. The canvas reflects whatever is in the database.
+Every action has two entry points - one for the user and one for the agent. The database is the single source of truth. The canvas reflects whatever is in the database.
 
 | Action | User path | Agent path |
 |---|---|---|
@@ -287,9 +287,9 @@ On file change: re-parses the changed file, updates its edges, broadcasts a grap
 
 ## MCP Server
 
-The MCP server (`axiom-mcp.ts`) wraps the agent-api endpoints and exposes them as MCP tools. The agent never talks directly to the database or to archd — it always goes through MCP.
+The MCP server (`axiom-mcp.ts`) wraps the agent-api endpoints and exposes them as MCP tools. The agent never talks directly to the database or to archd - it always goes through MCP.
 
-The tool surface has grown well beyond this list — see `mcp/axiom-mcp.ts` for the current set (system CRUD, graph queries, runtime tracing, investigations, data flow, infra).
+The tool surface has grown well beyond this list - see `mcp/axiom-mcp.ts` for the current set (system CRUD, graph queries, runtime tracing, investigations, data flow, infra).
 
 ---
 
@@ -309,5 +309,5 @@ The current renderer (TypeScript + ReactFlow) handles ~500 nodes comfortably. Fo
 - **Infra typed nodes**: Define a canonical set of infra types with icons (Postgres, Redis, Vercel, Railway, Stripe, custom HTTP, etc.)
 - **Cross-workspace connections**: Can two separate Axiom workspaces reference each other?
 - **Call graph storage scale**: At 10,000+ files, the call_graph table may have millions of rows. Consider columnar storage or an embedded graph DB (DuckDB, RocksDB) for the call graph specifically.
-- **Real-time collaboration**: Multiple users editing system assignments simultaneously — conflict resolution strategy TBD.
+- **Real-time collaboration**: Multiple users editing system assignments simultaneously - conflict resolution strategy TBD.
 - **Classification quality feedback**: User can accept/reject/modify agent classifications. This feedback could train a local model over time.

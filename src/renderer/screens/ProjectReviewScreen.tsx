@@ -71,7 +71,7 @@ export function ProjectReviewScreen({ project, onFinishReview, onBack }: Project
             <div className="axiom-onboarding__step">STEP 04 / REVIEW THE MAP</div>
             <h1 id="review-title">Review the architecture your agent found</h1>
             <p>
-              This is the proposed system tree—not the current file-only Floor. Approve the boundaries
+              This is the proposed system tree-not the current file-only Floor. Approve the boundaries
               that fit, or send one back with a reason. Nothing becomes canonical until you approve it.
             </p>
           </header>

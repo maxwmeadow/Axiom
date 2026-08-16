@@ -14,7 +14,7 @@ const WS = process.env.LOOP_WS ?? 'efddf5c5f623397c'
 const listed = await (await fetch(`${API}/api/architecture-proposals?workspace=${WS}`)).json()
 const proposals = Array.isArray(listed) ? listed : listed?.proposals ?? []
 const open = proposals.find(p => (p.round?.systems ?? p.systems ?? []).some(s => s.decision === 'pending'))
-assert.ok(open, 'expected an open proposal — run namingLoop.manual.mjs first')
+assert.ok(open, 'expected an open proposal - run namingLoop.manual.mjs first')
 
 const detail = await (await fetch(`${API}/api/architecture-proposals/${open.id}?workspace=${WS}`)).json()
 
@@ -43,7 +43,7 @@ console.log('PASS  rendered depth matches the daemon for every candidate')
 
 const roots = tree.filter(node => node.parentRefType !== 'proposed_system')
 assert.ok(roots.length > 0 && roots.length < systems.length, 'expected a nested tree, not a flat list')
-console.log(`PASS  the tree is nested — ${roots.length} at the top of ${systems.length}`)
+console.log(`PASS  the tree is nested - ${roots.length} at the top of ${systems.length}`)
 
 // A child must be refused until its parent is approved, and the refusal must
 // name the parent rather than being a silent disabled control.
@@ -52,12 +52,12 @@ const child = systems.find(s => s.parentRefType === 'proposed_system' && byKey.g
 assert.ok(child, 'expected a child whose parent is still pending')
 const reason = blockedReason(child, byKey)
 assert.match(reason, /Approve .+ first/)
-console.log(`PASS  blocked child explains itself — "${reason}"`)
+console.log(`PASS  blocked child explains itself - "${reason}"`)
 
 const progress = readProgress(systems)
 const apiFiles = systems.reduce((n, s) => n + (s.fileCount ?? 0), 0)
 assert.equal(progress.total, systems.length)
 assert.ok(apiFiles > 0, 'candidates carry no file counts, so the panel shows "0 files" everywhere')
-console.log(`PASS  counts agree — ${progress.total} candidates, ${apiFiles} files across them`)
+console.log(`PASS  counts agree - ${progress.total} candidates, ${apiFiles} files across them`)
 
 console.log('\npanel data path verified against the live daemon')

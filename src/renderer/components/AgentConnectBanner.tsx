@@ -10,7 +10,7 @@ import {
 } from '../store/interruptionStore.ts'
 
 /**
- * "Your map is named by guesswork — let an agent name it properly."
+ * "Your map is named by guesswork - let an agent name it properly."
  *
  * Renders nothing of its own; it raises an `invitation` in the interruption
  * lane, which ranks it below anything actually blocked or broken and gives it
@@ -26,7 +26,7 @@ import {
  * the state worth offering to fix, however complete it is.
  *
  * And its one action copied `http://127.0.0.1:7743/mcp`, which archd does not
- * serve and never has — the daemon registers no such route. Axiom speaks MCP
+ * serve and never has - the daemon registers no such route. Axiom speaks MCP
  * over stdio, so following the app's own instruction could not possibly work.
  * It now offers the real server entry for this install.
  */
@@ -50,7 +50,7 @@ export function AgentConnectBanner() {
   // asks again.
   // Keyed on the whole sentence rather than the title. The title is constant
   // for a given condition, so keying on it froze the wording at whatever the
-  // counts were when the invitation first appeared — which on a fresh project
+  // counts were when the invitation first appeared - which on a fresh project
   // is before indexing has finished. It read "0 systems were named
   // automatically" over a canvas showing fifteen.
   const invited = useRef<{ workspace: string; said: string } | null>(null)
@@ -68,7 +68,7 @@ export function AgentConnectBanner() {
 
   useEffect(() => {
     if (isIndexing || !described || !workspaceId) {
-      // The condition resolved — the map has been named, or indexing restarted.
+      // The condition resolved - the map has been named, or indexing restarted.
       // Retire the invitation rather than leaving it stale.
       if (invited.current !== null) {
         resolveInterruption(ID)

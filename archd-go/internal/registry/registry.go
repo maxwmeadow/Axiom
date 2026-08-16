@@ -7,7 +7,7 @@
 // the SERVICE carries config fields and detection signatures.
 //
 // Adding a service is a data change: drop a .json file into a registry layer.
-// Resolution is layered — later layers override earlier by service id:
+// Resolution is layered - later layers override earlier by service id:
 //
 //  1. embedded defaults   (archd-go/internal/registry/services/*.json, go:embed)
 //  2. global user layer   (~/.config/axiom/services/*.json)
@@ -76,7 +76,7 @@ type Detect struct {
 
 // Service is one registry entry.
 type Service struct {
-	ID           string   `json:"id"`   // "aws/rds" — provider/slug, unique
+	ID           string   `json:"id"`   // "aws/rds" - provider/slug, unique
 	Name         string   `json:"name"` // "Amazon RDS"
 	Category     string   `json:"category"`
 	Subtype      string   `json:"subtype,omitempty"` // category-specific: 'sql'|'document'|'kv'|'vector'|...
@@ -117,7 +117,7 @@ func Validate(s Service) error {
 }
 
 // Load resolves the layered registry. workspaceRoots may be empty (no
-// workspace layer). Invalid definitions are logged and skipped — a bad
+// workspace layer). Invalid definitions are logged and skipped - a bad
 // user-supplied file must never take archd down.
 func Load(workspaceRoots []string) *Registry {
 	r := &Registry{services: make(map[string]Service)}
@@ -153,7 +153,7 @@ func (r *Registry) loadFS(fsys fs.FS, dir, layer string) {
 func (r *Registry) loadDir(dir, layer string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return // layer directory not present — fine
+		return // layer directory not present - fine
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -211,7 +211,7 @@ func (r *Registry) Get(id string) (Service, bool) {
 	return s, ok
 }
 
-// All returns every service sorted by provider then name — the canonical
+// All returns every service sorted by provider then name - the canonical
 // order for pickers and the API response.
 func (r *Registry) All() []Service {
 	r.mu.RLock()

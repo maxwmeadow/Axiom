@@ -72,7 +72,7 @@ export function OnboardingGuide({ projectId }: { projectId: string }) {
   })))
 
   // Progress belongs to a project. Until the store is pointed at this one, the
-  // guide neither reads nor writes it — a switch would otherwise record this
+  // guide neither reads nor writes it - a switch would otherwise record this
   // project's sheets against the previous project's progress.
   const ready = loadedProjectId === projectId
 
@@ -86,7 +86,7 @@ export function OnboardingGuide({ projectId }: { projectId: string }) {
       ? sheets.find(item => item.id === progress.sheetId)
       : undefined
     if (remembered) return remembered
-    if (progress.sheetId) return undefined  // deleted — fall back to step one
+    if (progress.sheetId) return undefined  // deleted - fall back to step one
     return findSheetByName(sheets, FIRST_INCREMENT) ?? sheets[0]
   }, [sheets, progress.sheetId])
 
@@ -140,7 +140,7 @@ export function OnboardingGuide({ projectId }: { projectId: string }) {
   // the default would flash step one at someone who finished months ago.
   if (!ready) return null
 
-  // Hiding sticks across launches — "not now" that reappears every morning is
+  // Hiding sticks across launches - "not now" that reappears every morning is
   // just nagging. The status bar keeps the way back while the loop is open.
   if (progress.dismissed) return null
 
@@ -149,7 +149,7 @@ export function OnboardingGuide({ projectId }: { projectId: string }) {
     setError(null)
     try {
       // If a First Increment is already sitting there, this is a re-entry, not
-      // a new build — adopt it rather than minting a same-named twin.
+      // a new build - adopt it rather than minting a same-named twin.
       const existing = findSheetByName(sheets, FIRST_INCREMENT)
       const target = existing ?? await createSheet(
         projectId,
@@ -193,7 +193,7 @@ export function OnboardingGuide({ projectId }: { projectId: string }) {
         className="axiom-onboarding-guide__close"
         onClick={dismiss}
         aria-label="Hide the setup guide"
-        title="Hide — reopen from the status bar"
+        title="Hide - reopen from the status bar"
       >
         ×
       </button>

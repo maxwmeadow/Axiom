@@ -29,7 +29,7 @@ import (
 )
 
 // RawCall is an unresolved function call extracted from a file.
-// CalleeName is the raw identifier — resolved to a file ID by the indexer
+// CalleeName is the raw identifier - resolved to a file ID by the indexer
 // after all files and their symbols are in the database.
 type RawCall struct {
 	CallerSymbol string // enclosing function/method name; empty for module-level calls
@@ -89,7 +89,7 @@ func ParseFile(absPath, relPath string) (*Result, error) {
 
 	grammar := grammarFor(lang)
 	if grammar == nil {
-		return result, nil // unsupported language — return metadata only
+		return result, nil // unsupported language - return metadata only
 	}
 
 	p := sitter.NewParser()
@@ -220,7 +220,7 @@ var symbolNodeTypes = map[string]string{
 }
 
 // containerSymbolTypes are declaration nodes that name a scope we record as a symbol
-// but must also descend into — otherwise nested methods/functions inside classes are invisible.
+// but must also descend into - otherwise nested methods/functions inside classes are invisible.
 var containerSymbolTypes = map[string]bool{
 	"class_declaration":     true, // TS/JS/C#/Java
 	"interface_declaration": true, // TS/JS/C#/Java
@@ -250,9 +250,9 @@ func extractSymbols(root *sitter.Node, src []byte, lang string) []db.Symbol {
 					BodyHash:  hex.EncodeToString(bodySum[:]),
 				})
 				if !containerSymbolTypes[node.Type()] {
-					return // leaf symbol — stop descending into its body
+					return // leaf symbol - stop descending into its body
 				}
-				// container (class/interface/struct/record) — fall through to descend
+				// container (class/interface/struct/record) - fall through to descend
 			}
 		}
 		for i := 0; i < int(node.ChildCount()); i++ {
@@ -265,7 +265,7 @@ func extractSymbols(root *sitter.Node, src []byte, lang string) []db.Symbol {
 
 // extractName finds the declared identifier for a node.
 func extractName(node *sitter.Node, src []byte, lang string) string {
-	// Use the grammar's named "name" field first — avoids confusing return types
+	// Use the grammar's named "name" field first - avoids confusing return types
 	// with method names in C# (where return type appears before name in child order).
 	if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 		return nameNode.Content(src)
@@ -297,12 +297,12 @@ func cppDeclaratorName(node *sitter.Node, src []byte) string {
 	case "identifier", "field_identifier", "type_identifier", "operator_name", "destructor_name":
 		return node.Content(src)
 	case "qualified_identifier":
-		// Class::method — take the rightmost name.
+		// Class::method - take the rightmost name.
 		if n := node.ChildByFieldName("name"); n != nil {
 			return cppDeclaratorName(n, src)
 		}
 	}
-	// pointer_declarator / reference_declarator / function_declarator / etc. —
+	// pointer_declarator / reference_declarator / function_declarator / etc. -
 	// descend through the nested "declarator" field.
 	if d := node.ChildByFieldName("declarator"); d != nil {
 		return cppDeclaratorName(d, src)
@@ -337,7 +337,7 @@ func extractJSImports(root *sitter.Node, src []byte, relPath string) []string {
 				if child.Type() == "string" {
 					spec := unquote(child.Content(src))
 					if strings.HasPrefix(spec, ".") {
-						// relative import — resolve against file's directory
+						// relative import - resolve against file's directory
 						resolved := filepath.ToSlash(filepath.Join(base, spec))
 						imports = append(imports, resolved)
 					} else {
@@ -544,7 +544,7 @@ func extractCalls(root *sitter.Node, src []byte, lang string) []RawCall {
 				}
 				calls = append(calls, RawCall{CallerSymbol: caller, CalleeName: callee})
 			}
-			// Still descend — calls can be nested (foo(bar()))
+			// Still descend - calls can be nested (foo(bar()))
 		}
 
 		for i := 0; i < int(n.ChildCount()); i++ {

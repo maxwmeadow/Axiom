@@ -8,7 +8,7 @@ import type { AgentAction, AgentActionKind } from '../../shared/types'
  *
  * This is the "I can see everything my agent is doing" surface. It is not a
  * console dump: it groups by the work the agent declared it was doing, and
- * every row is a place on the map — clicking one takes the canvas there.
+ * every row is a place on the map - clicking one takes the canvas there.
  *
  * Reads are shown, not filtered out. Watching an agent sweep through a region
  * before it writes anything is often the most informative part.
@@ -74,7 +74,7 @@ export function AgentLogPanel({ onClose }: { onClose: () => void }) {
   )
 
   // Grouped by the work the agent declared. Ungrouped actions keep their own
-  // bucket rather than being hidden — unexplained activity is worth seeing.
+  // bucket rather than being hidden - unexplained activity is worth seeing.
   const groups = useMemo(() => {
     const bySession = new Map<string, AgentAction[]>()
     for (const action of visible) {

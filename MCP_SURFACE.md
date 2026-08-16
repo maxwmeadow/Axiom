@@ -10,8 +10,8 @@ request. That is both a context tax and a selection problem: a model choosing
 between `get_neighbors`, `get_family`, `get_node` and `get_systems_with_files`
 is choosing between four spellings of one question.
 
-The advertised surface is now **~2,460 tokens** with the default profile — a
-74% reduction — and `mcp/toolSurface.test.mjs` fails the build if it creeps
+The advertised surface is now **~2,460 tokens** with the default profile - a
+74% reduction - and `mcp/toolSurface.test.mjs` fails the build if it creeps
 back.
 
 ## The merge rule
@@ -32,7 +32,7 @@ tools it replaced, and models select from it badly.
 
 **All 58 legacy handlers still execute.** `mcp/toolRouting.ts` rewrites a
 consolidated call into the legacy call that already implements it, and unknown
-names fall through untouched — so an existing agent configuration calling
+names fall through untouched - so an existing agent configuration calling
 `create_system` directly still works. The handlers are simply no longer
 *advertised*, which is where the cost was.
 
@@ -42,26 +42,26 @@ boundaries after a build, or during first-run review, is the bidirectional
 thesis, not a risk to be gated. `edit_systems` carries the longest description
 in the surface for exactly that reason.
 
-## Core profile — 14 tools
+## Core profile - 14 tools
 
 | Tool | Absorbs |
 |---|---|
 | `get_architecture` | overview, systems, system_files, files, unclassified, node, neighbors, family, cross_dependencies, dependency_graph, infra, infra_for_files, infra_catalog, hotspots |
-| `search_symbols` | — |
+| `search_symbols` | - |
 | `get_symbols` | `get_symbols_for_files`, `get_function_body` |
 | `trace_calls` | `get_call_path`, `get_call_graph`, `get_call_graph_for_files` |
-| `get_data_flow` | — |
+| `get_data_flow` | - |
 | `edit_systems` | create, update, delete, assign, merge, bulk |
 | `edit_infra` | create, update, delete, connect |
 | `edit_sheet` | list, get, create, add, annotate |
 | `get_inbox` | `get_canvas_updates`, `await_canvas` (via `waitSeconds`) |
 | `get_build_plan` | `get_build_spec`, `get_plan_status` |
-| `plan_element` | — |
-| `reply_to_canvas` | — |
-| `start_work` | — |
+| `plan_element` | - |
+| `reply_to_canvas` | - |
+| `start_work` | - |
 | `update_work` | `note_work`, `finish_work` (via `done`) |
 
-## Debug profile — 2 tools, off by default
+## Debug profile - 2 tools, off by default
 
 Set `AXIOM_MCP_PROFILE=debug` to advertise:
 
@@ -86,5 +86,5 @@ tool description over 460 characters.
 ## Migration
 
 Legacy names remain callable but unlisted for one release. Before removing
-them, instrument which adapters are actually being hit — `agent_actions` in
+them, instrument which adapters are actually being hit - `agent_actions` in
 archd already records every call by tool name, so the data is there.

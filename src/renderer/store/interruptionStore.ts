@@ -22,7 +22,7 @@ interface InterruptionState {
   /** The user set it aside. */
   dismiss: (id: string) => void
   /**
-   * The underlying condition resolved on its own — an agent withdrew a request,
+   * The underlying condition resolved on its own - an agent withdrew a request,
    * a failed fetch finally succeeded. Distinct from dismiss so callers do not
    * have to pretend the user acted.
    */
@@ -36,19 +36,19 @@ interface InterruptionState {
 // The lane used to schedule one timer at the soonest expiry and re-read on
 // fire. That looked economical and was wrong: firing did not change `items`,
 // so the effect never re-armed and only the FIRST of several notices ever
-// expired. Per-entry timers cannot chain-fail, and they keep the store — not
-// the component — the authority on what is still live.
+// expired. Per-entry timers cannot chain-fail, and they keep the store - not
+// the component - the authority on what is still live.
 const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /**
  * Removing an id that is not present must return the SAME state object.
  *
- * Callers resolve unconditionally — "whatever I might have raised, it no longer
+ * Callers resolve unconditionally - "whatever I might have raised, it no longer
  * applies" is the honest way to write those effects, and they run on every
  * render pass. Rebuilding `items` with filter() each time produced a new array
  * even when nothing was removed, so zustand notified every subscriber. During
  * mount that extra render lands inside React Flow's fitView window and shifts
- * the camera a few pixels — which is how a "no-op" cleanup call ended up
+ * the camera a few pixels - which is how a "no-op" cleanup call ended up
  * changing what the canvas looked like.
  */
 function removeById(state: { items: Interruption[] }, id: string) {
@@ -102,7 +102,7 @@ export const useInterruptionStore = create<InterruptionState>((set, get) => ({
 // think about kinds, timestamps, or TTLs to be honest about what happened.
 
 /**
- * Something broke and the user needs to know. Persists until dismissed —
+ * Something broke and the user needs to know. Persists until dismissed -
  * a failure that disappears on a timer is a failure the user never saw.
  */
 export function raiseFailure(
@@ -120,7 +120,7 @@ export function raiseFailure(
 /**
  * An offer to act. Valuable, never urgent, always dismissible.
  *
- * `onDismiss` is how an invitation makes "not now" mean something durable —
+ * `onDismiss` is how an invitation makes "not now" mean something durable -
  * see Interruption.onDismiss. Pass it rather than adding a second button that
  * duplicates the × sitting right beside it.
  */

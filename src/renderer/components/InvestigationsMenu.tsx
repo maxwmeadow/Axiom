@@ -184,7 +184,7 @@ export function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
                   <span className="axiom-investigations-menu__item-meta">
                     <span>{investigation.eventCount} events</span>
                     <span>{(investigation.durationMs / 1000).toFixed(1)}s</span>
-                    <code>{investigation.branch}@{investigation.commit ? investigation.commit.slice(0, 7) : '—'}</code>
+                    <code>{investigation.branch}@{investigation.commit ? investigation.commit.slice(0, 7) : '-'}</code>
                   </span>
                   {openingId === investigation.id && <span className="axiom-investigations-menu__opening">Opening…</span>}
                 </button>

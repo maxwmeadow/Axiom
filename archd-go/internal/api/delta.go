@@ -26,7 +26,7 @@ const firstReviewLookbackMs = 12 * 60 * 60 * 1000
 //
 // Returns the net architectural diff since the caller's watermark. This is the
 // Morning Delta: the answer to "what did my agents do while I wasn't looking?"
-// Reading a delta never acknowledges it — the watermark only moves on ack, so
+// Reading a delta never acknowledges it - the watermark only moves on ack, so
 // closing the app without reviewing keeps the delta waiting for you.
 func (s *Server) handleDelta(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -172,7 +172,7 @@ func dispatchedIntents(sqlDB *sql.DB, workspaceID string) []delta.Intent {
 //
 // Narration is the bidirectional half of the delta. Topology alone says what
 // moved; only the agent that moved it can say why. These are deliberately
-// forgiving — a missing session is never an error worth failing a tool call
+// forgiving - a missing session is never an error worth failing a tool call
 // over, because losing narration must never block the work itself.
 func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/active") {
@@ -271,7 +271,7 @@ func (s *Server) handleWork(w http.ResponseWriter, r *http.Request) {
 		if err := db.AppendWorkSessionNoteByID(
 			sqlDB, body.WorkspaceID, body.SessionID, body.Text,
 		); err != nil {
-			jsonError(w, "no active work session — call start_work first", 409)
+			jsonError(w, "no active work session - call start_work first", 409)
 			return
 		}
 		session, err := db.GetWorkSession(sqlDB, body.WorkspaceID, body.SessionID)

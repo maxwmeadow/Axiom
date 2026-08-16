@@ -12,7 +12,7 @@ import (
 )
 
 // ClusterInput bundles all signals used by the clustering pipeline.
-// TFIDF and Cochange are optional — pass nil to disable either signal.
+// TFIDF and Cochange are optional - pass nil to disable either signal.
 type ClusterInput struct {
 	Files        []db.File
 	Dependencies []db.Dependency
@@ -24,7 +24,7 @@ type ClusterInput struct {
 // gaps without deciding a boundary on its own.
 const (
 	wTFIDF    = 3.0
-	wCochange = 1.5 // supplementary — commit-size normalised, but can still be noisy
+	wCochange = 1.5 // supplementary - commit-size normalised, but can still be noisy
 	wImport   = 3.0
 
 	tfidfMinSim = 0.10 // cosine similarity threshold below which no edge is added

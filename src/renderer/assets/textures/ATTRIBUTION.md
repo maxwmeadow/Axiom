@@ -27,7 +27,7 @@ ffmpeg -i kraft-raw.png \
 Cyanotype paper, used as the sheet-mode canvas board.
 
 - **Source:** [Blueprint - Hallwylska museet - 101011.tif](https://commons.wikimedia.org/wiki/File:Blueprint_-_Hallwylska_museet_-_101011.tif)
-  on Wikimedia Commons — a 1920 architectural cyanotype
+  on Wikimedia Commons - a 1920 architectural cyanotype
 - **Author:** Hallwyl Museum
 - **License:** Public domain
 

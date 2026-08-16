@@ -4,7 +4,7 @@ SUPPORTED_CURRENCIES = {"USD", "EUR", "GBP"}
 
 
 def validate_amount(amount: float) -> None:
-    # BUG: should be `amount <= 0` — negative amounts pass validation and
+    # BUG: should be `amount <= 0` - negative amounts pass validation and
     # reach the payment gateway.
     if amount == 0:
         raise ValueError("Amount must be positive")

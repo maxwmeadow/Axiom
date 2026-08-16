@@ -52,7 +52,7 @@ export interface SystemNodeData {
   depth: number
   /** Every direct child descriptor, regardless of type, counted exactly once. */
   directChildCount: number
-  /** Zoom at projection time. Not refreshed per frame — read `detailRevealed`
+  /** Zoom at projection time. Not refreshed per frame - read `detailRevealed`
    *  instead of recomputing a threshold from this. */
   currentZoom: number
   /** Resolved by the semantic-zoom pass: has this leaf reached detail zoom? */
@@ -88,7 +88,7 @@ export interface SystemNodeData {
   /** West/north handles move the origin, so they need their own minima. */
   minResizeWidthWest?: number
   minResizeHeightNorth?: number
-  /** Authored design size, CANONICAL — never multiplied by world scale. */
+  /** Authored design size, CANONICAL - never multiplied by world scale. */
   presentationBaseWidth?: number
   presentationBaseHeight?: number
   /**
@@ -113,7 +113,7 @@ export interface FileNodeData {
   shape: '' | 'class' | 'cylinder' | 'hexagon'
   displayName: string
   depth: number
-  /** Zoom at projection time. Not refreshed per frame — read `detailRevealed`
+  /** Zoom at projection time. Not refreshed per frame - read `detailRevealed`
    *  instead of recomputing a threshold from this. */
   currentZoom: number
   /** Resolved by the semantic-zoom pass: has this leaf reached detail zoom? */

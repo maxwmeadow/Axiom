@@ -5,14 +5,14 @@ Axiom daemon (archd) over a local TCP socket, using sys.monitoring (PEP 669)
 for near-zero overhead. Loaded one of three ways, all without modifying the
 target codebase:
 
-1. Launched by Axiom (``launch_target`` MCP tool) — archd injects PYTHONPATH +
+1. Launched by Axiom (``launch_target`` MCP tool) - archd injects PYTHONPATH +
    AXIOM_RUNTIME_PORT / AXIOM_WORKSPACE_ID and sitecustomize auto-initializes.
-2. ``python -m axiom_adapter run app.py`` — explicit launcher.
-3. PYTHONPATH opt-in — user points PYTHONPATH at this directory once; the
+2. ``python -m axiom_adapter run app.py`` - explicit launcher.
+3. PYTHONPATH opt-in - user points PYTHONPATH at this directory once; the
    adapter activates whenever AXIOM_RUNTIME_PORT is present in the environment.
 
 Requires Python 3.12+. On older interpreters init() is a silent no-op (one
-warning line on stderr) — the target app is never broken by the adapter.
+warning line on stderr) - the target app is never broken by the adapter.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ def init() -> bool:
         if sys.version_info < (3, 12):
             print(
                 f"[axiom] Python {sys.version_info.major}.{sys.version_info.minor} "
-                "is not supported (need 3.12+ for sys.monitoring) — adapter disabled",
+                "is not supported (need 3.12+ for sys.monitoring) - adapter disabled",
                 file=sys.stderr,
             )
             return False
@@ -58,7 +58,7 @@ def init() -> bool:
         return True
     except Exception as exc:  # never break the target app
         try:
-            print(f"[axiom] adapter init failed: {exc!r} — disabled", file=sys.stderr)
+            print(f"[axiom] adapter init failed: {exc!r} - disabled", file=sys.stderr)
         except Exception:
             pass
         return False

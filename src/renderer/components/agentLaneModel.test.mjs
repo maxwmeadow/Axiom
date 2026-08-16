@@ -83,7 +83,7 @@ test('the per-branch briefing stays with the worktree it describes', () => {
 
 // A snapshot arrives over HTTP, so its type is a promise the compiler cannot
 // keep. Reading .map off a missing array threw inside a useMemo, which React
-// escalates into a render failure — the whole workbench went to a blank
+// escalates into a render failure - the whole workbench went to a blank
 // "Render Error" screen because one panel got an unexpected response body.
 test('a shapeless response hides the lane instead of blanking the workbench', () => {
   for (const bad of [{}, { branches: null }, { branches: undefined }]) {

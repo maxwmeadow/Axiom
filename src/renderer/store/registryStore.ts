@@ -1,4 +1,4 @@
-// Infra service registry — fetched once from archd so the renderer and daemon
+// Infra service registry - fetched once from archd so the renderer and daemon
 // can never disagree on a service definition (INFRA_LAYER_PLAN.md). Layered
 // resolution (embedded + ~/.config/axiom + workspace .axiom/) happens in Go;
 // the renderer only ever sees the resolved result.

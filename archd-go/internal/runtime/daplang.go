@@ -1,7 +1,7 @@
 // Generic config-driven DAP language session (plan Phase 10: C++, Java, Ruby).
 //
 // The delve (Go) and netcoredbg (C#) integrations proved the DAP-client pattern
-// twice; the remaining languages differ only in config — which debugger to
+// twice; the remaining languages differ only in config - which debugger to
 // spawn, the launch request shape, and whether breakpoints bind by function
 // name or by file:line. This one session type is parameterized by a
 // dapLangConfig so a new language is ~15 lines, not a new file.
@@ -11,7 +11,7 @@
 //
 // Verified live: C++ via gdb 17.2 (`gdb --interpreter=dap`, function
 // breakpoints). Ruby (rdbg) and Java (java-debug) configs follow the same
-// pattern but are unverified here (toolchains not installed) — see langConfigs.
+// pattern but are unverified here (toolchains not installed) - see langConfigs.
 package runtime
 
 import (
@@ -39,10 +39,10 @@ type dapLangConfig struct {
 	transport string
 	// breakpointMode: "function" (setFunctionBreakpoints by name), "source"
 	// (setBreakpoints by file:line), or "external" (breakpoints passed on the
-	// debugger command line; skip DAP breakpoint requests — rdbg).
+	// debugger command line; skip DAP breakpoint requests - rdbg).
 	breakpointMode string
 	// requestType: "launch" (debugger starts the program) or "attach" (program
-	// is already specified on the debugger's command line — rdbg).
+	// is already specified on the debugger's command line - rdbg).
 	requestType  string
 	threadPrefix string // e.g. "thread" → threadId label "thread-14"
 	// findDebugger locates the debugger binary (env override + PATH + fallbacks).
@@ -217,7 +217,7 @@ func (s *dapLangSession) handshake() error {
 	}
 
 	// requestType "none": the debugger already has the program on its command
-	// line and starts it on configurationDone (rdbg) — no launch/attach request.
+	// line and starts it on configurationDone (rdbg) - no launch/attach request.
 	launchDone := make(chan error, 1)
 	if s.cfg.requestType != "none" {
 		go func() {
@@ -273,7 +273,7 @@ func (s *dapLangSession) waitForInitialized() error {
 			if ev.Event == "initialized" {
 				return nil
 			}
-			// Fail fast if the target crashed on launch — otherwise we'd wait
+			// Fail fast if the target crashed on launch - otherwise we'd wait
 			// out the full deadline for an "initialized" that never comes.
 			if ev.Event == "terminated" || ev.Event == "exited" {
 				return fmt.Errorf("%s target exited before initialization (bad program/args?)", s.Language)
@@ -365,7 +365,7 @@ func (s *dapLangSession) handleStopped(body json.RawMessage) {
 
 	// External breakpoint mode (rdbg): the stopped event's description carries
 	// the breakpoint's file:line, so we attribute the call from that and skip
-	// stackTrace — rdbg 1.11 hangs on stackTrace for stopped worker threads, so
+	// stackTrace - rdbg 1.11 hangs on stackTrace for stopped worker threads, so
 	// argument values are unavailable (call-only tracing for Ruby).
 	if s.cfg.breakpointMode == "external" {
 		watchID := s.matchStoppedLocation(st.Description)
@@ -492,7 +492,7 @@ func (s *dapLangSession) inspect(threadID int) (string, json.RawMessage) {
 }
 
 // matchFunc maps a frame's (possibly signature-bearing) function name to a
-// watch. gdb reports "process_payment(int, double, ...)" — match on the base
+// watch. gdb reports "process_payment(int, double, ...)" - match on the base
 // name before the first '('.
 func (s *dapLangSession) matchFunc(frameName string) string {
 	base := frameName
@@ -501,7 +501,7 @@ func (s *dapLangSession) matchFunc(frameName string) string {
 	}
 	base = strings.TrimSpace(base)
 	// Try the qualified name as-is, then the bare last segment. (We avoid a
-	// fuzzy "any key whose last segment matches" scan — with two watched
+	// fuzzy "any key whose last segment matches" scan - with two watched
 	// same-named methods it would resolve by map-iteration order, i.e.
 	// non-deterministically.)
 	if id, ok := s.funcToID[base]; ok {
@@ -584,7 +584,7 @@ func (s *dapLangSession) finish(status string) {
 	delete(s.mgr.langSessions, s.ID)
 	s.mgr.mu.Unlock()
 
-	log.Printf("%s: session %s %s — %d breakpoint hits, avg stop→continue %.1fms",
+	log.Printf("%s: session %s %s - %d breakpoint hits, avg stop→continue %.1fms",
 		s.Language, s.ID, status, hits, avg)
 	s.mgr.hub.Broadcast("runtime:session", map[string]any{
 		"workspaceId": s.WorkspaceID, "session": s.dto(), "status": "disconnected",

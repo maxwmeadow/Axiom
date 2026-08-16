@@ -1,4 +1,4 @@
-// Onboarding progress — where this project sits in the reverse-sync →
+// Onboarding progress - where this project sits in the reverse-sync →
 // forward-sync loop, and whether the guide is currently welcome on screen.
 //
 // This used to live as loose localStorage reads inside OnboardingGuide, which

@@ -1,4 +1,4 @@
-// Minimal Debug Adapter Protocol client — just enough of DAP to drive delve
+// Minimal Debug Adapter Protocol client - just enough of DAP to drive delve
 // for the Go tracing spike. Messages are Content-Length framed JSON (same
 // framing as LSP). A single reader goroutine demultiplexes responses (matched
 // to requests by seq) from events (delivered on a channel).
@@ -147,7 +147,7 @@ func (c *dapClient) readLoop() {
 			return
 		}
 		if length < 0 || length > maxDAPMessageBytes {
-			return // malformed / hostile Content-Length — bail rather than OOM
+			return // malformed / hostile Content-Length - bail rather than OOM
 		}
 		buf := make([]byte, length)
 		if _, err := io.ReadFull(r, buf); err != nil {

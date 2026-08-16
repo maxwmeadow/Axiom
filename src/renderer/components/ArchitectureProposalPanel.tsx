@@ -16,8 +16,8 @@ import { raiseInvitation, resolveInterruption } from '../store/interruptionStore
  * Reviewing the architecture an agent proposed for this codebase.
  *
  * A docked rail rather than a modal, and the same keyboard triage as the
- * Morning Delta — j/k to move, Enter to approve, R to send back, Escape to
- * leave — because reviewing forty systems should never require the mouse, and
+ * Morning Delta - j/k to move, Enter to approve, R to send back, Escape to
+ * leave - because reviewing forty systems should never require the mouse, and
  * because a second review surface that behaved differently would be a second
  * thing to learn.
  *

@@ -5,7 +5,7 @@
 #
 #  1. The repo root is derived from this script's own location, never
 #     hardcoded. Hardcoding it meant `npm run build:archd` inside a git
-#     worktree silently built the *main* checkout instead — the worktree
+#     worktree silently built the *main* checkout instead - the worktree
 #     would appear to build fine while testing someone else's code.
 #
 #  2. It runs without `bash --login`. A login shell resets the working
@@ -32,7 +32,7 @@ case "${1:-build}" in
     go build -o archd.exe ./cmd/archd
     # A binary that cannot answer -h is not a successful build.
     ./archd.exe -h >/dev/null
-    echo "Done — $ROOT/archd-go/archd.exe"
+    echo "Done - $ROOT/archd-go/archd.exe"
     ;;
   test)
     shift

@@ -5,8 +5,8 @@ import { placeIncoming } from './packing.ts'
 /**
  * The defect these lock down: a node with no persisted row had its position
  * recomputed by `placeIncoming` on EVERY projection, scored against the live
- * bounds and centroid of everything else in its frame. So writing one row —
- * which any drop does — moved every unpersisted node around it.
+ * bounds and centroid of everything else in its frame. So writing one row -
+ * which any drop does - moved every unpersisted node around it.
  */
 
 const GAP = 12

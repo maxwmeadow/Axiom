@@ -4,7 +4,7 @@ import paperUrl from '../../assets/textures/paper.png'
 /**
  * Paper stock for sheet mode.
  *
- * A real scanned kraft tile (public domain — see the assets ATTRIBUTION), not
+ * A real scanned kraft tile (public domain - see the assets ATTRIBUTION), not
  * drawn geometry. Procedural ruling was the wrong instinct twice over: it read
  * as slanted stripes rather than as paper, and the rotation needed to stop it
  * moiréing broke tiling at the seams. A photograph of paper has grain that no
@@ -52,12 +52,12 @@ function Stock({ id, tint, tintOpacity, grain, scale = 1 }: {
 }
 
 /**
- * Mounted once, near the app root. Renders nothing visible — it exists only to
+ * Mounted once, near the app root. Renders nothing visible - it exists only to
  * hold the paint servers the nodes point at.
  *
  * The three stocks differ in tile scale and grain strength rather than in
  * drawing, so a system still reads as heavier board than the files inside it,
- * and infra as a cooler technical stock — same paper, different cut.
+ * and infra as a cooler technical stock - same paper, different cut.
  */
 export function PaperTextureDefs() {
   return (
@@ -68,12 +68,12 @@ export function PaperTextureDefs() {
       style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}
     >
       <defs>
-        {/* Files: the pad's writing surface — where the symbols are listed, so
+        {/* Files: the pad's writing surface - where the symbols are listed, so
             it is the plain sheet you write ON. The yellow belongs on the header
             band above it (see --card-head), the way a notepad's colour is its
             binding strip and never the page you write on. */}
         <Stock id="axiom-paper-sheet" tint="#faf6ea" tintOpacity={0.55} grain={0.26} />
-        {/* Systems: manila folder. Warmer and browner, coarser stock — what you
+        {/* Systems: manila folder. Warmer and browner, coarser stock - what you
             keep the pads in. */}
         <Stock id="axiom-card-sheet" tint="#e8cf9a" tintOpacity={0.44} grain={0.36} scale={1.9} />
         {/* Infra: white spec sheet. Cool and plain, so equipment reads as

@@ -185,7 +185,7 @@ export class GraphStore {
     return rows.map(this.rowToNode)
   }
 
-  /** Returns all nodes except symbols (depth < 3) — for canvas performance */
+  /** Returns all nodes except symbols (depth < 3) - for canvas performance */
   getNodesForCanvas(): AsmNode[] {
     const rows = this.db.prepare('SELECT * FROM nodes WHERE semantic_depth < 3').all() as any[]
     return rows.map(this.rowToNode)
@@ -440,7 +440,7 @@ export class GraphStore {
     }
   }
 
-  /** Snapshot without symbols — for canvas rendering (performance) */
+  /** Snapshot without symbols - for canvas rendering (performance) */
   getCanvasSnapshot(): { nodes: AsmNode[]; dependencies: AsmDependency[]; version: number } {
     return {
       nodes: this.getNodesForCanvas(),

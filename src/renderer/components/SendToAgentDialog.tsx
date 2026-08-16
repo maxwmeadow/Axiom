@@ -1,4 +1,4 @@
-// SendToAgentDialog — the canvas is the prompt box (UML_UX_PLAN.md U-C).
+// SendToAgentDialog - the canvas is the prompt box (UML_UX_PLAN.md U-C).
 // Composes a note (+ current selection as durable refs) and enqueues it on
 // archd's canvas outbox; any MCP-connected agent picks it up via the
 // piggyback trailer, get_canvas_updates, await_canvas, or /axiom:review-canvas.
@@ -58,7 +58,7 @@ export function SendToAgentDialog({ isOpen, onClose }: SendToAgentDialogProps) {
       setNote('')
       onClose()
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Send failed — is archd running?')
+      setError(err instanceof Error ? err.message : 'Send failed - is archd running?')
     } finally {
       setSending(false)
     }
@@ -89,7 +89,7 @@ export function SendToAgentDialog({ isOpen, onClose }: SendToAgentDialogProps) {
             <textarea
               value={note}
               onChange={e => setNote(e.target.value)}
-              placeholder={'e.g. "I moved validators into Payments — should these two files merge? Also, why does checkout talk to Redis directly?"'}
+              placeholder={'e.g. "I moved validators into Payments - should these two files merge? Also, why does checkout talk to Redis directly?"'}
               rows={5}
               className="axiom-dialog-input axiom-dialog-input--textarea"
               autoFocus

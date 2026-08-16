@@ -183,7 +183,7 @@ func migrate(db *sql.DB) error {
 
 	-- ─── Variable references (data-flow, Phase 7) ─────────────────────────────
 	-- def/param/write rows are stored per-occurrence. 'read' rows are AGGREGATED
-	-- to one row per (file, variable) with count — reads are ~80% of references
+	-- to one row per (file, variable) with count - reads are ~80% of references
 	-- and per-occurrence storage would explode the table. The data-flow API
 	-- re-parses candidate files on demand for exact read lines (hybrid model).
 	CREATE TABLE IF NOT EXISTS variable_refs (
@@ -232,7 +232,7 @@ func migrate(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS file_activity_file ON file_activity(file_id, ts);
 	CREATE INDEX IF NOT EXISTS file_activity_ws   ON file_activity(workspace_id, ts);
 
-	-- ─── Sheets (UML experience layer — UML_UX_PLAN.md Phase U1) ─────────────
+	-- ─── Sheets (UML experience layer - UML_UX_PLAN.md Phase U1) ─────────────
 	-- A sheet is a named, curated diagram: a subset of live model elements,
 	-- arranged by hand, annotated. Elements are REFERENCES, never copies.
 	CREATE TABLE IF NOT EXISTS sheets (
@@ -250,9 +250,9 @@ func migrate(db *sql.DB) error {
 	);
 
 	-- Membership: concrete nullable FKs (exactly one set) instead of a
-	-- polymorphic (type,id) pair — native integrity, no trigger web.
+	-- polymorphic (type,id) pair - native integrity, no trigger web.
 	-- ON DELETE SET NULL + the cached label IS the tombstone mechanism: ref
-	-- gone but label present renders "payments/handler.go — deleted".
+	-- gone but label present renders "payments/handler.go - deleted".
 	CREATE TABLE IF NOT EXISTS sheet_elements (
 		id            TEXT PRIMARY KEY,
 		sheet_id      TEXT NOT NULL REFERENCES sheets(id) ON DELETE CASCADE,
@@ -641,7 +641,7 @@ func migrate(db *sql.DB) error {
 		return fmt.Errorf("migration: sheet parent override: %w", err)
 	}
 
-	// Additive column migrations — SQLite has no IF NOT EXISTS for columns;
+	// Additive column migrations - SQLite has no IF NOT EXISTS for columns;
 	// we attempt each ALTER and ignore "duplicate column name" errors.
 	for _, col := range []string{
 		`ALTER TABLE systems ADD COLUMN width  REAL`,
@@ -727,7 +727,7 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE floor_layouts ADD COLUMN interior_scale REAL NOT NULL DEFAULT 1`,
 	} {
 		if _, err := db.Exec(col); err != nil {
-			// "duplicate column name" means the column already exists — safe to ignore
+			// "duplicate column name" means the column already exists - safe to ignore
 			if !strings.Contains(err.Error(), "duplicate column name") {
 				return fmt.Errorf("migration: %s: %w", col, err)
 			}

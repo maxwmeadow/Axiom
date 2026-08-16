@@ -1,5 +1,5 @@
 'use strict'
-// AST instrumentation — the heart of the Node adapter.
+// AST instrumentation - the heart of the Node adapter.
 //
 // Every function in a watched workspace file is rewritten at load time to call
 // into the main-thread runtime (globalThis.__axiom) on entry, return, throw,
@@ -17,7 +17,7 @@
 //                                        finally { G.exit(__axm); }
 //                                      }
 //
-// Only simple identifier params (incl. defaulted) are captured/injectable —
+// Only simple identifier params (incl. defaulted) are captured/injectable -
 // destructured/rest params are skipped for capture (mirrors the Python
 // adapter's pragmatic arg handling).
 
@@ -35,7 +35,7 @@ const FN_TYPES = new Set([
 
 /**
  * Instrument JS source. Returns { code, map } or null if the source could not
- * be parsed (caller falls back to the original source — never break the app).
+ * be parsed (caller falls back to the original source - never break the app).
  * @param {string} source
  * @param {{filename: string, sourceType?: 'module'|'script'}} opts
  */
@@ -134,7 +134,7 @@ function keyName(key) {
 }
 
 // Constructors, getters, and setters have special return/init semantics
-// (super() ordering, implicit return of accessors) — leave them uninstrumented.
+// (super() ordering, implicit return of accessors) - leave them uninstrumented.
 function skipFunction(node, parent) {
   if (!parent) return false
   if (parent.type === 'MethodDefinition') {

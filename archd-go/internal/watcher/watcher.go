@@ -91,7 +91,7 @@ func (w *Watcher) Run() {
 			}
 			// A directory that appears after startup (e.g. an agent scaffolding
 			// src/components/) must start being watched, and any files created
-			// alongside it indexed — fsnotify does not recurse into directories
+			// alongside it indexed - fsnotify does not recurse into directories
 			// added after the initial watch was established.
 			if event.Op&fsnotify.Create != 0 {
 				if fi, err := os.Stat(event.Name); err == nil && fi.IsDir() {

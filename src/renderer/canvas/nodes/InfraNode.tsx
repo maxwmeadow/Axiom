@@ -8,7 +8,7 @@ import { fitPresentationScale } from '../resizeGeometry'
 import { connectionHandleProps } from './connectionChrome'
 import { AxiomNodeResizer } from './AxiomNodeResizer'
 
-// Infra node — Category x Provider x Service (INFRA_LAYER_PLAN.md).
+// Infra node - Category x Provider x Service (INFRA_LAYER_PLAN.md).
 // The CATEGORY drives the glyph and the legend label ("DATABASE · SQL"),
 // the SERVICE's brand drives the icon and accent color, and STATUS renders
 // proposals ghosted (dashed, dimmed) until confirmed. Drafting-table styling:
@@ -123,7 +123,7 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       </div>
 
 
-      {/* Category legend strip — the drafting-table "what kind of thing is this" line */}
+      {/* Category legend strip - the drafting-table "what kind of thing is this" line */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
         <svg viewBox="0 0 24 24" width={9} height={9} style={{ flexShrink: 0, opacity: 0.75 }}>
           <path d={glyph} fill="var(--text-dim)" />

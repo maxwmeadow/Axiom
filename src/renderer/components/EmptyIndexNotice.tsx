@@ -9,7 +9,7 @@ import { raiseInvitation, resolveInterruption } from '../store/interruptionStore
  * The blankest dead end in the app: a project whose source boundaries exclude
  * everything indexes cleanly, reports success, and lands you on an empty Floor
  * with no nodes, no stencil palette (the Floor hides it), and nothing at all to
- * click. Nothing is broken, so nothing says anything — which is exactly why it
+ * click. Nothing is broken, so nothing says anything - which is exactly why it
  * used to be unrecoverable without deleting the project and starting over.
  *
  * The recovery is the boundary picker, so the invitation carries a way back to
@@ -29,7 +29,7 @@ interface EmptyIndexNoticeProps {
    */
   hasExclusions: boolean
   /**
-   * A project the user just created is *supposed* to be empty — that is the
+   * A project the user just created is *supposed* to be empty - that is the
    * whole point of the New Project flow, which opens a fresh folder so files
    * can materialize into it later. Telling them it is broken is nonsense.
    */
@@ -58,7 +58,7 @@ export function EmptyIndexNotice({
     const timer = setTimeout(() => {
       // State the observation, and name a cause only when one is actually
       // established. An empty graph can equally mean the repository holds no
-      // language Axiom can parse, or that indexing failed — asserting
+      // language Axiom can parse, or that indexing failed - asserting
       // "everything is excluded" when nothing is excluded is just wrong.
       raiseInvitation(
         ID,

@@ -38,7 +38,7 @@ def _chain_next_sitecustomize() -> None:
                 if os.path.isfile(candidate):
                     import runpy
                     result = runpy.run_path(candidate, run_name="sitecustomize")
-                    # Expose the chained module's names on THIS module —
+                    # Expose the chained module's names on THIS module -
                     # code doing `import sitecustomize; sitecustomize.x`
                     # gets our module object, so merge theirs in.
                     for k, v in result.items():

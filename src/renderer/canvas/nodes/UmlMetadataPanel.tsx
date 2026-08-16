@@ -134,7 +134,7 @@ export function UmlMetadataPanel({ kind, metadata, editable = false, onChange, c
     const values = metadata[key] ?? []
     return (
       <Section title={title} editable={editable} onAdd={() => update({ [key]: [...values, ''] })}>
-        {values.length === 0 && !editable && <div style={{ color: 'var(--text-dim)' }}>—</div>}
+        {values.length === 0 && !editable && <div style={{ color: 'var(--text-dim)' }}>-</div>}
         {values.map((value, index) => (
           <div key={`${key}-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 3 }}>
             <EditText value={value} placeholder={placeholder} editable={editable}
@@ -154,7 +154,7 @@ export function UmlMetadataPanel({ kind, metadata, editable = false, onChange, c
       <Section title={title} editable={editable} onAdd={() => update({
         [key]: [...methods, { visibility: 'public', name: '', parameters: [], returnType: '' }],
       })}>
-        {methods.length === 0 && !editable && <div style={{ color: 'var(--text-dim)' }}>—</div>}
+        {methods.length === 0 && !editable && <div style={{ color: 'var(--text-dim)' }}>-</div>}
         {methods.map((method, index) => (
           <div key={`${key}-${index}`} style={{ display: 'grid', gridTemplateColumns: '10px minmax(40px,1fr) minmax(35px,.8fr) minmax(28px,.55fr) auto', gap: 2, alignItems: 'center' }}>
             <VisibilityControl value={method.visibility} editable={editable} onChange={visibility => replace(index, { visibility })} />
@@ -184,7 +184,7 @@ export function UmlMetadataPanel({ kind, metadata, editable = false, onChange, c
     }}>
       {kind === 'class' && <>
         <Section title="ATTRIBUTES" editable={editable} onAdd={() => update({ attributes: [...attributes, { visibility: 'private', name: '', dataType: '' }] })}>
-          {attributes.length === 0 && !editable && <div style={{ color: 'var(--text-dim)' }}>—</div>}
+          {attributes.length === 0 && !editable && <div style={{ color: 'var(--text-dim)' }}>-</div>}
           {attributes.map((attribute, index) => (
             <div key={`attribute-${index}`} style={{ display: 'grid', gridTemplateColumns: '10px 1fr .8fr auto', gap: 2 }}>
               <VisibilityControl value={attribute.visibility} editable={editable} onChange={visibility => replaceAttribute(index, { visibility })} />

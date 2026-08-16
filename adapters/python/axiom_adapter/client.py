@@ -1,9 +1,9 @@
-"""TCP client — connects to archd's runtime adapter server.
+"""TCP client - connects to archd's runtime adapter server.
 
 Newline-delimited JSON over a localhost socket, stdlib only (no pip
 dependencies inside the user's process). Three daemon threads:
 
-- run loop: connect (with retry), then acts as the sender — drains the event
+- run loop: connect (with retry), then acts as the sender - drains the event
   queue, emitting a heartbeat when idle
 - reader: dispatches watch/unwatch commands from archd
 - (monitoring callbacks run on the app's own threads and only enqueue)
@@ -46,7 +46,7 @@ class AxiomClient:
         self._started = True
         threading.Thread(target=self._run, name="axiom-adapter", daemon=True).start()
 
-    # Called from sys.monitoring callbacks — must be fast and never raise.
+    # Called from sys.monitoring callbacks - must be fast and never raise.
     def enqueue_event(self, event: dict) -> None:
         try:
             self._queue.put_nowait(event)

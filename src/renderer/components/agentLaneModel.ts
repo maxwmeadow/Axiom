@@ -58,7 +58,7 @@ const EMPTY: AgentLaneModel = {
 /**
  * The snapshot arrives over HTTP, so its type is a promise the compiler cannot
  * keep. An error body, a truncated response, or an archd built before this
- * field existed all arrive as objects missing the arrays below — and reading
+ * field existed all arrive as objects missing the arrays below - and reading
  * `.map` off one of them threw inside a `useMemo`, which React escalates into a
  * render failure that blanks the whole workbench. A panel must never be able to
  * do that, so every list is treated as absent-until-proven.

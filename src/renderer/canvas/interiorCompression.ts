@@ -4,7 +4,7 @@ import type { Point, Rect } from './frameGeometry.ts'
  * Case 3 of the drop contract: the frame you aimed at has no free slot, at any
  * position, for the node you are dropping.
  *
- * The response is to compress the frame's INTERIOR — every child gets uniformly
+ * The response is to compress the frame's INTERIOR - every child gets uniformly
  * smaller, together, in place. Nothing is rearranged, reordered or repacked,
  * because compression is a single multiplication applied to the coordinate
  * space the children already live in. Their relative arrangement is preserved
@@ -14,7 +14,7 @@ import type { Point, Rect } from './frameGeometry.ts'
  * Crucially the container's OWN geometry does not participate. Its width,
  * height, position, chrome and presentation scale are not expressed in terms of
  * `interiorScale`, so none of them can react to a compression. That is why this
- * is a lever and not a cascade — nothing outside the frame is disturbed.
+ * is a lever and not a cascade - nothing outside the frame is disturbed.
  */
 
 /**
@@ -33,7 +33,7 @@ export function contentBoxAtCompression(ownContent: Rect, interiorScale: number)
 }
 
 /**
- * A child may not be compressed past the point where it stops being readable —
+ * A child may not be compressed past the point where it stops being readable -
  * below that you are destroying information rather than saving space. Expressed
  * as a bound on a child's resulting WORLD scale so nested compressions compound
  * correctly: a frame inside an already-compressed frame gets less headroom, not
@@ -77,7 +77,7 @@ export interface InteriorCompressionInput {
   /**
    * The only distance the newcomer may not come closer than, in the
    * container's content space. Compression asks "has a LEGAL slot opened yet?",
-   * so this is the legal minimum, not the spacing a tidy would have chosen —
+   * so this is the legal minimum, not the spacing a tidy would have chosen -
    * measuring against the latter made a frame shrink its whole interior to
    * satisfy a margin the drop never had to satisfy.
    */
@@ -93,7 +93,7 @@ export interface InteriorCompressionPlan {
   placement: Point
   /**
    * True when the legibility floor stopped the compression before a slot
-   * opened. The newcomer is still placed and the frame visibly overflows —
+   * opened. The newcomer is still placed and the frame visibly overflows -
    * which is honest, because the frame really is over-full.
    */
   atFloor: boolean
@@ -146,7 +146,7 @@ export function planInteriorCompression(
   // Never above 1: this lever only ever shrinks an interior.
   const floorFactor = Math.min(1, INTERIOR_LEGIBILITY_MIN_WORLD_SCALE / minChildWorldScale)
   if (floorFactor >= 1 - NEGLIGIBLE) {
-    // Already at or past the floor — compressing further would be illegible.
+    // Already at or past the floor - compressing further would be illegible.
     return {
       interiorScale: current,
       factor: 1,
@@ -186,7 +186,7 @@ export function planInteriorCompression(
   }
 
   // Quantize: take at least one full step so the next few drops need none.
-  // Never below the floor, and never less compression than actually fits — the
+  // Never below the floor, and never less compression than actually fits - the
   // search is monotone, so a slot at `bestFactor` is still a slot here.
   const factor = Math.max(floorFactor, Math.min(bestFactor, 1 - INTERIOR_COMPRESSION_STEP))
   const placement = slotAt(factor) ?? { x: input.origin.x, y: input.origin.y }

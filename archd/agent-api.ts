@@ -264,7 +264,7 @@ export function createAgentApi(getStore: () => GraphStore, hub: WsHub) {
     return c.json({ results, count: results.length })
   })
 
-  // ─── GET /raw-files — agent-facing file list for semantic mapping ──────
+  // ─── GET /raw-files - agent-facing file list for semantic mapping ──────
   // Returns all indexed files with language, symbol count, and current parentage.
   // Use this as input for create_system + assign_file_to_system.
   app.get('/raw-files', (c) => {
@@ -275,7 +275,7 @@ export function createAgentApi(getStore: () => GraphStore, hub: WsHub) {
     return c.json({ files, total: files.length, estimatedTokens: tokens })
   })
 
-  // ─── GET /call-graph — file-level call graph for agent analysis ───────
+  // ─── GET /call-graph - file-level call graph for agent analysis ───────
   // Returns CALLS/IMPORTS edges aggregated by file pair with call counts.
   app.get('/call-graph', (c) => {
     const store = getStore()
@@ -285,7 +285,7 @@ export function createAgentApi(getStore: () => GraphStore, hub: WsHub) {
     return c.json({ dependencies: graph, total: graph.length, estimatedTokens: tokens })
   })
 
-  // ─── GET /systems/cluster — get descendants of a system matching by name ──
+  // ─── GET /systems/cluster - get descendants of a system matching by name ──
   app.get('/systems/cluster', (c) => {
     const store = getStore()
     const nameQuery = c.req.query('name')
@@ -335,7 +335,7 @@ export function createAgentApi(getStore: () => GraphStore, hub: WsHub) {
     return c.json({ ...result, estimatedTokens: tokens })
   })
 
-  // ─── POST /systems — create an agent-authored system node ─────────────
+  // ─── POST /systems - create an agent-authored system node ─────────────
   // Body: { name: string, description?: string, color?: string, layer?: 'SERVICE'|'MODULE' }
   // Returns the created node's ID.
   app.post('/systems', async (c) => {
@@ -386,7 +386,7 @@ export function createAgentApi(getStore: () => GraphStore, hub: WsHub) {
     return c.json({ id, node })
   })
 
-  // ─── POST /systems/:id/assign — assign file(s) to a system ───────────
+  // ─── POST /systems/:id/assign - assign file(s) to a system ───────────
   // Body: { fileIds?: string[], filePaths?: string[], confidence?: number }
   // Sets parentId on the specified file nodes and updates the canvas.
   app.post('/systems/:id/assign', async (c) => {
@@ -433,7 +433,7 @@ export function createAgentApi(getStore: () => GraphStore, hub: WsHub) {
     return c.json({ assigned: updatedNodes.length, systemId, updatedNodes })
   })
 
-  // ─── POST /systems/connection — create semantic dependency between systems ──
+  // ─── POST /systems/connection - create semantic dependency between systems ──
   // Body: { fromId, toId, type?, label? }
   app.post('/systems/connection', async (c) => {
     const store = getStore()

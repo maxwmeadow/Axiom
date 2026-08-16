@@ -401,7 +401,7 @@ export function traceResizeEnd(event: unknown, params: NodeResizeParams, nodeId:
           height: params.height - session.start.height,
         },
       }
-      console.groupCollapsed(`[AxiomResizeFrameTrace #${session.id}] COMPLETE — ${nodeId} — ${session.direction}`)
+      console.groupCollapsed(`[AxiomResizeFrameTrace #${session.id}] COMPLETE - ${nodeId} - ${session.direction}`)
       console.info('Frame/pointer summary', summary)
       console.info('Pointer events and requested floating-point geometry')
       console.table(session.rows)

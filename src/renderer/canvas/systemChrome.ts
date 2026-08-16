@@ -4,9 +4,9 @@
  *
  * This lives apart from the component so the geometry can be swept across
  * sizes and aspect ratios in a test. Every clipping bug in this chrome came
- * from a rule that held at one size and broke at another — a font sized to a
+ * from a rule that held at one size and broke at another - a font sized to a
  * band without accounting for its line box, a chip sized independently of the
- * tab that has to hold it — and none of that is visible by reading the JSX.
+ * tab that has to hold it - and none of that is visible by reading the JSX.
  */
 export interface SystemChromeInput {
   /** Rendered shell size in presentation pixels. */
@@ -54,7 +54,7 @@ export const MONO_ADVANCE_EM = 0.62
 /**
  * Text is laid out in a line box of `fontSize * lineHeight`, not `fontSize`.
  * Sizing a font to its container height ignores the difference and clips the
- * ascender — which is exactly how the title lost its top edge.
+ * ascender - which is exactly how the title lost its top edge.
  */
 export const TITLE_LINE_HEIGHT = 1.25
 
@@ -68,7 +68,7 @@ export const MIN_TAB_HEIGHT = 8
  * How tall the tab actually draws, in the shell's rendered pixels.
  *
  * THE authority on that number. Layout code reserves room above a frame's
- * first child by calling this, rather than reimplementing it — the two used to
+ * first child by calling this, rather than reimplementing it - the two used to
  * disagree badly: the layout reserved a "header budget" of `padY*2 +
  * titlePx*1.25` (~52 on a default frame) while the tab drew at
  * `depthTitlePx * 0.95` (~23), leaving ~29px of empty band that made the gap

@@ -2,7 +2,7 @@
   "name": "axiom-node-adapter",
   "version": "0.1.0",
   "private": true,
-  "description": "Axiom runtime tracing adapter for Node.js — AST-instruments watched functions and streams call/return/exception events to archd.",
+  "description": "Axiom runtime tracing adapter for Node.js - AST-instruments watched functions and streams call/return/exception events to archd.",
   "type": "commonjs",
   "dependencies": {
     "acorn": "^8.11.0",

@@ -1,4 +1,4 @@
-// CompartmentBody — the ONE member/symbol row renderer (Rev 2b unification).
+// CompartmentBody - the ONE member/symbol row renderer (Rev 2b unification).
 // A planned member and a live symbol are the same row in different states:
 // planned ○ → realized ✓ (green) → live ƒ/C/I/T/v. PlannedNode uses it now;
 // Planned entities use FileNode directly, so the

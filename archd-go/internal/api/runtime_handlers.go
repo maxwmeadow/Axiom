@@ -1,14 +1,14 @@
-// Runtime layer HTTP endpoints — the bridge between MCP tools and the
+// Runtime layer HTTP endpoints - the bridge between MCP tools and the
 // runtime.Manager. This is where graph identity (file IDs, symbol line
 // ranges from the SQLite index) is resolved before handing language-agnostic
 // Watch records to the manager.
 //
-//	POST /api/runtime/watch    {workspaceId, file, symbol}         — start watching a function
-//	POST /api/runtime/unwatch  {workspaceId, watchId?|file+symbol} — stop watching
-//	GET  /api/runtime/snapshot?workspace=                          — sessions, watches, targets, recent events
-//	POST /api/runtime/launch   {workspaceId, command[], cwd?}      — start target app with adapter injected
-//	POST /api/runtime/stop     {targetId}                          — kill a launched target
-//	GET  /api/runtime/target-log?target=                           — retained output tail of a target
+//	POST /api/runtime/watch    {workspaceId, file, symbol}         - start watching a function
+//	POST /api/runtime/unwatch  {workspaceId, watchId?|file+symbol} - stop watching
+//	GET  /api/runtime/snapshot?workspace=                          - sessions, watches, targets, recent events
+//	POST /api/runtime/launch   {workspaceId, command[], cwd?}      - start target app with adapter injected
+//	POST /api/runtime/stop     {targetId}                          - kill a launched target
+//	GET  /api/runtime/target-log?target=                           - retained output tail of a target
 package api
 
 import (
@@ -121,7 +121,7 @@ func watchNote(notified int) string {
 		return "Watch registered, but no runtime adapter is connected yet. " +
 			"Launch the target app via the launch_target tool (or with the axiom_adapter launcher) to start streaming calls."
 	}
-	return fmt.Sprintf("Watch active — streaming to canvas from %d connected process(es).", notified)
+	return fmt.Sprintf("Watch active - streaming to canvas from %d connected process(es).", notified)
 }
 
 func (s *Server) handleRuntimeUnwatch(w http.ResponseWriter, r *http.Request) {
@@ -338,7 +338,7 @@ func (s *Server) handleRuntimeLaunch(w http.ResponseWriter, r *http.Request) {
 		jsonOK(w, map[string]any{
 			"session": sess,
 			"note": "Launched under the " + language + " debugger (DAP, inspection mode). " +
-				"Breakpoints are blocking — keep watches to low-frequency functions. Requires a debug build.",
+				"Breakpoints are blocking - keep watches to low-frequency functions. Requires a debug build.",
 		})
 		return
 	}
@@ -382,7 +382,7 @@ func dotnetProgram(command []string, cwd, langHint string) (string, []string, bo
 	first := strings.ToLower(command[0])
 	base := filepath.Base(first)
 
-	// `dotnet <app.dll> [args…]` — the assembly is the first .dll argument.
+	// `dotnet <app.dll> [args…]` - the assembly is the first .dll argument.
 	if base == "dotnet" || base == "dotnet.exe" {
 		for i := 1; i < len(command); i++ {
 			if strings.HasSuffix(strings.ToLower(command[i]), ".dll") {
@@ -390,7 +390,7 @@ func dotnetProgram(command []string, cwd, langHint string) (string, []string, bo
 			}
 		}
 		// `dotnet run` / `dotnet <project>` isn't directly debuggable without a
-		// built assembly path — fall through unless hinted.
+		// built assembly path - fall through unless hinted.
 	}
 	// A bare managed assembly path.
 	if strings.HasSuffix(first, ".dll") {
@@ -477,7 +477,7 @@ func (s *Server) handleRuntimeStop(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "bad request", 400)
 		return
 	}
-	// The same tool stops both in-process targets and delve Go sessions —
+	// The same tool stops both in-process targets and delve Go sessions -
 	// fall back to a delve session if the id isn't a launched target.
 	if target, err := s.runtime.StopTarget(body.TargetID); err == nil {
 		jsonOK(w, map[string]any{"target": target})

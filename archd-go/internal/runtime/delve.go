@@ -7,7 +7,7 @@
 // event (identical schema to the Python path), and resumes.
 //
 // Empirically established constraints (see RUNTIME_LAYER_PLAN Phase 3 / the
-// spike findings): this is INSPECTION MODE — every hit stops the whole process,
+// spike findings): this is INSPECTION MODE - every hit stops the whole process,
 // so it is only viable at low call rates. Call events only (no return/duration
 // under concurrency). Per-goroutine attribution works; parent→child stitching
 // is impossible without instrumentation, so traceId is the goroutine id and
@@ -244,7 +244,7 @@ func (s *DelveSession) waitForInitialized() error {
 			if ev.Event == "initialized" {
 				return nil
 			}
-			// Buffer other early events (e.g. output) — harmless to drop for the spike.
+			// Buffer other early events (e.g. output) - harmless to drop for the spike.
 		case <-time.After(20 * time.Second):
 			return fmt.Errorf("no initialized event from dlv")
 		case <-s.client.closed:
@@ -259,7 +259,7 @@ func (s *DelveSession) setBreakpoints() error {
 		names = append(names, map[string]any{"name": fn})
 	}
 	if len(names) == 0 {
-		log.Printf("delve: session %s has no watches — no breakpoints set", s.ID)
+		log.Printf("delve: session %s has no watches - no breakpoints set", s.ID)
 		return nil
 	}
 	_, err := s.client.request("setFunctionBreakpoints", map[string]any{
@@ -283,7 +283,7 @@ func (s *DelveSession) eventLoop() {
 			case "stopped":
 				// Run inspection off the event loop so readLoop is never
 				// blocked waiting for us to drain c.events (which would in turn
-				// stall the DAP responses our inspect() requests need — a
+				// stall the DAP responses our inspect() requests need - a
 				// circular wait). Only one goroutine is ever stopped at a time
 				// (the process is frozen until we `continue`), so there is no
 				// concurrent second stop to race with.
@@ -316,12 +316,12 @@ func (s *DelveSession) handleStopped(body json.RawMessage) {
 	symbol, relPath, args := s.inspect(st.ThreadID)
 	watchID := s.watchIDForGoFrame(symbol)
 
-	// Resume immediately after inspection — minimize the stop-the-world window.
+	// Resume immediately after inspection - minimize the stop-the-world window.
 	roundTrip := float64(time.Since(start).Microseconds()) / 1000.0
 	s.client.request("continue", map[string]any{"threadId": st.ThreadID})
 
 	if watchID == "" {
-		return // breakpoint we didn't map (shouldn't happen) — nothing to emit
+		return // breakpoint we didn't map (shouldn't happen) - nothing to emit
 	}
 	s.mu.Lock()
 	s.hitCount++
@@ -441,7 +441,7 @@ func (s *DelveSession) finish(status string) {
 	delete(s.mgr.delveSessions, s.ID)
 	s.mgr.mu.Unlock()
 
-	log.Printf("delve: session %s %s — %d breakpoint hits, avg stop→continue %.1fms",
+	log.Printf("delve: session %s %s - %d breakpoint hits, avg stop→continue %.1fms",
 		s.ID, status, hits, avg)
 	s.mgr.hub.Broadcast("runtime:session", map[string]any{
 		"workspaceId": s.WorkspaceID,
@@ -530,7 +530,7 @@ func goPackageName(absPath string) string {
 // breakpoint map. Frame names carry the full import path
 // ("github.com/x/repo/pkg.Func") while breakpoints are keyed by package name
 // ("pkg.Func"), so an exact match is tried first, then the segment after the
-// last "/". No bare-name fuzzy matching — with two watched same-named
+// last "/". No bare-name fuzzy matching - with two watched same-named
 // functions in different packages that would resolve non-deterministically.
 func (s *DelveSession) watchIDForGoFrame(symbol string) string {
 	if id, ok := s.funcToID[symbol]; ok {
@@ -576,7 +576,7 @@ func findDelve() (string, error) {
 			return cand + ".exe", nil
 		}
 	}
-	return "", fmt.Errorf("delve (dlv) not found — install with: go install github.com/go-delve/delve/cmd/dlv@latest, or set AXIOM_DLV_PATH")
+	return "", fmt.Errorf("delve (dlv) not found - install with: go install github.com/go-delve/delve/cmd/dlv@latest, or set AXIOM_DLV_PATH")
 }
 
 func freeTCPPort() (int, error) {

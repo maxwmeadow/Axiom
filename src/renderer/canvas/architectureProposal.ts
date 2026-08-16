@@ -124,7 +124,7 @@ function descendsFrom(
  * Why a candidate cannot be approved yet, or null when it can.
  *
  * A proposed child cannot exist before its proposed parent, so approving out
- * of order is refused with the reason rather than greyed out — a disabled
+ * of order is refused with the reason rather than greyed out - a disabled
  * control that explains nothing is how a user decides a feature is broken.
  */
 export function blockedReason(
@@ -138,7 +138,7 @@ export function blockedReason(
   if (parent.decision === 'rejected') {
     return `${parent.name} was rejected, so this cannot be placed inside it.`
   }
-  return `Approve ${parent.name} first — this belongs inside it.`
+  return `Approve ${parent.name} first - this belongs inside it.`
 }
 
 export interface DecisionAttempt {
@@ -152,7 +152,7 @@ export type DecisionAccepted = { ok: true }
 
 /**
  * Validate one decision before it is sent. The daemon enforces all of this
- * too — this exists so the refusal arrives as a sentence next to the button
+ * too - this exists so the refusal arrives as a sentence next to the button
  * rather than as a failed request the user has to interpret.
  */
 export function checkDecision(
@@ -166,7 +166,7 @@ export function checkDecision(
     // A reason is required because it is the entire value of a rejection: the
     // next round is only better if the agent is told what was wrong.
     if (!attempt.rejectionReason?.trim()) {
-      return { ok: false, reason: 'Say what is wrong with it — the agent uses that to try again.' }
+      return { ok: false, reason: 'Say what is wrong with it - the agent uses that to try again.' }
     }
     return { ok: true }
   }
@@ -211,7 +211,7 @@ export function readProgress(systems: readonly ProposedSystem[]): ProposalProgre
 
 /**
  * What the panel header says. Stated as the user's own progress through a
- * decision, never as a status taxonomy — "12 systems to review" is a task,
+ * decision, never as a status taxonomy - "12 systems to review" is a task,
  * "PROPOSAL_PENDING" is a database column.
  */
 export function describeProgress(progress: ProposalProgress): string {
@@ -223,7 +223,7 @@ export function describeProgress(progress: ProposalProgress): string {
       : `${progress.pending} left to review`
   }
   if (progress.rejected === 0) {
-    return `All ${progress.approved} approved — ${progress.filesPlaced} files placed`
+    return `All ${progress.approved} approved - ${progress.filesPlaced} files placed`
   }
   return `${progress.approved} approved, ${progress.rejected} sent back`
 }

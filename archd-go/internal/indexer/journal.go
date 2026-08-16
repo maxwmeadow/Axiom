@@ -160,7 +160,7 @@ func journalFileDeleted(
 
 // journalSystemPlan records births and deaths in the system tree. A system
 // appearing or disappearing is the coarsest drift there is, so it is recorded
-// even though the classifier — not a person — performed the move.
+// even though the classifier - not a person - performed the move.
 func journalSystemPlan(
 	sqlDB *sql.DB, root db.Root,
 	before []db.System, after []db.System, removedIDs []string,

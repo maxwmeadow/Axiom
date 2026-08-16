@@ -44,7 +44,7 @@ export function applyAgentAttention<T extends AttentionNode>(
 /**
  * Resolves attention to the nearest VISIBLE ancestor, the same way live
  * relationship flows do. An agent reading a file zoomed out of view should
- * still register on the system that contains it — otherwise sweeping a large
+ * still register on the system that contains it - otherwise sweeping a large
  * codebase looks like nothing is happening at all.
  */
 export function surfaceAgentAttention(

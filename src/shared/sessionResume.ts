@@ -20,7 +20,7 @@ export interface ResumeInput {
   /** Ids still present in the recent list, so a removed project cannot be resumed. */
   recentIds: readonly string[]
   /**
-   * Ids whose first-run setup is finished — source boundaries chosen and the
+   * Ids whose first-run setup is finished - source boundaries chosen and the
    * baseline review closed. Resuming into an unfinished project would skip the
    * very steps that make its map meaningful.
    */

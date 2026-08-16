@@ -1,4 +1,4 @@
-// NewSheetDialog — lasso a selection → curate it into a named Sheet
+// NewSheetDialog - lasso a selection → curate it into a named Sheet
 // (UML_UX_PLAN.md "Creating and populating sheets"). Mirrors GroupDialog.
 import React, { useState } from 'react'
 import { useGraphStore } from '../store/graphStore'
@@ -58,7 +58,7 @@ export function NewSheetDialog({ isOpen, onClose, selectedFileIds, onSuccess }: 
               placeholder='e.g. "Payment flow"' className="axiom-dialog-input" autoFocus
             />
           </DialogField>
-          <DialogField label="Purpose" optional="optional — shown in the title block">
+          <DialogField label="Purpose" optional="optional - shown in the title block">
             <input
               type="text" value={purpose} onChange={e => setPurpose(e.target.value)}
               placeholder="What story does this sheet tell?" className="axiom-dialog-input"
@@ -66,7 +66,7 @@ export function NewSheetDialog({ isOpen, onClose, selectedFileIds, onSuccess }: 
           </DialogField>
           <DialogNote>
             Curating <strong>{selectedFileIds.length}</strong> selected{' '}
-            {selectedFileIds.length === 1 ? 'file' : 'files'} onto this sheet. Elements stay live —
+            {selectedFileIds.length === 1 ? 'file' : 'files'} onto this sheet. Elements stay live -
             renames and deletions in the codebase show up here.
           </DialogNote>
           <DialogActions inset>

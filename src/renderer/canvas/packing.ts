@@ -4,7 +4,7 @@
  * Places children inside a frame as a tight cluster rather than filling
  * strict rows: items grow greedily around an anchor, each newcomer snapping
  * flush to a neighbor's edge. Edges align; gaps are not forced onto a grid
- * pitch — `baseGap` is the minimum breathing room and the spacing between
+ * pitch - `baseGap` is the minimum breathing room and the spacing between
  * non-adjacent neighbors is whatever the cluster geometry produces. The
  * algorithm is fully deterministic: the same contents always pack the same.
  *
@@ -212,8 +212,8 @@ export function placeIncoming(
  * released and moves a conflicting one by the smallest distance that resolves
  * the conflict.
  *
- * `placeIncoming` answers a different question — "where does this extend the
- * cluster most compactly?" — scored against the cluster's bounds and centroid,
+ * `placeIncoming` answers a different question - "where does this extend the
+ * cluster most compactly?" - scored against the cluster's bounds and centroid,
  * with `origin` acting as a hard lower bound rather than a preference. Used for
  * a drop that landed on a sibling, it yanked the node back toward the cluster
  * from wherever it was released, and its result then had to be clamped into the

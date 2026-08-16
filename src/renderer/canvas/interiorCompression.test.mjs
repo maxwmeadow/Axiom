@@ -75,7 +75,7 @@ test('compression never moves a resident: only the newcomer is placed', () => {
   const plan = planInteriorCompression(input({ occupied }), slideIncomingIntoFreeSlot)
   assert.equal(JSON.stringify(occupied), snapshot, 'residents must not be rewritten')
   // The newcomer lands clear of every resident, in the same coordinate space
-  // the residents already occupy — their numbers never changed.
+  // the residents already occupy - their numbers never changed.
   const collides = occupied.some(rect =>
     plan.placement.x < rect.x + rect.width &&
     plan.placement.x + 220 > rect.x &&

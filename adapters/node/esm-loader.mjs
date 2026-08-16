@@ -1,4 +1,4 @@
-// ESM loader hook — runs in a dedicated worker thread (Node v22).
+// ESM loader hook - runs in a dedicated worker thread (Node v22).
 //
 // It has an isolated heap and cannot touch the main thread's runtime, so it
 // does exactly one thing: rewrite the source of workspace .js/.mjs modules and
@@ -15,7 +15,7 @@ let workspaceRoot = process.cwd()
 export async function initialize(data) {
   data = data || {}
   workspaceRoot = data.workspaceRoot || process.cwd()
-  if (!data.transformPath) return // misconfigured — degrade to no instrumentation
+  if (!data.transformPath) return // misconfigured - degrade to no instrumentation
   const require = createRequire(import.meta.url)
   transform = require(data.transformPath).transform
 }

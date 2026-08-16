@@ -53,7 +53,7 @@ contextBridge.exposeInMainWorld('axiom', {
   listAgentHosts: (projectRoot?: string): Promise<AgentHostInfo[]> =>
     ipcRenderer.invoke('agent:hosts', projectRoot),
 
-  // Install Axiom into one agent — server entry and slash command
+  // Install Axiom into one agent - server entry and slash command
   installAgent: (hostId: string, projectRoot?: string): Promise<AgentInstallResult> =>
     ipcRenderer.invoke('agent:install', hostId, projectRoot),
 

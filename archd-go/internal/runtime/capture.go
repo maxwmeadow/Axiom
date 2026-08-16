@@ -1,6 +1,6 @@
 // Investigation Capture (plan Phase 8). Records the agent's live investigation
-// — every trace, watch, call/return/exception, perturbation, data-flow slice,
-// and note — into an ordered, replayable document linked to a git commit SHA.
+// - every trace, watch, call/return/exception, perturbation, data-flow slice,
+// and note - into an ordered, replayable document linked to a git commit SHA.
 //
 // Named "Investigation Capture", NOT "replay-as-in-time-travel": it is a
 // recording of what the agent did and the values it observed, not a
@@ -20,7 +20,7 @@ import (
 )
 
 // recordableTypes are the WS event types captured into an investigation.
-// graph:snapshot / graph:patch / indexing:* are excluded — an investigation
+// graph:snapshot / graph:patch / indexing:* are excluded - an investigation
 // records the agent's dynamic activity, not static graph churn.
 var recordableTypes = map[string]bool{
 	"runtime:call":           true,
@@ -69,7 +69,7 @@ type Investigation struct {
 const maxCaptureEvents = 20000 // hard cap so a runaway hot loop can't OOM
 
 // recordTap is the hub tap. It appends recordable events to the workspace's
-// active investigation. Runs inline inside hub.Broadcast — kept cheap.
+// active investigation. Runs inline inside hub.Broadcast - kept cheap.
 func (m *Manager) recordTap(msgType string, payload json.RawMessage) {
 	if !recordableTypes[msgType] {
 		return

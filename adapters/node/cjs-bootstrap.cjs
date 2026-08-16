@@ -1,5 +1,5 @@
 'use strict'
-// CJS bootstrap — loaded via NODE_OPTIONS="--require .../cjs-bootstrap.cjs".
+// CJS bootstrap - loaded via NODE_OPTIONS="--require .../cjs-bootstrap.cjs".
 //
 // Installs the main-thread runtime and patches Module.prototype._compile so
 // every CommonJS file inside the user's workspace is AST-instrumented before

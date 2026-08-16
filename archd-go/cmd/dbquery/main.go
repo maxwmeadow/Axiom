@@ -62,7 +62,7 @@ func main() {
 	// ── Problems ──────────────────────────────────────────────────────────────
 	fmt.Printf("\n=== POTENTIAL ISSUES ===\n")
 
-	// Single-file LEAF systems (no children, 1 direct file — not just 1 direct file on a parent)
+	// Single-file LEAF systems (no children, 1 direct file - not just 1 direct file on a parent)
 	singleRows, _ := db.Query(`
 		SELECT s.name, f.rel_path
 		FROM systems s
@@ -80,7 +80,7 @@ func main() {
 		singles++
 	}
 
-	// Large LEAF systems (no children, ≥10 direct files — non-leaf parents having direct files is normal)
+	// Large LEAF systems (no children, ≥10 direct files - non-leaf parents having direct files is normal)
 	largeRows, _ := db.Query(`
 		SELECT s.name, s.depth, COUNT(*) as cnt
 		FROM systems s

@@ -4,7 +4,7 @@ Rules (mirrors RUNTIME_LAYER_PLAN "Large object serialization" mitigations):
 - max depth 2 for containers, max 10 items per container
 - strings truncated at 256 chars
 - bytes reported as a size placeholder, never decoded
-- arbitrary objects are reported by type name only — their __repr__ is NOT
+- arbitrary objects are reported by type name only - their __repr__ is NOT
   called (an ORM model's repr can lazy-load from the database inside the
   target process; a broken __repr__ would raise inside our hook)
 - circular references detected by id()

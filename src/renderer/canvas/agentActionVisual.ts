@@ -5,16 +5,16 @@ import type { AgentAction, AgentActionKind } from '../../shared/types.ts'
  *
  * Axiom now has two live streams arriving at the canvas at the same time:
  *
- *   1. The SEMANTIC stream — `graph:patch`, `call:trace`, `data:flow`,
+ *   1. The SEMANTIC stream - `graph:patch`, `call:trace`, `data:flow`,
  *      `runtime:*`, `planned:upserted`. This is consequence: something in the
  *      model actually changed, or a real path was resolved.
- *   2. The ACTION stream — `agent:action`. This is activity: what an agent did,
+ *   2. The ACTION stream - `agent:action`. This is activity: what an agent did,
  *      including reads that change nothing.
  *
  * They overlap almost completely. An agent calling `edit_systems` produces an
  * action AND a `system:upserted` patch. `get_call_path` produces an action AND
  * a `call:trace`. If both streams animated, every agent write and every trace
- * would fire twice — two pulses, two flows, doubled timing, and a canvas that
+ * would fire twice - two pulses, two flows, doubled timing, and a canvas that
  * looks broken.
  *
  * THE RULE: one consequence, one animation.
@@ -25,7 +25,7 @@ import type { AgentAction, AgentActionKind } from '../../shared/types.ts'
  *
  *   The action stream OWNS attribution and the log. Its only original visual
  *   is the read/attention signal, because a read produces no consequence and
- *   therefore no semantic broadcast — nothing else can show it.
+ *   therefore no semantic broadcast - nothing else can show it.
  *
  * Adding a new action kind means answering one question: does a broadcast
  * already exist for its consequence? If yes, it must not animate here.
@@ -50,7 +50,7 @@ export function actionOwnsAnimation(kind: AgentActionKind): boolean {
   return COVERED_BY[kind] === null
 }
 
-/** Why a kind does not animate here — used by tests and diagnostics. */
+/** Why a kind does not animate here - used by tests and diagnostics. */
 export function animationOwner(kind: AgentActionKind): string {
   return COVERED_BY[kind] ?? 'agent:action'
 }
@@ -89,7 +89,7 @@ export function agentAttentionFor(
  * Merges a new attention signal into the active set, keyed by node.
  *
  * An agent reading the same region repeatedly should deepen one signal rather
- * than stack several — the canvas must never accumulate overlapping glows on
+ * than stack several - the canvas must never accumulate overlapping glows on
  * one node.
  */
 export function mergeAttention(

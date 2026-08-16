@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react'
  * The first version animated entry and snapped on exit, and the reason is worth
  * writing down because it is easy to repeat: the sheet chrome lives on
  * pseudo-elements that only exist while the mode class is applied. A CSS
- * `animation` on a conditionally-present element can only ever play IN — the
+ * `animation` on a conditionally-present element can only ever play IN - the
  * instant the class is removed the element is gone, and there is nothing left
  * to animate out.
  *
@@ -24,7 +24,7 @@ export const SHEET_PHASE_MS = 460
 
 export interface SheetPhaseState {
   phase: SheetPhase
-  /** The sheet whose chrome is on screen — kept during `leaving`. */
+  /** The sheet whose chrome is on screen - kept during `leaving`. */
   sheetId: string | null
 }
 
@@ -74,7 +74,7 @@ export function clearedPhase(current: SheetPhaseState): SheetPhaseState {
  *
  * `entering` exists for exactly one frame so the browser paints the chrome at
  * zero presence before it transitions to one. Without that frame the element
- * mounts already at its final value and there is nothing to transition from —
+ * mounts already at its final value and there is nothing to transition from -
  * which is the same bug as the missing exit, from the other end.
  */
 export function useSheetPhase(activeSheetId: string | null): SheetPhaseState {

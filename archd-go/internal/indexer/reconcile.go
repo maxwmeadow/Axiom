@@ -59,7 +59,7 @@ func collectSourcePaths(root db.Root, ignoredPaths []string) ([]string, error) {
 //
 // The watcher only sees edits while archd is alive. Without this pass, closing
 // Axiom, letting agents work overnight, and reopening would produce an empty
-// Morning Delta — the single case the delta exists for. Reconciliation replays
+// Morning Delta - the single case the delta exists for. Reconciliation replays
 // what the watcher would have seen, through the exact same ReindexFile and
 // RemoveFile paths, so journaling, choreography, and broadcasts all behave
 // identically to a live edit.

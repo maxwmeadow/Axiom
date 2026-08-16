@@ -4,15 +4,15 @@
  * Every path that asks "what rectangle does the collision system see for this
  * node?" must come through here. Before this module the drop planner read node
  * sizes inline, the resize clamp read them again, and a debug view would have
- * read them a third time — three copies of the same three-way fallback chain,
+ * read them a third time - three copies of the same three-way fallback chain,
  * free to drift. Drift here is invisible until a node repels from a boundary
  * that is not the one being drawn.
  *
  * Two size readings genuinely exist and are NOT interchangeable:
  *
- *   `measured` — what the DOM actually laid out. This is what collision uses,
+ *   `measured` - what the DOM actually laid out. This is what collision uses,
  *                because it is what the user can see and bump into.
- *   `style`    — what the projection asked for. This is what the content-rect
+ *   `style`    - what the projection asked for. This is what the content-rect
  *                math uses, because insets are authored against requested size.
  *
  * They agree in a settled scene and disagree for a frame mid-measurement.
@@ -47,7 +47,7 @@ export function nodeWorldScale(node: Node): number {
 }
 
 /**
- * The world scale this node hands to its children — its own scale times the
+ * The world scale this node hands to its children - its own scale times the
  * interior compression it applies. Falls back to its own scale, which is the
  * correct answer for an uncompressed frame.
  */
@@ -83,7 +83,7 @@ export function nodeWorldRect(node: Node, absolute: Point): Rect {
 }
 
 /**
- * The frame's own size in its CANONICAL space — rendered size divided back out
+ * The frame's own size in its CANONICAL space - rendered size divided back out
  * by its world scale. Requested size wins here, matching the projection that
  * authored the insets.
  */
@@ -96,7 +96,7 @@ export function frameCanonicalSize(node: Node): { width: number; height: number 
 }
 
 /**
- * The frame's usable interior in its OWN canonical space — tab band and gap
+ * The frame's usable interior in its OWN canonical space - tab band and gap
  * insets already removed.
  */
 export function frameOwnContentRect(node: Node): Rect {
@@ -133,7 +133,7 @@ export interface WorldGap {
 
 /**
  * The spacing Axiom LEAVES between occupants of `target` when it arranges them
- * itself — a pack, a tidy, a newly indexed node, or the tidy resting distance a
+ * itself - a pack, a tidy, a newly indexed node, or the tidy resting distance a
  * hand-dropped node is offered when it has to move at all.
  *
  * This is a preference about how a layout looks, not a rule a drop must obey.
@@ -141,7 +141,7 @@ export interface WorldGap {
  *
  * FRAME_ITEM_GAP is authored in canonical units while placement runs in
  * absolute world units, so a frame nested at half scale must leave half the
- * world gap — otherwise the same arrangement packs differently by depth.
+ * world gap - otherwise the same arrangement packs differently by depth.
  */
 export function packingGapWithin(target: Node | null): WorldGap {
   if (!target) {
@@ -162,7 +162,7 @@ export function packingGapWithin(target: Node | null): WorldGap {
 }
 
 /**
- * The clearance a hand-placed node must actually respect — the only spacing
+ * The clearance a hand-placed node must actually respect - the only spacing
  * rule a drop can fail. Constant everywhere, at every depth, because its whole
  * job is keeping two rendered borders off the same line.
  */
@@ -175,7 +175,7 @@ export function dropClearance(): WorldGap {
   }
 }
 
-/** A rect grown on every side by `gap` — the region that repels a newcomer. */
+/** A rect grown on every side by `gap` - the region that repels a newcomer. */
 export function clearanceRect(rect: Rect, gap: number): Rect {
   return {
     x: rect.x - gap,
@@ -206,7 +206,7 @@ export function separationBetween(a: Rect, b: Rect): { x: number; y: number; min
 
 /**
  * How far apart the two size readings are. Non-zero means the node is mid
- * measurement, or that the projection and the DOM disagree — in which case
+ * measurement, or that the projection and the DOM disagree - in which case
  * collision and containment are running on different rectangles.
  */
 export function nodeSizeDisagreement(node: Node): { width: number; height: number } {

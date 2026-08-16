@@ -1,4 +1,4 @@
-// Planned elements — authored UML for code that doesn't exist yet
+// Planned elements - authored UML for code that doesn't exist yet
 // (UML_UX_PLAN.md REVISION 2). CRUD + reconciliation against reality.
 package db
 
@@ -176,7 +176,7 @@ func GetPlannedNode(db *sql.DB, id string) (*PlannedNode, error) {
 	return &nodes[0], nil
 }
 
-// GetOpenPlannedNodes returns unrealized planned nodes across all sheets —
+// GetOpenPlannedNodes returns unrealized planned nodes across all sheets -
 // the reconciliation working set.
 func GetOpenPlannedNodes(db *sql.DB, workspaceID string) ([]PlannedNode, error) {
 	rows, err := db.Query(`SELECT `+plannedCols+` FROM planned_nodes

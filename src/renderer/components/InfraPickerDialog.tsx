@@ -287,7 +287,7 @@ export function InfraPickerDialog(props: InfraPickerDialogProps) {
           >
             <label className="axiom-infra-picker__name-field">
               <span>
-                Name <small>optional — defaults to the service name</small>
+                Name <small>optional - defaults to the service name</small>
               </span>
               <input
                 className="axiom-infra-picker__name-input"

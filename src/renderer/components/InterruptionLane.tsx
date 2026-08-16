@@ -17,7 +17,7 @@ import { useInterruptionStore } from '../store/interruptionStore.ts'
  * step through them, but they never fight for the same pixels.
  *
  * Position is fixed and exclusive. No other surface may occupy the top-centre
- * strip — that rule is the whole reason this component exists.
+ * strip - that rule is the whole reason this component exists.
  */
 
 const KIND_LABEL: Record<Interruption['kind'], string> = {
@@ -33,7 +33,7 @@ export function InterruptionLane() {
     dismiss: state.dismiss,
   })))
 
-  // Expiry is the store's job — each entry owns a timer that removes it, so
+  // Expiry is the store's job - each entry owns a timer that removes it, so
   // `items` changing is the only thing that can change what is rendered.
   const { current, waiting } = laneState(items, Date.now())
 
@@ -109,7 +109,7 @@ export function InterruptionLane() {
             onClick={() => {
               // Dismissal is the raiser's to define. Removing the entry without
               // telling them means a "not now" that is neither remembered nor
-              // recoverable — and one that reappears on the next update.
+              // recoverable - and one that reappears on the next update.
               void current.onDismiss?.()
               dismiss(current.id)
             }}

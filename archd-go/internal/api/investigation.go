@@ -1,12 +1,12 @@
 // Investigation Capture HTTP endpoints (plan Phase 8). Bridges the MCP tools /
 // canvas to the runtime recorder and persists saved investigations.
 //
-//	POST   /api/investigation/start   {workspaceId, name?}   — begin recording
-//	POST   /api/investigation/note    {workspaceId, text}    — annotate timeline
-//	POST   /api/investigation/stop    {workspaceId}          — finalize + persist
-//	GET    /api/investigation/list?workspace=                — saved investigations
-//	GET    /api/investigation/<id>                           — full AxiomTrace doc
-//	DELETE /api/investigation/<id>?workspace=                — delete
+//	POST   /api/investigation/start   {workspaceId, name?}   - begin recording
+//	POST   /api/investigation/note    {workspaceId, text}    - annotate timeline
+//	POST   /api/investigation/stop    {workspaceId}          - finalize + persist
+//	GET    /api/investigation/list?workspace=                - saved investigations
+//	GET    /api/investigation/<id>                           - full AxiomTrace doc
+//	DELETE /api/investigation/<id>?workspace=                - delete
 package api
 
 import (
@@ -70,7 +70,7 @@ func (s *Server) handleInvestigationNote(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !s.runtime.AnnotateInvestigation(body.WorkspaceID, body.Text) {
-		jsonError(w, "no investigation is recording — call start_investigation first", 409)
+		jsonError(w, "no investigation is recording - call start_investigation first", 409)
 		return
 	}
 	jsonOK(w, map[string]any{"noted": true})
@@ -88,7 +88,7 @@ func (s *Server) handleInvestigationStop(w http.ResponseWriter, r *http.Request)
 		jsonError(w, "bad request", 400)
 		return
 	}
-	// Validate the DB is reachable BEFORE finalizing — otherwise stopping would
+	// Validate the DB is reachable BEFORE finalizing - otherwise stopping would
 	// discard the in-memory recording with nowhere to persist it.
 	sqlDB, err := s.dbFor(body.WorkspaceID)
 	if err != nil {
@@ -126,7 +126,7 @@ func (s *Server) handleInvestigationStop(w http.ResponseWriter, r *http.Request)
 		"eventCount": len(inv.Events),
 		"durationMs": inv.DurationMs,
 		"commit":     inv.Commit,
-		"note":       "Investigation saved. Share id " + inv.ID + " — open it on the canvas to replay the whole investigation step by step.",
+		"note":       "Investigation saved. Share id " + inv.ID + " - open it on the canvas to replay the whole investigation step by step.",
 	})
 }
 

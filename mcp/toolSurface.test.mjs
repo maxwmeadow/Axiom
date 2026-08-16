@@ -82,7 +82,7 @@ test('every legacy handler survives as an adapter', () => {
 })
 
 test('descriptions stay short enough to be worth their tokens', () => {
-  // Tool-level descriptions only, at four-space indentation — the nested
+  // Tool-level descriptions only, at four-space indentation - the nested
   // descriptions on schema properties are not what dominates the listing.
   const descriptions = [...coreBlock.matchAll(/\n {4}description: (['"])(.*?)\1,\n/gs)]
     .map(m => m[2])

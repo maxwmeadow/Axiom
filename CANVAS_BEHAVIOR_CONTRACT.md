@@ -102,7 +102,7 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 - Child positions and sizes convert through the parent's **content** scale;
   the parent's own box converts through its own world scale.
 - Every layout write replaces a whole row, so `interiorScale` is mandatory on
-  `FloorLayout` — a writer that is not about compression must carry it through.
+  `FloorLayout` - a writer that is not about compression must carry it through.
 - Node shells fill the live frame synchronously. Shell geometry must not trail
   resizing through a React-state measurement loop.
 - Container children remain visually stationary when a north or west parent
@@ -233,7 +233,7 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
   else. Every removal stays listed on the sheet that made it, restorable long
   afterwards, because changing your mind about a proposal is normal.
 - A removal whose node has since genuinely left the Floor is kept and marked,
-  never silently dropped — otherwise the Removed list cannot be trusted.
+  never silently dropped - otherwise the Removed list cannot be trusted.
 - Removal wins over a move, so a node is never both gone and animated into
   place.
 - The same delete gesture means different things in different places, so the UI
@@ -248,7 +248,7 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 
 - A sheet never communicates its mode by degrading the architecture. Live nodes
   render at full opacity and stay selectable, inspectable and connectable,
-  because a sheet is precisely where you work ON the architecture — fading the
+  because a sheet is precisely where you work ON the architecture - fading the
   thing you are reasoning about to 45% and making it inert is what made a sheet
   feel like drawing on glass over the map.
 - The signal lives entirely in the environment: a cooler paper tint beneath the
@@ -269,7 +269,7 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
   rather than searching the codebase.
 - **Material marks what is PROPOSED, not which surface you are looking at.**
   Live code renders identically on the Floor and on a sheet. Only planned
-  elements — new files, classes, systems — take sheet stock. If the same file
+  elements - new files, classes, systems - take sheet stock. If the same file
   changed appearance between views, the map would stop being one thing you
   trust and become two drawings of it.
 - The BOARD still changes with the mode, because the board is the mode. The
@@ -277,7 +277,7 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 - Sheet stock MUST be scoped to `.react-flow` itself, never to the
   `.axiom-sheet-mode` container that wraps it. `.react-flow` declares these
   tokens on itself, and a custom property declared on a closer ancestor always
-  beats one inherited from further up — so setting them on the container is
+  beats one inherited from further up - so setting them on the container is
   silently a no-op. This produced a real bug with no error and no warning:
   sheet headers stayed Floor-grey while every other part of sheet mode worked.
 - Tokens the canvas does not redeclare (`--sheet-presence`, `--sheet-ink`)
@@ -299,8 +299,8 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
   to animate. Dropping the id with the phase is what makes an exit snap.
 - Switching directly between two sheets re-enters rather than leaving, because
   the board never goes away and a fade-out/fade-in would read as a flicker.
-- Anything that changes value with the mode — including the header shelf colour
-  — transitions back on exit. A single snapping value is as conspicuous as an
+- Anything that changes value with the mode - including the header shelf colour
+  - transitions back on exit. A single snapping value is as conspicuous as an
   entirely missing animation.
 
 ### Sheet transitions
@@ -313,7 +313,7 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
   - Moves live in both worlds: they glide and never fade. Fading one would say
     "created" or "destroyed" about a file that exists either way.
   - Additions live only on the sheet: they appear on entry, depart on exit.
-  - Removals live only on the Floor: they depart on entry, appear on exit —
+  - Removals live only on the Floor: they depart on entry, appear on exit -
     the same vocabulary inverted, because a removal is an addition seen from
     the other side.
 - Live nodes the sheet says nothing about neither move nor fade.
@@ -371,8 +371,8 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 
 ### Claims are the unit of review
 
-- The reviewable unit is a CLAIM — the smallest statement that changes your
-  understanding of the architecture — not a raw change. Call sites, imports,
+- The reviewable unit is a CLAIM - the smallest statement that changes your
+  understanding of the architecture - not a raw change. Call sites, imports,
   and individual files are EVIDENCE nested under the claim they support.
 - One new dependency between two systems is ONE claim, however many call sites
   it has. Twenty files newly importing one module is one claim with twenty
@@ -401,7 +401,7 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
 - A claim shows the agent's own words as its rationale, preferring the closing
   summary and falling back to the declared goal while work is in flight.
 - Narration is always optional. An un-narrated agent change still appears and
-  is marked UNEXPLAINED — silence about a real change is information, not a
+  is marked UNEXPLAINED - silence about a real change is information, not a
   reason to hide it.
 - Starting new work closes only the same MCP client's session left open, so a
   crashed agent cannot block narration or evict another agent's live presence.
@@ -435,7 +435,7 @@ typography, silhouettes, reveal thresholds, geometry, or interaction timing.
   file perimeter.
 - Selecting a claim ghosts everything unrelated using the existing dim
   treatment. The subject, everything inside it, and every container around it
-  stay lit — never a lit node inside a ghosted parent.
+  stay lit - never a lit node inside a ghosted parent.
 - A boundary claim frames both SYSTEMS, because the boundary is the claim.
   A file claim frames the file within its parent. A claim with nothing on
   canvas leaves the camera where it is.

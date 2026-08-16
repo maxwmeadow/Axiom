@@ -78,7 +78,7 @@ class AxiomRuntime {
           kind: 'rate_limit',
           watchId: watch.id,
           ts: now,
-          message: `exceeded ${MAX_CALLS_PER_SEC} calls/sec — watch auto-disabled`,
+          message: `exceeded ${MAX_CALLS_PER_SEC} calls/sec - watch auto-disabled`,
         })
       }
       return override ? { active: false, o: override } : INACTIVE
@@ -169,7 +169,7 @@ class AxiomRuntime {
     for (const w of named) {
       if (w.lineStart <= line && line <= Math.max(w.lineEnd, w.lineStart)) return w
     }
-    // Name-only fallback tolerates a stale index, but only when unambiguous —
+    // Name-only fallback tolerates a stale index, but only when unambiguous -
     // never hijack a different same-named function in the same file.
     return named.length === 1 ? named[0] : null
   }
@@ -311,7 +311,7 @@ class AxiomRuntime {
         if (line.trim()) this._dispatch(line)
       }
     })
-    // 'error' and 'close' both fire on failure — guard so only one reconnect
+    // 'error' and 'close' both fire on failure - guard so only one reconnect
     // is scheduled (otherwise attempts double every cycle → fd exhaustion).
     let dropped = false
     const drop = () => {
@@ -361,7 +361,7 @@ class AxiomRuntime {
     this.queue = []
     for (let i = 0; i < q.length; i++) {
       if (!this._write(q[i])) {
-        // Socket buffer full — requeue the rest and wait for 'drain' so we
+        // Socket buffer full - requeue the rest and wait for 'drain' so we
         // never buffer unbounded strings in the target process.
         this.paused = true
         this.queue = q.slice(i + 1).concat(this.queue)
@@ -407,7 +407,7 @@ function _safe(v, depth, seen) {
   }
   if (t === 'object') {
     if (seen.has(v)) return { type: 'object', value: '<circular>' }
-    // Built-ins keep their data on internal slots, so Object.keys() is empty —
+    // Built-ins keep their data on internal slots, so Object.keys() is empty -
     // format them explicitly instead of emitting `Date {}`.
     if (v instanceof Date) return { type: 'Date', value: isNaN(v) ? 'Invalid Date' : v.toISOString() }
     if (v instanceof RegExp) return { type: 'RegExp', value: String(v) }

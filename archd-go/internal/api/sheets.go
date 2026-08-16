@@ -1,19 +1,19 @@
 // Sheets + annotations + canvas→agent channel endpoints (UML_UX_PLAN.md U1/U-C).
 //
-//	GET    /api/sheets?workspace=            — list sheets
-//	POST   /api/sheets                       — create sheet {workspaceId, name, purpose?, kind?, elements?}
-//	GET    /api/sheets/:id?workspace=        — sheet + elements + annotations
-//	GET    /api/sheets/:id/asm?workspace=    — agent-facing ASM text
-//	PUT    /api/sheets/:id                   — update name/purpose/folder/viewport
+//	GET    /api/sheets?workspace=            - list sheets
+//	POST   /api/sheets                       - create sheet {workspaceId, name, purpose?, kind?, elements?}
+//	GET    /api/sheets/:id?workspace=        - sheet + elements + annotations
+//	GET    /api/sheets/:id/asm?workspace=    - agent-facing ASM text
+//	PUT    /api/sheets/:id                   - update name/purpose/folder/viewport
 //	DELETE /api/sheets/:id?workspace=
-//	POST   /api/sheets/:id/elements          — add element(s)
+//	POST   /api/sheets/:id/elements          - add element(s)
 //	DELETE /api/sheets/:id/elements/:elId?workspace=
 //	POST   /api/sheets/:id/elements/:elId/position
-//	POST   /api/annotations                  — create note/flag/reply
+//	POST   /api/annotations                  - create note/flag/reply
 //	DELETE /api/annotations/:id?workspace=
-//	POST   /api/canvas/send                  — canvas enqueues a message to agents
-//	GET    /api/canvas/outbox?workspace=&peek= — drain (or peek) queued messages
-//	POST   /api/canvas/reply                 — agent answers a message {msgId, body}
+//	POST   /api/canvas/send                  - canvas enqueues a message to agents
+//	GET    /api/canvas/outbox?workspace=&peek= - drain (or peek) queued messages
+//	POST   /api/canvas/reply                 - agent answers a message {msgId, body}
 package api
 
 import (

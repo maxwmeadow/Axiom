@@ -10,7 +10,7 @@
    against it without needing !important. */
 
 /* ─── The interruption lane ─────────────────────────────────────────────────
-   One surface, top-centre, exclusive. Nothing else may be positioned here —
+   One surface, top-centre, exclusive. Nothing else may be positioned here -
    the old InjectConfirmBanner and the collapsed delta strip both claimed this
    strip and covered each other, which is the collision this replaces.
 

@@ -1,8 +1,8 @@
-# Track A — Parallel Agent Awareness
+# Track A - Parallel Agent Awareness
 
 Worktree: `C:\Users\maxst\VSCodeProjects\Axiom-parallel-agents`
 Branch: `codex/parallel-agents` (branched from `main` @ `ab69e5b`)
-Companion track: `claude/workbench-spine` — do not edit its files (see §6).
+Companion track: `claude/workbench-spine` - do not edit its files (see §6).
 
 ---
 
@@ -18,10 +18,10 @@ Verified in the current code:
   (`internal/api/investigation.go`). The graph, `structural_events`,
   `work_sessions`, `agent_actions`, and delta claims have no branch dimension.
 - `roots` is already a `workspace 1:N roots` table and `watcher.New` already
-  accepts `[]db.Root` — but exactly one root is created per workspace on open
+  accepts `[]db.Root` - but exactly one root is created per workspace on open
   (`internal/api/server.go` ~line 330).
 
-Meanwhile the real 2026 workflow — and this repo owner's own daily workflow —
+Meanwhile the real 2026 workflow - and this repo owner's own daily workflow -
 is **N agents in N git worktrees on N branches**. Axiom is structurally
 incapable of showing that. It is the single largest reason the app has no
 reason to be opened.
@@ -37,7 +37,7 @@ None of them can answer: **"did these three branches touch the same
 architectural boundary?"** That question needs a semantic map of the codebase.
 Axiom has one. Nobody else does.
 
-That question — asked *before* merge, not during — is the deliverable. Branch
+That question - asked *before* merge, not during - is the deliverable. Branch
 awareness is the substrate for it, not the goal.
 
 ## 3. Scope
@@ -52,14 +52,14 @@ awareness is the substrate for it, not the goal.
 ### 3.2 Branch-stamped history
 Stamp root/branch on `structural_events`, `work_sessions`, and `agent_actions`.
 Existing rows have no branch; treat NULL as "the primary root" so old data still
-reads correctly. Migrations must be additive — never rewrite history.
+reads correctly. Migrations must be additive - never rewrite history.
 
 ### 3.3 Per-branch delta
 `/api/delta` gains a root/branch filter. The delta watermark
 (`workspaces.delta_reviewed_at`) becomes per-root: reviewing branch A must not
 acknowledge branch B's changes.
 
-### 3.4 Cross-branch collision — the payoff
+### 3.4 Cross-branch collision - the payoff
 A read model answering: for the current set of active branches, which
 **systems** (semantic boundaries, not files) does each one touch, and where do
 they overlap?
@@ -75,7 +75,7 @@ before either branch is finished.
 ### 3.5 MCP
 Agents report which worktree they occupy. `start_work` should capture the
 agent's working directory and resolve it to a root. Keep the tool surface
-budget in `MCP_SURFACE.md` green — guard tests enforce it.
+budget in `MCP_SURFACE.md` green - guard tests enforce it.
 
 ### 3.6 UI
 Fill in `src/renderer/components/AgentLane.tsx` (currently renders `null`,
@@ -89,7 +89,7 @@ You also own the branch-aware briefing: `/api/command-deck` currently returns
 the project launcher. Make it per-branch. The surface that consumes it is
 yours to design.
 
-## 4. Landmine — read before touching the DB
+## 4. Landmine - read before touching the DB
 
 `internal/db/db.go` line ~29:
 
@@ -100,7 +100,7 @@ db.SetMaxOpenConns(1) // SQLite is not safe for concurrent writes
 Four worktree watchers reindexing into one connection will serialize and stall
 the UI. **Solve this before building on top of it.**
 
-The recommended shape — and this is a recommendation, not a mandate; if you
+The recommended shape - and this is a recommendation, not a mandate; if you
 find something better after investigating, take it and write down why:
 
 > **One SQLite database per root**, extending the pattern archd already uses
@@ -109,8 +109,8 @@ find something better after investigating, take it and write down why:
 > `branch_id` migration across every table and sidesteps the lock problem
 > entirely rather than tuning around it.
 
-The alternative — stamping `branch_id` everywhere and raising the connection
-limit — means auditing every write path for concurrency safety. That is a much
+The alternative - stamping `branch_id` everywhere and raising the connection
+limit - means auditing every write path for concurrency safety. That is a much
 larger surface to get wrong.
 
 **Implemented decision:** retain the existing per-workspace database, WAL mode,
@@ -139,7 +139,7 @@ backward-compatible: an existing project must open without re-indexing.
 - [ ] `npm run build` green
 - [ ] New behavior has tests; concurrency changes have tests that would fail without them
 
-## 6. Boundaries — files you must NOT edit
+## 6. Boundaries - files you must NOT edit
 
 The companion worktree (`claude/workbench-spine`) owns these. Editing them
 guarantees a merge conflict:
@@ -157,7 +157,7 @@ src/renderer/components/InjectConfirmBanner.tsx
 src/renderer/store/onboardingStore.ts
 ```
 
-`src/shared/types.ts` — append only, inside the marked
+`src/shared/types.ts` - append only, inside the marked
 `── Parallel agents (Track A) ──` block at the end of the file.
 
 Everything under `archd-go/`, `mcp/`, `src/renderer/canvas/`, and new files you
@@ -165,7 +165,7 @@ create are yours.
 
 ## 7. Working rules
 
-- **Build after every Go change:** `npm run build:archd` (uses MSYS2 Go —
+- **Build after every Go change:** `npm run build:archd` (uses MSYS2 Go -
   TDM-GCC produces broken binaries on this machine). Never report done without it.
 - Commit in coherent increments with real messages. Do not squash the whole
   track into one commit.
@@ -177,12 +177,12 @@ create are yours.
 
 ## 8. Suggested order
 
-1. §4 — decide and implement the storage/concurrency shape. Test it under
+1. §4 - decide and implement the storage/concurrency shape. Test it under
    simulated parallel writes before anything depends on it.
-2. §3.1 — worktree discovery and multi-watcher.
-3. §3.2 — branch stamping, additive.
-4. §3.3 — per-branch delta and watermark.
-5. §3.4 — cross-branch collision read model + API.
-6. §3.5 / §3.6 — MCP attribution and the lane UI.
+2. §3.1 - worktree discovery and multi-watcher.
+3. §3.2 - branch stamping, additive.
+4. §3.3 - per-branch delta and watermark.
+5. §3.4 - cross-branch collision read model + API.
+6. §3.5 / §3.6 - MCP attribution and the lane UI.
 
 Steps 1–2 are the risky ones. Get them right and the rest is mechanical.

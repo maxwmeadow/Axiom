@@ -324,7 +324,7 @@ export function AxiomNodeResizer({
       // Those insets are authored in CANONICAL frame units, while a rendered
       // parent's width/height are already multiplied by its world scale.
       // Feeding the scaled box straight into contentRect applied unscaled
-      // padding to scaled geometry, inflating every inset — which is why the
+      // padding to scaled geometry, inflating every inset - which is why the
       // node stopped far short of edges it could plainly be dragged to. Take
       // the content box in canonical units, then scale it, exactly as the drop
       // planner does for the same frame.
@@ -381,7 +381,7 @@ export function AxiomNodeResizer({
       maxWidth: boundedMaxWidth,
       maxHeight: boundedMaxHeight,
       // A west handle walks the origin toward the children, so it is bounded by
-      // how far the origin may travel — not by the east minimum, which is
+      // how far the origin may travel - not by the east minimum, which is
       // measured from an origin this handle is moving.
       minWidth: direction.horizontal === 'left'
         ? safePositive(minWidthWest ?? minWidth, 1)

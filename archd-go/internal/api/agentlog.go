@@ -11,8 +11,8 @@ import (
 	"axiom.local/archd/internal/db"
 )
 
-// POST /api/agent/action — record one thing an agent did, and show it live.
-// GET  /api/agent/actions?workspace=&since=&limit= — read the log back.
+// POST /api/agent/action - record one thing an agent did, and show it live.
+// GET  /api/agent/actions?workspace=&since=&limit= - read the log back.
 //
 // This is the agent-visibility spine. Every MCP tool call lands here from a
 // single wrapper in the MCP server, so a tool added later is logged without

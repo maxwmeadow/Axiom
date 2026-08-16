@@ -15,7 +15,7 @@ import {
  * never reaches the target process.
  *
  * This renders nothing of its own. It used to be a hand-positioned banner at
- * top-centre — the same coordinates the collapsed delta strip claimed, so the
+ * top-centre - the same coordinates the collapsed delta strip claimed, so the
  * two covered each other. It now raises a `decision` into the interruption
  * lane, which is the only surface allowed in that space and ranks a blocked
  * agent above everything else automatically.
@@ -55,7 +55,7 @@ export function InjectConfirmBanner() {
           raiseFailure(
             `inject-failed:${injection.id}`,
             'Could not answer the perturbation request',
-            `${detail} — the agent is still waiting.`,
+            `${detail} - the agent is still waiting.`,
           )
           useGraphStore.getState().addAgentActivity({
             message: `Injection confirmation failed: ${detail}`,

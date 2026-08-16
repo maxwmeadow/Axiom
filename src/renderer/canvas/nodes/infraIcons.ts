@@ -1,6 +1,6 @@
 // Brand icon lookup for infra nodes. Registry icon slugs are runtime data
 // (user/workspace registry layers can reference any simple-icons slug), so
-// resolution must be dynamic — a static import list would silently break for
+// resolution must be dynamic - a static import list would silently break for
 // custom services and hard-break the build whenever simple-icons renames an
 // icon. The package is data-only (SVG path strings); acceptable in a local
 // Electron bundle.
@@ -19,7 +19,7 @@ import azureCosmosDb from '../../assets/infra/azure-cosmosdb.svg'
 import azureServiceBus from '../../assets/infra/azure-service-bus.svg'
 import azureBlobStorage from '../../assets/infra/azure-blob-storage.svg'
 
-// simple-icons exports are named `siPostgresql`, `siAmazons3`, ... — slug with
+// simple-icons exports are named `siPostgresql`, `siAmazons3`, ... - slug with
 // the first letter of each character run capitalized. Slugs are lowercase
 // alphanumerics, so this is just "si" + slug with its first char uppercased.
 function exportName(slug: string): string {
@@ -63,12 +63,12 @@ export function brandIcon(slug: string): BrandIcon | null {
   return resolved
 }
 
-// Category glyphs — tiny drafting-legend silhouettes drawn as 24x24 paths so
+// Category glyphs - tiny drafting-legend silhouettes drawn as 24x24 paths so
 // unbranded/generic nodes still communicate their semantic role.
 export const CATEGORY_GLYPHS: Record<string, string> = {
   // cylinder (database)
   database: 'M12 3c-4.4 0-8 1.3-8 3v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6c0-1.7-3.6-3-8-3zm0 2c3.9 0 6 1 6 1s-2.1 1-6 1-6-1-6-1 2.1-1 6-1zm6 13c0 .5-2.1 1.5-6 1.5S6 18.5 6 18v-9.2C7.5 9.6 9.6 10 12 10s4.5-.4 6-1.2V18z',
-  // cylinder, dashed feel (cache) — reuse cylinder with a lightning bolt
+  // cylinder, dashed feel (cache) - reuse cylinder with a lightning bolt
   cache: 'M13 2L4 14h6l-1 8 9-12h-6l1-8z',
   // channel with arrows (queue)
   queue: 'M2 8h14l-3-3 1.4-1.4L20.8 9 14.4 14.4 13 13l3-3H2V8zm20 8H8l3 3-1.4 1.4L3.2 15 9.6 9.6 11 11l-3 3h14v2z',

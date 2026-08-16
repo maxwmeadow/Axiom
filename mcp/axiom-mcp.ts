@@ -176,23 +176,23 @@ async function resolveModelRef(
       WHERE r.workspace_id = ? AND (? = '' OR f.root_id = ?) AND f.rel_path = ? LIMIT 1`,
       [workspaceId, rootId ?? '', rootId ?? '', norm])
     if (exact.length === 1) return { fileId: exact[0].id }
-    throw new Error(`Ambiguous file ref "${ref}" — use the full relative path`)
+    throw new Error(`Ambiguous file ref "${ref}" - use the full relative path`)
   }
   const sysRows = await queryDb(workspaceId,
     `SELECT id FROM systems WHERE workspace_id = ? AND (id = ? OR name = ?) LIMIT 2`,
     [workspaceId, ref, norm])
   if (sysRows.length === 1) return { systemId: sysRows[0].id }
-  if (sysRows.length > 1) throw new Error(`Ambiguous system name "${ref}" — pass the system ID`)
+  if (sysRows.length > 1) throw new Error(`Ambiguous system name "${ref}" - pass the system ID`)
   const infraRows = await queryDb(workspaceId,
     `SELECT id FROM infra_nodes WHERE workspace_id = ? AND (id = ? OR name = ? OR service = ?) LIMIT 2`,
     [workspaceId, ref, norm, norm])
   if (infraRows.length === 1) return { infraId: infraRows[0].id }
-  if (infraRows.length > 1) throw new Error(`Ambiguous infra ref "${ref}" — pass the node ID`)
+  if (infraRows.length > 1) throw new Error(`Ambiguous infra ref "${ref}" - pass the node ID`)
   throw new Error(`No file, system, or infra node matches "${ref}"`)
 }
 
 // Piggyback trailer: Axiom owns one channel into every agent's context on
-// every MCP host — its own tool results. When canvas messages are queued,
+// every MCP host - its own tool results. When canvas messages are queued,
 // every response carries a one-line hint (except on the canvas tools
 // themselves, which are already the answer to the hint).
 const CANVAS_TOOLS = new Set(['get_canvas_updates', 'await_canvas', 'reply_to_canvas'])
@@ -205,9 +205,9 @@ async function canvasTrailer(workspaceId: string, toolName: string): Promise<str
     if (!res.ok) return ''
     const { queued } = await res.json() as { queued: number }
     if (queued > 0) {
-      return `\n\n⚑ ${queued} unread canvas message${queued === 1 ? '' : 's'} from the user — call get_canvas_updates now and reply with reply_to_canvas.`
+      return `\n\n⚑ ${queued} unread canvas message${queued === 1 ? '' : 's'} from the user - call get_canvas_updates now and reply with reply_to_canvas.`
     }
-  } catch { /* archd down or no workspace — stay silent */ }
+  } catch { /* archd down or no workspace - stay silent */ }
   return ''
 }
 
@@ -245,17 +245,17 @@ const NAME_ARCHITECTURE_PROMPT = `Map this codebase's architecture for its owner
 
 Produce a TREE OF SEMANTIC SYSTEMS.
 
-**What a system is.** A responsibility — something the codebase does. Name it the way an engineer would say it aloud explaining the project to a new colleague.
+**What a system is.** A responsibility - something the codebase does. Name it the way an engineer would say it aloud explaining the project to a new colleague.
 
 A system is NOT a folder. Folders are for navigation; use them to find your way around, never as the answer. Two files in different directories belong to the same system when they serve the same responsibility, and one directory often holds several distinct systems.
 
-**Nesting is the point, not a fallback.** Every system may contain sub-systems, and those may contain more. Go as deep as the code justifies — a large area earns four or five levels, a small utility earns none. "World Generation" contains "Biomes" contains "Temperature Falloff". If a system holds more than about ten files, ask whether it is really one thing or several. Prefer decomposing over leaving something flat. There may be hundreds of systems in the tree; that is correct. What must stay small is how many appear at any one level.
+**Nesting is the point, not a fallback.** Every system may contain sub-systems, and those may contain more. Go as deep as the code justifies - a large area earns four or five levels, a small utility earns none. "World Generation" contains "Biomes" contains "Temperature Falloff". If a system holds more than about ten files, ask whether it is really one thing or several. Prefer decomposing over leaving something flat. There may be hundreds of systems in the tree; that is correct. What must stay small is how many appear at any one level.
 
-**Shape.** Around a dozen systems at the top — the parts you would list if asked what this application is made of. Then nest. For each: a name of two to four words in the vocabulary of the domain, one sentence saying what it is responsible for, and for leaf systems the files that belong to it. Parents own their children rather than files directly, unless a file genuinely sits at that level. Every source file lands somewhere, or is reported unplaced with a reason.
+**Shape.** Around a dozen systems at the top - the parts you would list if asked what this application is made of. Then nest. For each: a name of two to four words in the vocabulary of the domain, one sentence saying what it is responsible for, and for leaf systems the files that belong to it. Parents own their children rather than files directly, unless a file genuinely sits at that level. Every source file lands somewhere, or is reported unplaced with a reason.
 
-**How to work.** Start from the file tree only to orient yourself. Then READ. Open entry points, the largest files, anything whose name suggests it coordinates others. Do not infer from filenames — a file called utils.ts may be the core of a system. Where a boundary is genuinely ambiguous, say so and say what would settle it; you can call get_architecture with scope cross_dependencies or neighbors to ask what a specific file actually talks to, but only when a boundary is unclear. Do not begin from the systems that already exist on the map: those were named automatically from word frequency and describe nothing.
+**How to work.** Start from the file tree only to orient yourself. Then READ. Open entry points, the largest files, anything whose name suggests it coordinates others. Do not infer from filenames - a file called utils.ts may be the core of a system. Where a boundary is genuinely ambiguous, say so and say what would settle it; you can call get_architecture with scope cross_dependencies or neighbors to ask what a specific file actually talks to, but only when a boundary is unclear. Do not begin from the systems that already exist on the map: those were named automatically from word frequency and describe nothing.
 
-**What matters most.** Someone who did NOT write this code — because an agent wrote it for them — should read your tree and understand what this software is and how it is put together.
+**What matters most.** Someone who did NOT write this code - because an agent wrote it for them - should read your tree and understand what this software is and how it is put together.
 
 Write the result with edit_systems (op: create, then assign). The human confirms, renames or rejects what you propose; you are not committing an architecture, you are making a proposal they can read.`
 
@@ -273,7 +273,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
   const msgs = res.ok ? (await res.json() as any[]) ?? [] : []
   const text = msgs.length === 0
     ? 'The user invoked the Axiom canvas review, but there are no unread canvas messages. Call list_sheets / get_sheet to inspect the current diagrams and ask what they would like to look at.'
-    : `The user sent ${msgs.length} message(s) from the Axiom UML canvas. For each: read it, inspect the referenced elements with axiom tools if needed, then ALWAYS answer via reply_to_canvas(msgId, body) — the user is watching the canvas, not this chat.\n\n` +
+    : `The user sent ${msgs.length} message(s) from the Axiom UML canvas. For each: read it, inspect the referenced elements with axiom tools if needed, then ALWAYS answer via reply_to_canvas(msgId, body) - the user is watching the canvas, not this chat.\n\n` +
       msgs.map((m, i) =>
         `--- message ${i + 1} (msgId: ${m.id}) ---\nNote: ${m.note}\nSelection: ${m.selection}\nStaged canvas changes: ${m.changeSummary || '(none)'}${m.sheetId ? `\nSheet: ${m.sheetId}` : ''}`
       ).join('\n\n')
@@ -286,8 +286,8 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 
 // ─── Tool surface ───────────────────────────────────────────────────────────
 //
-// Fifteen tools, not fifty-nine. Every legacy tool still executes — see
-// toolRouting.ts — but only the consolidated set is advertised, because the
+// Fifteen tools, not fifty-nine. Every legacy tool still executes - see
+// toolRouting.ts - but only the consolidated set is advertised, because the
 // listing is paid for on every single request an agent makes.
 //
 // Descriptions are deliberately short. They are the other half of the token
@@ -363,7 +363,7 @@ const CORE_TOOLS = [
   },
   {
     name: 'edit_systems',
-    description: "Author the architecture map. YOU name the systems — existing names are placeholders from word frequency, never a starting point. Build a tree of responsibilities, not folders, nested as deep as the code justifies. `propose` submits the whole tree for the human to confirm and is the normal path; see /axiom:name-architecture. ops: propose | create | update | delete | assign | merge | bulk.",
+    description: "Author the architecture map. YOU name the systems - existing names are placeholders from word frequency, never a starting point. Build a tree of responsibilities, not folders, nested as deep as the code justifies. `propose` submits the whole tree for the human to confirm and is the normal path; see /axiom:name-architecture. ops: propose | create | update | delete | assign | merge | bulk.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -389,7 +389,7 @@ const CORE_TOOLS = [
   },
   {
     name: 'edit_infra',
-    description: 'Record the infrastructure the code actually talks to — databases, queues, caches, external APIs — and connect it to the files that use it. ops: create | update | delete | connect.',
+    description: 'Record the infrastructure the code actually talks to - databases, queues, caches, external APIs - and connect it to the files that use it. ops: create | update | delete | connect.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -412,7 +412,7 @@ const CORE_TOOLS = [
   },
   {
     name: 'edit_sheet',
-    description: 'Work with sheets — named diagrams layered over the live map. ops: list | get | create | add | annotate.',
+    description: 'Work with sheets - named diagrams layered over the live map. ops: list | get | create | add | annotate.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -450,7 +450,7 @@ const CORE_TOOLS = [
   },
   {
     name: 'plan_element',
-    description: 'Draw a planned element onto a sheet — a class, service or data store you intend to build. The human sees it appear and can confirm or reject before you write code.',
+    description: 'Draw a planned element onto a sheet - a class, service or data store you intend to build. The human sees it appear and can confirm or reject before you write code.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -493,12 +493,12 @@ const CORE_TOOLS = [
   },
   {
     name: 'update_work',
-    description: "Record a decision or caveat while you work — especially anything the human would otherwise reverse-engineer from the diff: why you crossed a boundary, what you deliberately skipped, a tradeoff you took. Pass done:true with a summary to close the session.",
+    description: "Record a decision or caveat while you work - especially anything the human would otherwise reverse-engineer from the diff: why you crossed a boundary, what you deliberately skipped, a tradeoff you took. Pass done:true with a summary to close the session.",
     inputSchema: {
       type: 'object',
       properties: {
         note: { type: 'string', description: 'The decision, reason or caveat' },
-        summary: { type: 'string', description: 'With done:true — what changed architecturally' },
+        summary: { type: 'string', description: 'With done:true - what changed architecturally' },
         done: { type: 'boolean', description: 'Close this work session' },
       },
     },
@@ -571,7 +571,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     let result: unknown
 
     // Consolidated tools are rewritten into the legacy call that already
-    // implements them. Legacy names still work when called directly — they are
+    // implements them. Legacy names still work when called directly - they are
     // simply no longer advertised, so they cost no context.
     const routed = routeTool(name, args)
     const call = routed?.tool ?? name
@@ -783,7 +783,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Membership travels as repository-relative paths, because that is what
         // an agent has after reading a repository. The daemon resolves them and
-        // aborts the whole proposal if any path is missing or ambiguous — a
+        // aborts the whole proposal if any path is missing or ambiguous - a
         // half-resolved architecture is not reviewable.
         const memberships = proposed.flatMap((system: any) =>
           (system.files ?? []).map((filePath: string) => ({
@@ -826,7 +826,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const created = await res.json() as { id?: string; unresolvedFiles?: string[] }
         await postAgentActivity(
           project.workspaceId,
-          `Architecture proposed — ${proposed.length} systems awaiting review`,
+          `Architecture proposed - ${proposed.length} systems awaiting review`,
           'success',
         )
         result = {
@@ -846,7 +846,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // with the alternative named, not silently ignored.
         // The daemon returns a bare array. Reading `.proposals` off it found
         // nothing, so the guard silently passed and an agent wrote straight to
-        // the map — the exact bypass this exists to prevent. Accept both
+        // the map - the exact bypass this exists to prevent. Accept both
         // shapes: a guard that fails open is worse than no guard, because it
         // reads as enforcement while enforcing nothing.
         type Candidates = { decision?: string }
@@ -1512,7 +1512,7 @@ Steps to execute:
         const once = args.once !== false
         await postAgentActivity(
           project.workspaceId,
-          `Agent requests injection: ${symbol}(${paramName}=${JSON.stringify(value)}) in ${file} — awaiting user confirmation`,
+          `Agent requests injection: ${symbol}(${paramName}=${JSON.stringify(value)}) in ${file} - awaiting user confirmation`,
           'warn',
         )
         const res = await fetch(`${API_BASE}/api/runtime/inject`, {
@@ -1623,7 +1623,7 @@ Steps to execute:
       case 'note_work': {
         const text = args.text as string
         const session = activeWorkSessions.get(project.workspaceId)
-        if (!session) throw new Error('No active work session in this MCP client — call start_work first')
+        if (!session) throw new Error('No active work session in this MCP client - call start_work first')
         const res = await fetch(`${API_BASE}/api/work/note`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, sessionId: session.id, text }),
@@ -1637,7 +1637,7 @@ Steps to execute:
       case 'finish_work': {
         const summary = args.summary as string
         const session = activeWorkSessions.get(project.workspaceId)
-        if (!session) throw new Error('No active work session in this MCP client — call start_work first')
+        if (!session) throw new Error('No active work session in this MCP client - call start_work first')
         const res = await fetch(`${API_BASE}/api/work/finish`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspaceId: project.workspaceId, sessionId: session.id, summary }),
@@ -1657,7 +1657,7 @@ Steps to execute:
         })
         if (!res.ok) throw new Error(`start_investigation failed: ${await res.text()}`)
         result = await res.json()
-        await postAgentActivity(project.workspaceId, `Agent started investigation "${name || 'untitled'}" — recording`, 'success')
+        await postAgentActivity(project.workspaceId, `Agent started investigation "${name || 'untitled'}" - recording`, 'success')
         break
       }
 
@@ -1734,7 +1734,7 @@ Steps to execute:
 
         // Resolve path strings to file IDs if needed
         const resolveFileId = async (ref: string): Promise<string> => {
-          // UUID pattern — already an ID
+          // UUID pattern - already an ID
           if (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(ref)) return ref
           const rows = await queryDb(project.workspaceId, `
             SELECT f.id FROM files f
@@ -1802,7 +1802,7 @@ Steps to execute:
             service: args.service ?? '',
             category: args.category ?? '',
             subtype: args.subtype ?? '',
-            config: args.config, // raw object — archd stores it as a JSON blob
+            config: args.config, // raw object - archd stores it as a JSON blob
             createdBy: 'agent',
           }),
         })
@@ -1825,7 +1825,7 @@ Steps to execute:
             name: args.name,
             service: args.service,
             status: args.status,
-            config: args.config, // raw object — archd stores it as a JSON blob
+            config: args.config, // raw object - archd stores it as a JSON blob
           }),
         })
         if (!res.ok) throw new Error(`update infra failed: ${await res.text()}`)
@@ -1924,7 +1924,7 @@ Steps to execute:
         break
       }
 
-      // ── Sheets (UML experience layer — UML_UX_PLAN.md U1) ─────────────────
+      // ── Sheets (UML experience layer - UML_UX_PLAN.md U1) ─────────────────
       case 'list_sheets': {
         const res = await fetch(`${API_BASE}/api/sheets?workspace=${encodeURIComponent(project.workspaceId)}`)
         if (!res.ok) throw new Error(`sheets list failed: ${await res.text()}`)
@@ -2081,7 +2081,7 @@ Steps to execute:
         result = {
           messages: msgs ?? [],
           note: (msgs ?? []).length > 0
-            ? 'Reply to each with reply_to_canvas(msgId, body) — the user is waiting on the canvas.'
+            ? 'Reply to each with reply_to_canvas(msgId, body) - the user is waiting on the canvas.'
             : 'No unread canvas messages.',
         }
         break

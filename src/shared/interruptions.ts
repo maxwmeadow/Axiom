@@ -1,4 +1,4 @@
-// Interruptions — everything that wants the user's attention over the canvas.
+// Interruptions - everything that wants the user's attention over the canvas.
 //
 // Axiom grew seven independent floating surfaces, each deciding on its own when
 // to appear. Two of them shipped at identical coordinates and covered each
@@ -6,7 +6,7 @@
 // at a time, in whatever order their triggers happened to fire, with no way to
 // tell which mattered.
 //
-// The fix is not "show everything at once" — a wall of banners is the same
+// The fix is not "show everything at once" - a wall of banners is the same
 // problem wearing a different coat. It is a single ranked queue with exactly one
 // item visible, an honest count of what is behind it, and a rule for what wins.
 //
@@ -16,10 +16,10 @@
 /**
  * Why something is interrupting, in descending order of claim on attention.
  *
- * · decision   — work is blocked until the user answers. An agent is waiting.
- * · failure    — something broke. The user must know; nothing is waiting on them.
- * · invitation — an offer to act, valuable but never urgent.
- * · notice     — confirmation of something that already succeeded.
+ * · decision   - work is blocked until the user answers. An agent is waiting.
+ * · failure    - something broke. The user must know; nothing is waiting on them.
+ * · invitation - an offer to act, valuable but never urgent.
+ * · notice     - confirmation of something that already succeeded.
  */
 export type InterruptionKind = 'decision' | 'failure' | 'invitation' | 'notice'
 
@@ -40,7 +40,7 @@ export interface InterruptionAction {
 export interface Interruption {
   /**
    * Stable identity. Re-raising the same id replaces the existing entry rather
-   * than stacking a duplicate — a retry loop that fails ten times is one
+   * than stacking a duplicate - a retry loop that fails ten times is one
    * interruption, not ten.
    */
   id: string
@@ -63,7 +63,7 @@ export interface Interruption {
   /**
    * What dismissal *means* to whoever raised this.
    *
-   * Without it, dismissing only removes the entry from the queue — which is
+   * Without it, dismissing only removes the entry from the queue - which is
    * wrong for anything whose "not now" has to be remembered. The delta needs
    * to record that it was set aside so the status bar can offer it back, and
    * so it does not immediately reappear on the next file change. Raisers that
@@ -119,7 +119,7 @@ export interface LaneState {
 }
 
 /**
- * What the lane shows. Exactly one item, never two — the count is how the rest
+ * What the lane shows. Exactly one item, never two - the count is how the rest
  * stay honest without competing for the same space.
  */
 export function laneState(items: readonly Interruption[], now: number): LaneState {

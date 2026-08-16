@@ -117,7 +117,7 @@ test('the tab never exceeds the shell it is drawn on', () => {
 
 test('a name is only ever truncated when the shell genuinely cannot hold it', () => {
   // Truncation is legitimate on a narrow frame, but a roomy frame must show
-  // the whole name — that is the difference between a policy and a bug.
+  // the whole name - that is the difference between a policy and a bug.
   const roomy = {
     shellWidth: 1100,
     shellHeight: 480,

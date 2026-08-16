@@ -45,13 +45,13 @@ export interface DropFrameInput {
  * Which placement strategy produced the landing spot, in escalating order of
  * how much of the existing arrangement it disturbs.
  *
- *   direct     — landed where it was released (clamped inside the frame).
- *   slide      — moved to the nearest free slot inside a frame.
- *   root-slide — same search among top-level frames, at FRAME_ROOT_GAP.
- *   repack     — same-parent move with no free slot: siblings were rearranged.
- *   compress   — the frame shrank its interior to make room.
- *   group-fit  — no interior lever available: the whole group was scaled in.
- *   blocked    — nothing worked; the node keeps its released position.
+ *   direct     - landed where it was released (clamped inside the frame).
+ *   slide      - moved to the nearest free slot inside a frame.
+ *   root-slide - same search among top-level frames, at FRAME_ROOT_GAP.
+ *   repack     - same-parent move with no free slot: siblings were rearranged.
+ *   compress   - the frame shrank its interior to make room.
+ *   group-fit  - no interior lever available: the whole group was scaled in.
+ *   blocked    - nothing worked; the node keeps its released position.
  */
 export type DropResolution =
   | 'direct' | 'slide' | 'root-slide' | 'repack' | 'compress' | 'group-fit' | 'blocked'
@@ -123,7 +123,7 @@ export interface CanvasDropPersistencePlan {
    *
    * A drop is committed in two phases so every correction is something the eye
    * can follow. Applying the reparent and the correction in one commit gives a
-   * CSS transition no "before" state to interpolate from — the node simply
+   * CSS transition no "before" state to interpolate from - the node simply
    * appears at its corrected spot. Landing here first, then animating to
    * `optimisticLayouts`, makes the edge push, the slide off a sibling, the
    * size-parity change and the interior compression all visible movements.
@@ -235,13 +235,13 @@ export function buildDropFrame({
   // preference and a law.
   //
   // `clearance` is the only distance a hand-placed drop can FAIL. It is small,
-  // flat and identical at every depth — just enough that two borders never
+  // flat and identical at every depth - just enough that two borders never
   // share a line. Steps 1, 2 and 3 all measure against it and nothing else.
   //
   // `worldGap` is how far apart Axiom LIKES to leave things when IT is the one
   // arranging them. Below, that is the repack fallback alone. Letting it reach
   // any step that judges a human's drop is what made a node unable to approach
-  // a system: the release point was legal — not overlapping, inside the frame —
+  // a system: the release point was legal - not overlapping, inside the frame -
   // and got thrown a hundred units away for sitting inside a tidiness margin,
   // because every alternative the search offered was a full gap clear of
   // everything.
@@ -258,7 +258,7 @@ export function buildDropFrame({
     position.y + size.height + clearance > rect.y)
 
   // Step 1 is a plain minimal clamp. It used to be a "wall-directed" search
-  // that pushed the node to the MIDPOINT of the largest free run — so a node
+  // that pushed the node to the MIDPOINT of the largest free run - so a node
   // dropped a few pixels above a frame's tab flew hundreds of units down the
   // frame, while every other path nudged by the smallest amount that worked.
   // A drop that already sits clear keeps its exact position, as before.
@@ -332,8 +332,8 @@ export function buildDropFrame({
     : null
 
   // Which of the escalating placement strategies actually decided the landing
-  // spot. The cases are mutually exclusive by construction — compression needs
-  // a parent change, a repack needs the absence of one — so this reads the
+  // spot. The cases are mutually exclusive by construction - compression needs
+  // a parent change, a repack needs the absence of one - so this reads the
   // outcome rather than re-deciding it.
   const resolution: DropResolution =
     compression ? 'compress'
@@ -436,7 +436,7 @@ export function containPointWithin(
 /**
  * Nearest free slot for the incoming group, searched from where it was
  * dropped. Existing children are fixed obstacles, so this never disturbs an
- * arrangement the user has already set up — it only decides where the newcomer
+ * arrangement the user has already set up - it only decides where the newcomer
  * lands. Returns the translation to apply, or null if the frame has no room.
  *
  * `clearance` is the ONLY spacing this obeys, and the packing gaps are
@@ -487,7 +487,7 @@ function compressedLocalPosition(rect: Rect, frame: DropFrame): Point {
 
 /**
  * The container's own row, rewritten with a new interior scale and nothing
- * else. Reusing its persisted geometry verbatim is deliberate — a compression
+ * else. Reusing its persisted geometry verbatim is deliberate - a compression
  * that altered the container's position or size would defeat the whole design.
  */
 function containerCompressionWrite(
@@ -664,7 +664,7 @@ export function planCanvasDrop({
     : []
 
   // Case 3 writes exactly one extra row: the container's own. Its position,
-  // size and scale are untouched — only how much it compresses what it holds.
+  // size and scale are untouched - only how much it compresses what it holds.
   const containerUpdate = workspaceId && frame.compression && frame.target && frame.compression.factor !== 1
     ? containerCompressionWrite(frame.target, frame.compression.interiorScale, floorLayouts, systemIds, fileIds, infraIds)
     : null

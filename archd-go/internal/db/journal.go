@@ -6,7 +6,7 @@ import (
 )
 
 // The structural journal is the durable memory behind Morning Delta. Live
-// choreography (graph:patch) is transient — it only reaches a renderer that
+// choreography (graph:patch) is transient - it only reaches a renderer that
 // happened to be watching. The journal answers the question you ask when you
 // were NOT watching: "what did my agents change while I was away?"
 //
@@ -54,7 +54,7 @@ type StructuralEvent struct {
 	Detail       string `json:"detail,omitempty"` // JSON blob, kind-specific
 	Count        int    `json:"count"`
 	// SessionID links this change to the work an agent declared it was doing.
-	// Empty means nobody narrated it — which is itself worth surfacing.
+	// Empty means nobody narrated it - which is itself worth surfacing.
 	SessionID string `json:"sessionId,omitempty"`
 }
 
@@ -140,7 +140,7 @@ func RecordStructuralEvent(db *sql.DB, ev StructuralEvent) error {
 }
 
 // GetStructuralEvents returns every event strictly newer than since, oldest
-// first — replay order, so the delta can be scrubbed through the same living
+// first - replay order, so the delta can be scrubbed through the same living
 // choreography that would have animated it live.
 func GetStructuralEvents(db *sql.DB, workspaceID string, since int64) ([]StructuralEvent, error) {
 	return getStructuralEvents(db, workspaceID, "", "", since, false)

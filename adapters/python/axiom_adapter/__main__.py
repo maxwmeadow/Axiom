@@ -4,7 +4,7 @@
     python -m axiom_adapter run -m mypackage.server [args...]
 
 The target runs in THIS process (via runpy) with sys.argv rewritten, so it
-behaves exactly as if launched directly — no subprocess, no code changes.
+behaves exactly as if launched directly - no subprocess, no code changes.
 """
 
 from __future__ import annotations

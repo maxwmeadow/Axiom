@@ -96,7 +96,7 @@ export function planCanvasResize({
   }
 
   // Children are stored in the frame's CONTENT space, so their compensation
-  // divides by contentScale — equal to worldScale unless the frame compresses.
+  // divides by contentScale - equal to worldScale unless the frame compresses.
   const contentScale = Number((node.data as Record<string, unknown>).contentScale ?? worldScale)
 
   const childLayouts: FloorLayoutWrite[] = [...start.children].flatMap(([childId, childStart]) => {

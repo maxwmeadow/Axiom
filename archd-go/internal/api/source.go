@@ -1,10 +1,10 @@
-// Function body extraction — serves the source code of an indexed symbol.
+// Function body extraction - serves the source code of an indexed symbol.
 //
 //	GET /api/function-body?workspace=<id>&file=<fileId|relPath>&symbol=<name>
 //
 // The file may be referenced by ID or by relative path (suffix match allowed,
 // forward or back slashes). The symbol is matched exactly first, then
-// case-insensitively. Returns every match — overloaded/duplicate names in the
+// case-insensitively. Returns every match - overloaded/duplicate names in the
 // same file are all included so the agent can disambiguate by line range.
 package api
 
@@ -148,7 +148,7 @@ func (s *Server) handleFunctionBody(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read only up to the last line any match needs — never the whole file
+	// Read only up to the last line any match needs - never the whole file
 	// into memory (an indexed file could be a huge generated artifact).
 	maxLine := 0
 	for _, sym := range matches {

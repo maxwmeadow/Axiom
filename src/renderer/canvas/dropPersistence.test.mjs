@@ -145,7 +145,7 @@ test('a crowded drop slides the newcomer instead of moving the residents', () =>
   })
 
   const byId = new Map(plan.updates.map(update => [update.nodeId, update]))
-  // The residents are not written at all — the strongest form of "they keep
+  // The residents are not written at all - the strongest form of "they keep
   // the positions they already had", and proof no drop can nudge a bystander.
   assert.equal(byId.has('a'), false)
   assert.equal(byId.has('b'), false)
@@ -410,7 +410,7 @@ test('a drop into a full frame compresses its interior and moves nobody', () => 
 
   const frameUpdate = plan.updates.find(update => update.nodeId === 'frame')
   assert.ok(frameUpdate.interiorScale < 1, 'the interior compresses')
-  // The container's own geometry is untouched — that is the entire point.
+  // The container's own geometry is untouched - that is the entire point.
   assert.equal(frameUpdate.width, 620)
   assert.equal(frameUpdate.height, 420)
   assert.equal(frameUpdate.scale, 1)
@@ -452,7 +452,7 @@ test('a drop with room does not touch the container at all', () => {
 
 test('a reparenting drop arrives where it was released, then animates to its slot', () => {
   const target = node('frame', { type: 'system', style: { width: 620, height: 420 } })
-  // Released overhanging the frame's left edge, cursor inside — the exact case
+  // Released overhanging the frame's left edge, cursor inside - the exact case
   // that used to teleport, because the reparent and the push happened at once.
   const dragged = node('newcomer', { type: 'file', selected: true, style: { width: 220, height: 110 } })
   const plan = planCanvasDrop({
@@ -470,7 +470,7 @@ test('a reparenting drop arrives where it was released, then animates to its slo
   const arrival = plan.arrivalLayouts.find(item => item.nodeId === 'newcomer')
   const settled = plan.optimisticLayouts.find(item => item.nodeId === 'newcomer')
 
-  // Phase one is the release point exactly — still overhanging.
+  // Phase one is the release point exactly - still overhanging.
   assert.equal(arrival.positionX, -40)
   assert.equal(arrival.positionY, 200)
   // Phase two pushes it clear of the edge, so there is a real distance to move.

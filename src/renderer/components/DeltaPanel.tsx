@@ -22,7 +22,7 @@ const DELTA_INVITATION = 'delta-review'
  * Morning Delta review panel.
  *
  * This replaced a horizontal scrubber, and the difference is not decoration.
- * A scrubber says "here is item 4 of 10" — you cannot see the shape of the
+ * A scrubber says "here is item 4 of 10" - you cannot see the shape of the
  * work, cannot skip what you don't care about, and cannot read a path in the
  * space available. Review is triage, not playback: you want the whole list at
  * once, ranked, with room for the actual names of things.
@@ -201,7 +201,7 @@ export function DeltaPanel() {
   }, [reviewing, active])
 
   // The invitation to review lives in the interruption lane, not beside it.
-  // It used to be a strip at top-centre — the same coordinates the lane now
+  // It used to be a strip at top-centre - the same coordinates the lane now
   // occupies, so the two covered each other exactly like the banners this was
   // supposed to have fixed. One surface owns that space; this is a tenant.
   const pending = Boolean(delta) && !review.empty && !reviewing &&
@@ -221,7 +221,7 @@ export function DeltaPanel() {
       `${deltaWindow(delta.since, delta.until)} · ${deltaAttribution(delta.counts)}`,
       [{ label: 'Review', primary: true, run: startReview }],
       deferDelta,
-      'Set aside — stays unreviewed, reopen from the status bar',
+      'Set aside - stays unreviewed, reopen from the status bar',
     )
   }, [pending, delta, review, startReview, deferDelta])
 
@@ -264,7 +264,7 @@ export function DeltaPanel() {
               {session.notes.length > 0 && (
                 <ul className="axiom-delta__session-notes">
                   {session.notes.map((note, index) => (
-                    <li key={`${session.id}:${index}`}>— {note.text}</li>
+                    <li key={`${session.id}:${index}`}>- {note.text}</li>
                   ))}
                 </ul>
               )}

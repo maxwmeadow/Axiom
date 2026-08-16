@@ -115,7 +115,7 @@ func TestNoOpSaveIsNotJournaled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Same bytes written again — a save, but not a change.
+	// Same bytes written again - a save, but not a change.
 	writeLivingFixture(t, path, "def run():\n    return 1\n")
 	if err := ReindexFile(sqlDB, eventHub, root, path); err != nil {
 		t.Fatal(err)
