@@ -696,9 +696,9 @@ test('presents project navigation as a desktop workbench launcher', async () => 
   await expect(page.getByRole('heading', { name: 'Axiom', level: 1 })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Command Deck' })).toBeVisible()
   await expect(openCodebase).toBeVisible()
-  await expect(page.getByText('Live source model')).toBeVisible()
+  await expect(page.getByText('Living code topology')).toBeVisible()
+  await expect(page.getByText('Visual agent dispatch')).toBeVisible()
   await expect(page.getByText('Semantic zoom')).toBeVisible()
-  await expect(page.getByText('Draw → dispatch → build')).toBeVisible()
   await expect(page.locator('button button')).toHaveCount(0)
 
   const [titlebarBox, bodyBox] = await Promise.all([titlebar.boundingBox(), body.boundingBox()])
@@ -816,13 +816,20 @@ test('keeps documentation in its library and off the architecture canvas', async
 
   await expect(page.locator('.react-flow__node[data-id="file_docs"]')).toHaveCount(0)
   await page.getByRole('button', { name: 'Project documents' }).click()
-  const documents = page.getByRole('complementary', { name: 'Project documents' })
+  const documents = page.getByRole('region', { name: 'Documents' })
   await expect(documents).toBeVisible()
-  await expect(documents.getByRole('button', { name: /ARCHITECTURE\.md/ })).toBeVisible()
+
+  // The reader opens on its list rather than on whatever sorts first; a
+  // document is shown because it was chosen.
+  await documents.getByRole('button', { name: /ARCHITECTURE\.md/ }).click()
+
+  // Markdown is rendered, not printed: the heading is a heading, and the prose
+  // is prose.
+  await expect(documents.getByRole('heading', { name: 'Architecture' })).toBeVisible()
   await expect(documents.getByText('The renderer consumes indexed source only.')).toBeVisible()
 })
 
-test('guides agent setup through one harness-specific card', async () => {
+test('uses two-step agent setup for blank projects without changing codebase setup', async () => {
   let agentConnected = true
   await page.route(/\/api\/agent\/presence\?/, route => route.fulfill({
     status: 200,
@@ -836,6 +843,7 @@ test('guides agent setup through one harness-specific card', async () => {
   }))
   const connectUrl = new URL(page.url())
   connectUrl.searchParams.set('connect', '1')
+  connectUrl.searchParams.set('blank', '1')
   await page.goto(connectUrl.toString())
 
   const card = page.locator('.axiom-connect__card')
@@ -844,7 +852,7 @@ test('guides agent setup through one harness-specific card', async () => {
   await expect(page.getByRole('heading', { name: 'Add Axiom to your agent' })).toBeVisible()
 
   const steps = page.getByRole('tablist', { name: 'Agent setup steps' }).getByRole('tab')
-  await expect(steps).toHaveCount(4)
+  await expect(steps).toHaveCount(2)
   await expect(steps.nth(0)).toHaveAttribute('aria-selected', 'true')
 
   const agents = page.getByRole('list', { name: 'Supported agents' })
@@ -853,7 +861,8 @@ test('guides agent setup through one harness-specific card', async () => {
   await expect(agents.getByText(/Axiom configured|workflow missing|connected now/)).toHaveCount(0)
   await expect(agents.locator('.axiom-connect__host-signal')).toHaveCount(6)
   await expect(agents.locator('.axiom-connect__host-signal[data-state="live"]')).toHaveCount(1)
-  await expect(page.locator('.axiom-connect__mascot')).toHaveAttribute('data-state', 'awake')
+  const mascot = page.locator('.axiom-connect__mascot .axiom-final-gemini')
+  await expect(mascot).toHaveAttribute('data-state', 'connected')
 
   const readStableFrame = () => page.evaluate(() => {
     const screen = document.querySelector('.axiom-connect')!
@@ -869,22 +878,14 @@ test('guides agent setup through one harness-specific card', async () => {
   const firstFrame = await readStableFrame()
   expect(firstFrame.hasPageScrollbar).toBe(false)
 
-  await steps.getByText('Restart').click()
-  await expect(page.getByRole('heading', { name: /Restart/ })).toBeVisible()
+  await steps.getByText('Connect').click()
+  await expect(page.getByRole('heading', { name: /Connect/ })).toBeVisible()
   expect(await readStableFrame()).toEqual(firstFrame)
-
-  await steps.getByText('Map project').click()
-  await expect(page.locator('.axiom-connect__command > span')).toHaveText('$axiom-map')
-  expect(await readStableFrame()).toEqual(firstFrame)
-
-  await steps.getByText('Add Axiom').click()
-  await agents.getByText('Antigravity', { exact: true }).click()
-  await steps.getByText('Map project').click()
-  await expect(page.locator('.axiom-connect__command > span')).toHaveText('Use the axiom-map skill')
-
-  await steps.getByText('Review').click()
-  await expect(page.getByRole('heading', { name: 'Wait for the proposal' })).toBeVisible()
-  expect(await readStableFrame()).toEqual(firstFrame)
+  await expect(page.getByText('Live connection confirmed')).toBeVisible()
+  const openCanvas = page.getByRole('button', { name: /Open canvas/ })
+  await expect(openCanvas).toBeEnabled()
+  await openCanvas.click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('agent_setup_completed_demo'))).toBe('true')
   await expect(page.locator('button button')).toHaveCount(0)
 
   const cardBox = await card.boundingBox()
@@ -892,8 +893,18 @@ test('guides agent setup through one harness-specific card', async () => {
   expect(cardBox?.height).toBeLessThanOrEqual(820)
 
   agentConnected = false
-  await expect(page.locator('.axiom-connect__mascot')).toHaveAttribute('data-state', 'sleeping', { timeout: 5_000 })
+  await expect(mascot).toHaveAttribute('data-state', 'sleeping', { timeout: 5_000 })
   await expect(agents.locator('.axiom-connect__host-signal[data-state="live"]')).toHaveCount(0)
+  await expect(openCanvas).toBeDisabled()
+
+  agentConnected = true
+  const codebaseUrl = new URL(page.url())
+  codebaseUrl.searchParams.delete('blank')
+  await page.goto(codebaseUrl.toString())
+  const codebaseSteps = page.getByRole('tablist', { name: 'Agent setup steps' }).getByRole('tab')
+  await expect(codebaseSteps).toHaveCount(4)
+  await expect(codebaseSteps.getByText('Map project')).toBeVisible()
+  await expect(codebaseSteps.getByText('Review')).toBeVisible()
 })
 
 test('reviews the proposed system hierarchy in the unified workbench workflow', async () => {
@@ -930,11 +941,11 @@ test('reviews the proposed system hierarchy in the unified workbench workflow', 
       ],
       memberships: [
         {
-          id: 'member-a', fileId: null, rootId: 'root', filePath: 'docs/ARCHITECTURE.md',
+          id: 'member-a', fileId: 'file_canvas', rootId: 'root_demo', filePath: 'src/renderer/canvas/AxiomCanvas.tsx',
           targetSystemKey: 'canvas', disposition: 'assign', rationale: '',
         },
         {
-          id: 'member-b', fileId: null, rootId: 'root', filePath: 'src/semanticZoom.ts',
+          id: 'member-b', fileId: 'file_layerzoom', rootId: 'root_demo', filePath: 'src/renderer/canvas/hooks/useLayerZoom.ts',
           targetSystemKey: 'zoom', disposition: 'assign', rationale: '',
         },
       ],
@@ -1069,7 +1080,7 @@ test('reviews the proposed system hierarchy in the unified workbench workflow', 
   await expect(proposalPanel).toBeVisible()
   await expect(proposalPanel.getByText('Living Canvas', { exact: true })).toBeVisible()
   await expect(proposalPanel.getByText('Semantic Zoom', { exact: true })).toBeVisible()
-  await expect(page.locator('.axiom-review__canvas').getByText('ARCHITECTURE.md', { exact: true }).first()).toBeVisible()
+  await expect(page.locator('.axiom-review__canvas').getByText('AxiomCanvas.tsx', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: 'Done Reviewing' })).toBeVisible()
   await expect(page.locator('.axiom-review__canvas .react-flow')).toBeVisible()
   await expect(page.locator('.axiom-review__canvas .react-flow__background')).toHaveCount(1)

@@ -159,7 +159,7 @@ export interface RuntimeInjection {
 export interface RuntimeNodeState {
   watchedSymbols: string[]
   callCount: number
-  /** Incremented on every call — remounts the pulse ring to replay the animation. */
+  /** Incremented on every call - remounts the pulse ring to replay the animation. */
   pulseKey: number
   lastKind: RuntimeEvent['kind'] | null
   /** Compact human-readable summary of the last event, e.g. `validate(amount=-1.0)` */
@@ -205,15 +205,15 @@ interface GraphState {
   addAgentActivity: (activity: { message: string; level: 'info' | 'warn' | 'success' | 'error' }) => void
   clearAgentActivities: () => void
 
-  // Call trace — set when an agent queries a call path; cleared after timeout or new trace
+  // Call trace - set when an agent queries a call path; cleared after timeout or new trace
   activeTrace: CallTraceStep[] | null
   setActiveTrace: (trace: CallTraceStep[] | null) => void
 
-  // Data-flow slice — set of file IDs in the current variable-reference slice
+  // Data-flow slice - set of file IDs in the current variable-reference slice
   dataFlow: { variable: string; fileIds: Set<string> } | null
   setDataFlow: (flow: { variable: string; fileIds: string[] } | null) => void
 
-  // Live choreography — transient per-node animation intents (enter/edit) set
+  // Live choreography - transient per-node animation intents (enter/edit) set
   // by applyDbPatch as the map changes, stamped onto nodes and auto-expired so
   // the canvas visibly reacts to real code edits. Not persisted.
   nodeFx: Record<string, NodeFx>
@@ -223,13 +223,13 @@ interface GraphState {
   pendingFileDeletions: Record<string, number>
   finalizeFileDeletion: (id: string, key: number) => void
 
-  // Morning Delta — the net architectural diff accumulated while Axiom was
+  // Morning Delta - the net architectural diff accumulated while Axiom was
   // closed or unattended. Loaded on project open and window focus; never
   // auto-dismissed, because an unreviewed delta is the reason to open Axiom.
   delta: DeltaSummary | null
   activeWorkSessions: DeltaWorkSession[]
 
-  // Agent action log — everything an agent did, including reads. The log is
+  // Agent action log - everything an agent did, including reads. The log is
   // durable in archd; this holds the recent window for the visual log, plus
   // the transient attention signals the canvas renders. Attention is the ONLY
   // visual this stream owns; see agentActionVisual.ts for why.
@@ -242,7 +242,7 @@ interface GraphState {
   deltaCursor: number
   // "Later" set aside the delta without acknowledging it. It stays unreviewed
   // in archd; only the invitation is hidden, and the status bar keeps a way
-  // back. Deferral is per delta window — a newer one re-invites on its own.
+  // back. Deferral is per delta window - a newer one re-invites on its own.
   deltaDeferredUntil: number
   loadDelta: () => Promise<void>
   startDeltaReview: () => void
@@ -251,7 +251,7 @@ interface GraphState {
   endDeltaReview: (acknowledge: boolean) => void
   applyWorkSession: (session: DeltaWorkSession) => void
 
-  // Runtime layer — live sessions, watches, per-file activity
+  // Runtime layer - live sessions, watches, per-file activity
   runtimeSessions: RuntimeSession[]
   runtimeWatches: Record<string, RuntimeWatch>
   runtimeNodes: Record<string, RuntimeNodeState>
@@ -262,7 +262,7 @@ interface GraphState {
   applyRuntimeEvents: (events: RuntimeEvent[]) => void
   applyRuntimeInject: (inject: RuntimeInjection) => void
 
-  // Investigation replay (Phase 8) — re-feeds captured events through the live
+  // Investigation replay (Phase 8) - re-feeds captured events through the live
   // render path so a saved investigation plays back on the canvas.
   replay: ReplayState | null
   startReplay: (doc: InvestigationDoc) => void
@@ -287,6 +287,19 @@ interface GraphState {
   setIndexingComplete: () => void
   setConnectionStatus: (s: 'disconnected' | 'connecting' | 'connected') => void
   setSelectionMode: (active: boolean) => void
+  /**
+   * The documents browser is reachable from two places - the toolbar and the
+   * documents bin on the canvas - so the flag lives here rather than in either
+   * of them. Two local flags would let two browsers open at once.
+   */
+  documentsOpen: boolean
+  setDocumentsOpen: (open: boolean) => void
+  /**
+   * Bumped whenever an unplaced file arrives. A counter rather than a flag so
+   * a second arrival during the first animation restarts it instead of being
+   * swallowed - the bin should pulse once per file, not once per burst.
+   */
+  unsortedArrivalKey: number
   getFile: (id: string) => DbFile | undefined
   getSystem: (id: string) => DbSystem | undefined
 }
@@ -302,7 +315,7 @@ let deltaRefreshPending = false
 /**
  * Systems a human or an agent deliberately named. A system whose source is
  * `cluster` or `directory` was inferred, not decided, and is withheld from the
- * canvas until the architecture has been authored — at which point the authored
+ * canvas until the architecture has been authored - at which point the authored
  * systems are what there is to show anyway.
  */
 function keepAuthoredSystems<T extends { source?: string | null }>(systems: T[]): T[] {
@@ -429,7 +442,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     : {})),
   endDeltaReview: (acknowledge) => {
     const { currentProject, delta } = get()
-    // Acknowledge the exact window that was shown — not "now" — so anything
+    // Acknowledge the exact window that was shown - not "now" - so anything
     // that landed mid-review still appears in the next delta.
     if (acknowledge && currentProject && delta) {
       set({ delta: null, deltaReviewing: false, deltaCursor: -1 })
@@ -555,7 +568,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
         }
       }
       const prev = nodes[ev.fileId] ?? emptyNodeState()
-      // Verdict: an event inside a perturbed subtree colors this node —
+      // Verdict: an event inside a perturbed subtree colors this node -
       // clean return = green, exception = red.
       let verdict = prev.verdict
       if (ev.injectId) {
@@ -591,7 +604,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     nodes[inject.fileId] = {
       ...prev,
       injection: pending ? 'pending_confirm' : armed ? 'armed' : null,
-      // A newly armed injection starts a fresh experiment — clear the verdict.
+      // A newly armed injection starts a fresh experiment - clear the verdict.
       verdict: inject.status === 'armed' ? null : prev.verdict,
     }
     return { runtimeInjections: injections, runtimeNodes: nodes }
@@ -636,7 +649,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   applySnapshot: (snap) => set({
     // Inferred groupings never reach the canvas. The indexer clusters files by
     // import topology and names each pile after its most frequent symbol, which
-    // produces boxes called Bar, Lane, Phase and Cochange — words that are real
+    // produces boxes called Bar, Lane, Phase and Cochange - words that are real
     // and describe nothing. Drawing those as your architecture teaches people to
     // distrust the map before an agent has had a chance to make it true, and the
     // confusion costs more than the empty space it fills.
@@ -651,7 +664,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     floorLayouts: snap.floorLayouts ?? [],
     // Start with all top-level systems collapsed
     expandedSystemIds: new Set(),
-    // A full snapshot is the resting baseline — drop any pending enter/edit
+    // A full snapshot is the resting baseline - drop any pending enter/edit
     // intents so a reload doesn't animate the whole map as if freshly built.
     nodeFx: {},
     relationshipFx: [],
@@ -794,6 +807,14 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           const fxKind = editNodeFxKind(exists, wrapped && payload.animate)
           const traceId = wrapped ? payload.traceId : undefined
           if (!fxKind) return { files }
+          // A file nobody has placed does not appear on the Floor - it lands in
+          // the unsorted bin. Playing the arrival on a node the canvas is not
+          // drawing spends the signal on nothing, so the bin gets it instead.
+          // The bin is where the file actually went, and that is what the
+          // animation is for: telling you where to look.
+          if (fxKind === 'enter' && !file.systemId && state.systems.length > 0) {
+            return { files, unsortedArrivalKey: state.unsortedArrivalKey + 1 }
+          }
           const key = nextFxKey()
           scheduleFxExpiry(file.id, key)
           return {
@@ -1043,6 +1064,9 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   setConnectionStatus: (s) => set({ connectionStatus: s }),
 
   setSelectionMode: (active) => set({ selectionMode: active }),
+  documentsOpen: false,
+  setDocumentsOpen: (open) => set({ documentsOpen: open }),
+  unsortedArrivalKey: 0,
 
   getFile: (id) => get().files.find(f => f.id === id),
   getSystem: (id) => get().systems.find(s => s.id === id),
@@ -1239,7 +1263,7 @@ function queueRuntimeEvent(ev: RuntimeEvent): void {
 // ─── WebSocket connection ────────────────────────────────────────────────────
 
 let ws: WebSocket | null = null
-// Each connectToArchd call invalidates previous sockets' reconnect loops —
+// Each connectToArchd call invalidates previous sockets' reconnect loops -
 // otherwise every remount would spawn another loop that reconnects forever.
 let wsGeneration = 0
 
@@ -1452,7 +1476,7 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
       const { inject } = msg.payload as { inject: RuntimeInjection }
       store.applyRuntimeInject(inject)
       store.addAgentActivity({
-        message: `⚠ Agent wants to inject ${inject.paramName}=${JSON.stringify(inject.value)} into ${inject.symbol} (${inject.relPath}) — confirm on canvas`,
+        message: `⚠ Agent wants to inject ${inject.paramName}=${JSON.stringify(inject.value)} into ${inject.symbol} (${inject.relPath}) - confirm on canvas`,
         level: 'warn',
       })
       break

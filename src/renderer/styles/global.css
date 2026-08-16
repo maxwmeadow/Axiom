@@ -1,17 +1,17 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
-/* ─── Design Tokens — dark drafting table ───────────────────────────────── */
+/* ─── Design Tokens - dark drafting table ───────────────────────────────── */
 /* Opaque surfaces stacked like sheets on a drafting board. No translucent
    washes, no glows: structure comes from hairline rules and hard shadows. */
 :root {
-  /* Backgrounds — cool neutral graphite, each step fully opaque */
+  /* Backgrounds - cool neutral graphite, each step fully opaque */
   --bg-deep:    #101214;   /* the board itself */
   --bg-base:    #15171a;
   --bg-surface: #1b1e21;   /* cards (file/infra nodes, panels) */
   --bg-raised:  #22262a;
   --bg-overlay: #2a2e33;
 
-  /* Panel fills for nested system containers — deeper nesting sits "higher" */
+  /* Panel fills for nested system containers - deeper nesting sits "higher" */
   --panel-0: #17191c;
   --panel-1: #1a1d20;
   --panel-2: #1d2024;
@@ -28,7 +28,7 @@
   --text-secondary: #94a3b8;
   --text-dim:       #565f6e;
 
-  /* Brand / Accent — cool steel blue */
+  /* Brand / Accent - cool steel blue */
   --accent:       #5B8A9A;
   --accent-dim:   #4a7080;
   --accent-glow:  rgba(91, 138, 154, 0.25);
@@ -40,13 +40,13 @@
   --color-file:    #6C757D;
   --color-symbol:  #94a3b8;
 
-  /* Semantic depth colors — muted technical, one per nesting level */
-  --depth-0:      #5B8A9A;  /* top-level system — steel blue */
-  --depth-1:      #C4956A;  /* sub-system — sand */
-  --depth-2:      #7A9E7E;  /* nested sub-system — sage */
-  --depth-3:      #A07B8A;  /* deep nesting — dusty rose */
-  --file-accent:  #6C757D;  /* file nodes — neutral mid-gray */
-  --infra-accent: #D4A843;  /* infra nodes — warm gold */
+  /* Semantic depth colors - muted technical, one per nesting level */
+  --depth-0:      #5B8A9A;  /* top-level system - steel blue */
+  --depth-1:      #C4956A;  /* sub-system - sand */
+  --depth-2:      #7A9E7E;  /* nested sub-system - sage */
+  --depth-3:      #A07B8A;  /* deep nesting - dusty rose */
+  --file-accent:  #6C757D;  /* file nodes - neutral mid-gray */
+  --infra-accent: #D4A843;  /* infra nodes - warm gold */
 
   /* Agent amber */
   --agent-color: #f59e0b;
@@ -70,13 +70,13 @@
   --chrome-rail-width: 176px;
   --chrome-status-height: 28px;
 
-  /* Corners — square. This is an instrument, not a toy. */
+  /* Corners - square. This is an instrument, not a toy. */
   --radius-sm: 0px;
   --radius:    0px;
   --radius-lg: 0px;
   --radius-xl: 0px;
 
-  /* Hard offset shadow — "sheet pinned to the board", never a glow */
+  /* Hard offset shadow - "sheet pinned to the board", never a glow */
   --shadow-card: 3px 3px 0 rgba(0, 0, 0, 0.3);
   --shadow-floating: 6px 6px 0 rgba(0, 0, 0, 0.35);
 
@@ -1282,26 +1282,31 @@ a { color: var(--accent); text-decoration: none; }
   transition: none;
 }
 
-/* ─── Canvas material — warm workbench pass ─────────────────────────────────
+/* ─── Canvas material - warm workbench pass ─────────────────────────────────
    The Floor reads as a parchment drafting board with cream cards and olive
    accents (see design-explorations/axiom-uml-workbench). Scoped to the React
-   Flow subtree so every node — which already consumes these token names —
-   re-tints in one place, while body, dialogs, and chrome keep their palettes. */
-.react-flow {
+   Flow subtree so every node - which already consumes these token names -
+   re-tints in one place, while body, dialogs, and chrome keep their palettes.
+
+   The bin drag ghost is listed alongside it because it renders a real canvas
+   node through a portal into <body>, outside the .react-flow subtree. Without
+   the tokens it inherits the dark chrome palette and the node draws black. */
+.react-flow,
+.axiom-bin-ghost {
   --bg-deep:    #d7d3c5;   /* the drafting board itself */
   --bg-base:    #cfcbbd;
   --bg-surface: #f4f0e3;   /* leaf / file cards */
   --bg-raised:  #e6e3d9;   /* chips, hovers, count badges */
   --bg-overlay: #eeece2;   /* in-canvas tooltips */
-  /* FLOOR STOCK — see "SHEET STOCK" for the other half of this pair.
+  /* FLOOR STOCK - see "SHEET STOCK" for the other half of this pair.
      Sage: the theme's own --color-service (#7A9E7E) tinted toward the cream
      body, so the shelf belongs to the palette rather than sitting beside it.
      The pad yellow belongs to sheets, where it means "proposal". */
   --card-head:  #c7d2bd;
-  --infra-surface: #e5dcc5; /* infrastructure body — warm tan, distinct from code */
-  --infra-border:  #9a7c5f; /* infrastructure hairline — amber-gray */
+  --infra-surface: #e5dcc5; /* infrastructure body - warm tan, distinct from code */
+  --infra-border:  #9a7c5f; /* infrastructure hairline - amber-gray */
 
-  --panel-0: #cccdc4;      /* system frame fills — deeper nesting recedes darker */
+  --panel-0: #cccdc4;      /* system frame fills - deeper nesting recedes darker */
   --panel-1: #c7c8bf;
   --panel-2: #c2c3ba;
   --panel-3: #bdbeb5;
@@ -1544,7 +1549,7 @@ a { color: var(--accent); text-decoration: none; }
   100% { opacity: 0;   transform: scale(1.25); }
 }
 
-/* Live choreography — the Floor reacting to real code changes. */
+/* Live choreography - the Floor reacting to real code changes. */
 /* A node that just came into existence pops onto the board with a slight
    overshoot so creation reads as a deliberate, satisfying arrival. */
 @keyframes axiomMaterialize {
@@ -1553,7 +1558,7 @@ a { color: var(--accent); text-decoration: none; }
   78%  { transform: scale(0.99); }
   100% { opacity: 1; transform: none; }
 }
-/* Just created: a green ring blooms outward once — "this was made". */
+/* Just created: a green ring blooms outward once - "this was made". */
 @keyframes axiomCreatePulse {
   0%   { opacity: 0.95; transform: scale(0.97); box-shadow: 0 0 0 0 rgba(47, 163, 93, 0.45); }
   100% { opacity: 0;    transform: scale(1.13); box-shadow: 0 0 16px 4px rgba(47, 163, 93, 0); }
@@ -1570,7 +1575,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 /* Deletion is a severance, not a fade-out. The card flares red, then holds
    fully solid for the whole window in which archd's fuse flows travel outward
-   to every file it was attached to, and only collapses at the very end — the
+   to every file it was attached to, and only collapses at the very end - the
    instant the store unmounts it. Percentages are tuned against
    LIVING_FILE_DELETE_MS, which drives the duration. */
 @keyframes axiomDematerializeRed {
@@ -1581,7 +1586,7 @@ a { color: var(--accent); text-decoration: none; }
   86%  { opacity: 0.85; filter: drop-shadow(0 0 14px rgba(182, 83, 75, 0.5)); transform: scale(0.99); }
   100% { opacity: 0; filter: drop-shadow(0 0 18px rgba(182, 83, 75, 0)); transform: translateY(5px) scale(0.9); }
 }
-/* Being destroyed: a red ring collapses inward — the mirror of the green
+/* Being destroyed: a red ring collapses inward - the mirror of the green
    creation bloom, so birth and death read as opposites at a glance. */
 @keyframes axiomDeletePulse {
   0%   { opacity: 0;    transform: scale(1.16); box-shadow: 0 0 18px 5px rgba(182, 83, 75, 0); }
@@ -1621,7 +1626,7 @@ a { color: var(--accent); text-decoration: none; }
    the whole of any drag gesture, so it covers both paths. */
 /* A node hidden by semantic zoom must be completely transparent to the
    pointer, descendants included. Setting `pointer-events: none` on the wrapper
-   alone is not enough — any descendant that sets `auto` (file nodes do, for
+   alone is not enough - any descendant that sets `auto` (file nodes do, for
    their editable chrome) takes the hit. The hidden node then neither drags nor
    lets the click through, so it lands on whatever is painted behind it instead
    of the visible node the cursor is actually over. React Flow renders node
@@ -1647,14 +1652,14 @@ a { color: var(--accent); text-decoration: none; }
 
 .animate-pulse { animation: pulse 2s ease-in-out infinite; }
 .animate-fade-in { animation: fadeIn 0.15s ease-out; }
-/* Selection Box (Lasso) — square, hairline, drafting-marquee */
+/* Selection Box (Lasso) - square, hairline, drafting-marquee */
 .react-flow__selection {
   background: rgba(91, 138, 154, 0.04) !important;
   border: 1px dashed var(--accent) !important;
   border-radius: 0;
 }
 
-/* Card node styling — opaque sheet pinned to the board */
+/* Card node styling - opaque sheet pinned to the board */
 .glass-node {
   background: var(--bg-surface) !important;
   border: 1px solid var(--border) !important;
@@ -3897,7 +3902,7 @@ select.axiom-inspector-input {
   filter: none !important;
 }
 
-/* Project launcher — a desktop workbench start surface, not a marketing page. */
+/* Project launcher - a desktop workbench start surface, not a marketing page. */
 .axiom-launcher {
   --launcher-title: #26332f;
   --launcher-title-dark: #192320;
@@ -4454,6 +4459,8 @@ select.axiom-inspector-input {
   height: 48px;
   place-items: center;
   color: #fff;
+  place-items: center;
+  color: #fff;
   font-family: var(--font-mono);
   font-size: 21px;
   font-weight: 700;
@@ -4654,6 +4661,113 @@ select.axiom-inspector-input {
 .axiom-create__go:hover:not(:disabled) { background: linear-gradient(#63988e, #37716a); }
 .axiom-create__go:disabled,
 .axiom-create__cancel:disabled { opacity: 0.55; cursor: default; }
+
+/* ── Launcher remove confirmation modal ────────────────────────────────────── */
+.axiom-remove-modal {
+  position: relative;
+  width: min(440px, 100%);
+  padding: 24px 26px 20px;
+  border: 1px solid #5f6964;
+  background: var(--launcher-paper, #e7e4da);
+  box-shadow: 5px 5px 0 rgba(25, 35, 32, 0.4), inset 0 0 0 2px #f1eee5;
+  color: var(--launcher-ink, #26332f);
+}
+
+.axiom-remove-modal__head {
+  margin-bottom: 12px;
+  padding-right: 28px;
+}
+
+.axiom-remove-modal__kicker {
+  color: var(--launcher-accent-dark, #32655d);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.axiom-remove-modal__head h3 {
+  margin: 6px 0 0;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #25312e;
+}
+
+.axiom-remove-modal__close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: #69736f;
+  font-size: 18px;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.axiom-remove-modal__close:hover {
+  color: #7a3028;
+}
+
+.axiom-remove-modal__body {
+  margin: 0 0 16px;
+  color: var(--launcher-muted, #5d6964);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.axiom-remove-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--launcher-rule-soft, #d5d2c7);
+}
+
+.axiom-remove-modal__cancel {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid #8c9691;
+  background: #eceae2;
+  color: var(--launcher-ink, #26332f);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.axiom-remove-modal__cancel:hover:not(:disabled) {
+  background: #dedcd3;
+}
+
+.axiom-remove-modal__danger {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid #7a3028;
+  background: linear-gradient(180deg, #aa4b44 0%, #7e2d27 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 1px 1px 0 rgba(0, 0, 0, 0.2);
+  color: #fefcfb;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.axiom-remove-modal__danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.axiom-remove-modal__cancel:disabled,
+.axiom-remove-modal__danger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 
 @media (max-width: 1180px) {
   .axiom-launcher__body {
@@ -5651,241 +5765,6 @@ select.axiom-inspector-input {
   }
 }
 
-/* Documentation is searchable project context, not architecture geometry. */
-.axiom-documents {
-  position: absolute;
-  inset: 16px 16px 16px auto;
-  z-index: 1500;
-  display: grid;
-  width: min(920px, calc(100% - 32px));
-  min-width: 0;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  overflow: hidden;
-  border: 1px solid #46534e;
-  background: #f1efe7;
-  box-shadow: 8px 8px 0 rgba(19, 28, 25, 0.35), 0 22px 70px rgba(19, 28, 25, 0.28);
-  color: #17231f;
-}
-
-.axiom-documents__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 22px 24px 18px;
-  border-bottom: 1px solid #75807b;
-  background: #dedfd8;
-}
-
-.axiom-documents__header p {
-  margin: 0 0 5px;
-  color: #32655d;
-  font: 700 10px/1.2 var(--font-mono);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.axiom-documents__header h2 {
-  margin: 0;
-  font-size: 28px;
-  letter-spacing: -0.03em;
-}
-
-.axiom-documents__header span {
-  display: block;
-  margin-top: 5px;
-  color: #56635e;
-  font-size: 13px;
-}
-
-.axiom-documents__header button {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  place-items: center;
-  border: 1px solid #8a938e;
-  background: #f4f2eb;
-  color: #3d4b46;
-  font-size: 24px;
-}
-
-.axiom-documents__header button:hover,
-.axiom-documents__header button:focus-visible {
-  outline: 2px solid #32655d;
-  outline-offset: -4px;
-}
-
-.axiom-documents__search {
-  display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
-  align-items: center;
-  gap: 14px;
-  padding: 12px 18px;
-  border-bottom: 1px solid #a4aaa5;
-  background: #e9e8e1;
-}
-
-.axiom-documents__search span {
-  color: #4d5b55;
-  font: 700 11px/1 var(--font-mono);
-  text-transform: uppercase;
-}
-
-.axiom-documents__search input {
-  min-height: 42px;
-  padding: 8px 12px;
-  border: 1px solid #8b958f;
-  background: #fbfaf5;
-  color: #17231f;
-  font-size: 14px;
-}
-
-.axiom-documents__search input:focus {
-  border-color: #32655d;
-  outline: 2px solid rgba(50, 101, 93, 0.2);
-}
-
-.axiom-documents__workspace {
-  display: grid;
-  min-height: 0;
-  grid-template-columns: 310px minmax(0, 1fr);
-}
-
-.axiom-documents__list {
-  min-height: 0;
-  overflow: auto;
-  border-right: 1px solid #89928d;
-  background: #e1e2dc;
-}
-
-.axiom-documents__list > p {
-  margin: 0;
-  padding: 24px 18px;
-  color: #5d6964;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.axiom-documents__item {
-  display: grid;
-  width: 100%;
-  min-height: 66px;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid #c1c4be;
-  color: #27342f;
-  text-align: left;
-}
-
-.axiom-documents__item:hover,
-.axiom-documents__item:focus-visible,
-.axiom-documents__item[data-active] {
-  outline: none;
-  background: #f5f3ec;
-  box-shadow: inset 4px 0 #4f8279;
-}
-
-.axiom-documents__item > span:first-child {
-  color: #4f8279;
-  font-size: 18px;
-}
-
-.axiom-documents__item strong,
-.axiom-documents__item small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.axiom-documents__item strong {
-  font-size: 14px;
-}
-
-.axiom-documents__item small {
-  margin-top: 4px;
-  color: #65716c;
-  font-size: 11px;
-}
-
-.axiom-documents__item em {
-  color: #65716c;
-  font: 700 9px/1 var(--font-mono);
-  font-style: normal;
-}
-
-.axiom-documents__preview {
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  background: #f8f6ef;
-}
-
-.axiom-documents__preview > header {
-  position: sticky;
-  top: 0;
-  padding: 14px 18px;
-  border-bottom: 1px solid #c3c6c0;
-  background: #eeece5;
-}
-
-.axiom-documents__preview > header strong,
-.axiom-documents__preview > header span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.axiom-documents__preview > header strong {
-  font-size: 16px;
-}
-
-.axiom-documents__preview > header span {
-  margin-top: 4px;
-  color: #68736e;
-  font: 11px/1.3 var(--font-mono);
-}
-
-.axiom-documents__preview pre {
-  margin: 0;
-  padding: 20px 22px 40px;
-  color: #25322d;
-  font: 13px/1.65 var(--font-mono);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.axiom-documents__message {
-  margin: 0;
-  padding: 24px 22px;
-  color: #5c6863;
-  font-size: 14px;
-}
-
-.axiom-documents__message--error {
-  color: #8b4137;
-}
-
-@media (max-width: 760px) {
-  .axiom-documents {
-    inset: 8px;
-    width: auto;
-  }
-
-  .axiom-documents__workspace {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(150px, 34%) minmax(0, 1fr);
-  }
-
-  .axiom-documents__list {
-    border-right: 0;
-    border-bottom: 1px solid #89928d;
-  }
-}
 
 /* Baseline review */
 .axiom-review__workspace {
@@ -6918,7 +6797,7 @@ select.axiom-inspector-input {
 
 /* The generic hover above out-specifies the primary rule, so without this the
    primary button hovers to a pale cream ground while keeping its near-white
-   ink — the label disappears under the cursor. Primary hovers lighter sage. */
+   ink - the label disappears under the cursor. Primary hovers lighter sage. */
 .axiom-delta__button--primary:not(:disabled):hover {
   border-color: #1d443f;
   background: linear-gradient(180deg, #5f8e85 0%, #3d7a71 100%);
@@ -6931,7 +6810,7 @@ select.axiom-inspector-input {
 
 /* ─── Agent activity log ────────────────────────────────────────────────────
    "I can see everything my agent is doing." Same reading-surface type scale as
-   the delta panel, with violet as its mode accent — delta is sage (structural
+   the delta panel, with violet as its mode accent - delta is sage (structural
    review), replay amber (temporal), agent violet (activity). */
 .axiom-agentlog {
   position: absolute;
@@ -7187,7 +7066,7 @@ select.axiom-inspector-input {
 
    EVERY value here is a transition on a presence variable, never a keyframe
    animation. A keyframe on a pseudo-element that only exists while the mode
-   class is applied can only ever play IN — the moment the class goes, the
+   class is applied can only ever play IN - the moment the class goes, the
    element is gone and the exit snaps. Driving presence instead makes both
    directions symmetric by construction, and makes an interrupted switch
    resolve to a real value rather than jumping. */
@@ -7211,7 +7090,7 @@ select.axiom-inspector-input {
 
    WHAT THE MATERIAL MEANS: paper marks what is PROPOSED, not what surface you
    happen to be looking at. So sheet stock is scoped to planned elements only.
-   Live code renders identically on the Floor and on a sheet — if the same file
+   Live code renders identically on the Floor and on a sheet - if the same file
    changed appearance between views, the map would stop being one thing you
    trust and become two drawings of it.
 
@@ -7220,7 +7099,7 @@ select.axiom-inspector-input {
    CRITICAL: token overrides MUST be scoped to an element at or inside
    `.react-flow`, never to the .axiom-sheet-mode container that wraps it.
    .react-flow declares these tokens on itself, and a custom property declared
-   on a closer ancestor always beats one inherited from further up — so setting
+   on a closer ancestor always beats one inherited from further up - so setting
    them on the container silently does nothing. That was a real bug: sheet
    headers stayed Floor-grey while every other part of sheet mode worked. */
 .axiom-sheet-mode .react-flow__node[data-id^='planned:'] {
@@ -7235,7 +7114,7 @@ select.axiom-inspector-input {
   --card-head: #c7d2bd;
 }
 
-/* The board. A photograph of blueprint paper, tiled — not a blue fill. */
+/* The board. A photograph of blueprint paper, tiled - not a blue fill. */
 .axiom-sheet-mode .react-flow__pane::before {
   position: absolute;
   content: '';
@@ -7286,7 +7165,7 @@ select.axiom-inspector-input {
   left: 50%;
   z-index: 6;
   padding: 3px 12px 4px;
-  content: 'PROPOSAL — the live map is untouched';
+  content: 'PROPOSAL - the live map is untouched';
   border: 1px solid rgba(232, 244, 250, 0.34);
   border-top: 0;
   border-radius: 0 0 3px 3px;
@@ -7316,7 +7195,7 @@ select.axiom-inspector-input {
   }
 }
 
-/* Node paper stock — SHEETS ONLY.
+/* Node paper stock - SHEETS ONLY.
    The Floor is the live map and stays clean. A sheet is a proposal drawn on
    top of it, so the sheet is the thing that gets a surface. The texture fades
    in on entry and out on exit, which doubles as the quietest possible reminder
@@ -7330,7 +7209,7 @@ select.axiom-inspector-input {
 
 /* Planned elements only, and driven by presence rather than by the class, so
    the paper leaves with the board it was laid on instead of vanishing the
-   instant the mode ends. Live code never takes stock — see SHEET STOCK. */
+   instant the mode ends. Live code never takes stock - see SHEET STOCK. */
 .axiom-sheet-mode .react-flow__node[data-id^='planned:'] .axiom-shape-texture {
   opacity: var(--sheet-presence);
 }

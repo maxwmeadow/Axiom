@@ -1,0 +1,349 @@
+/* Floating windows: the shared chrome behind the unsorted canvas and the
+   document reader. Dark workbench surfaces, so a window reads as something
+   resting ON the drafting board rather than as another sheet of paper on it. */
+
+.axiom-window {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: #1e2926;
+  border: 1px solid #46554e;
+  border-radius: 4px;
+  box-shadow: 0 18px 48px rgba(8, 12, 11, 0.5);
+  color: #e6e3d9;
+  overflow: hidden;
+}
+
+.axiom-window__bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px 9px 14px;
+  border-bottom: 1px solid #35443d;
+  background: #26332e;
+  cursor: grab;
+  user-select: none;
+  flex: none;
+}
+
+.axiom-window__bar:active { cursor: grabbing; }
+
+.axiom-window__bar strong {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.axiom-window__bar span {
+  display: block;
+  font-size: 10px;
+  opacity: 0.6;
+  margin-top: 1px;
+}
+
+.axiom-window__bar button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.6;
+  padding: 3px 7px;
+}
+
+.axiom-window__bar button:hover {
+  opacity: 1;
+  border-color: #46554e;
+  background: #31423b;
+}
+
+/* React Flow needs a sized ancestor or it collapses, so this is an explicit
+   flex box rather than auto height. */
+.axiom-window__body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  overflow: hidden;
+}
+
+.axiom-window__footer {
+  flex: none;
+  padding: 7px 14px;
+  font-size: 10px;
+  opacity: 0.55;
+  border-top: 1px solid #35443d;
+}
+
+.axiom-window__grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  background: linear-gradient(
+    135deg,
+    transparent 0 45%,
+    rgba(160, 178, 170, 0.5) 45% 55%,
+    transparent 55% 70%,
+    rgba(160, 178, 170, 0.5) 70% 80%,
+    transparent 80%
+  );
+}
+
+/* ── Document reader ─────────────────────────────────────────────────────── */
+
+/* A document is paper. Dark chrome suits a canvas window, but a wall of it
+   behind prose is just heavy - so the reader takes the workbench's light stock
+   and keeps the green for accents. */
+.axiom-docs.axiom-window {
+  background: #f2efe4;
+  border-color: #b9b5a4;
+  color: #23302b;
+}
+
+.axiom-docs .axiom-window__bar {
+  background: #e4e0d1;
+  border-bottom-color: #c4c0b0;
+  color: #23302b;
+}
+
+.axiom-docs .axiom-window__bar button:hover {
+  background: #d5d0be;
+  border-color: #b9b5a4;
+}
+
+.axiom-docs .axiom-window__grip {
+  background: linear-gradient(
+    135deg,
+    transparent 0 45%,
+    rgba(60, 74, 68, 0.45) 45% 55%,
+    transparent 55% 70%,
+    rgba(60, 74, 68, 0.45) 70% 80%,
+    transparent 80%
+  );
+}
+
+.axiom-docs__layout {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+}
+
+/* The list is a way in, not a fixture: it is only in the layout while you are
+   choosing, so reading gets the whole window. */
+.axiom-docs__list {
+  flex: none;
+  width: 232px;
+  border-right: 1px solid #c4c0b0;
+  overflow-y: auto;
+  background: #e8e4d6;
+  padding-bottom: 8px;
+}
+
+.axiom-docs__search {
+  display: block;
+  position: sticky;
+  top: 0;
+  padding: 10px;
+  background: #e8e4d6;
+  border-bottom: 1px solid #c4c0b0;
+}
+
+.axiom-docs__search input {
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: #23302b;
+  background: #faf8f0;
+  border: 1px solid #b9b5a4;
+  border-radius: 3px;
+}
+
+.axiom-docs__search input:focus {
+  outline: none;
+  border-color: #3c7d6a;
+}
+
+.axiom-docs__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.axiom-docs__item:hover { background: #ddd8c8; }
+.axiom-docs__item[data-active] { background: #d3ddd5; border-left-color: #3c7d6a; }
+.axiom-docs__item strong { display: block; font-size: 11px; font-weight: 600; }
+.axiom-docs__item small { display: block; font-size: 9px; opacity: 0.55; }
+
+.axiom-docs__reader {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.axiom-docs__readerbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #c4c0b0;
+  background: #e8e4d6;
+}
+
+.axiom-docs__browse {
+  flex: none;
+  background: none;
+  border: 1px solid #b9b5a4;
+  border-radius: 3px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  padding: 3px 8px;
+  opacity: 0.85;
+}
+
+.axiom-docs__browse:hover { background: #ddd8c8; opacity: 1; }
+
+.axiom-docs__path {
+  font-size: 10px;
+  opacity: 0.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-docs__content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 30px 40px;
+}
+
+.axiom-docs__message { font-size: 12px; opacity: 0.6; }
+.axiom-docs__message--error { color: #a8422b; opacity: 1; }
+.axiom-docs__empty { font-size: 11px; opacity: 0.55; padding: 12px 10px; }
+
+/* Text documents keep their own line breaks - a transcript or a log means them. */
+.axiom-docs__plain {
+  margin: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #2f3b36;
+}
+
+/* ── Rendered Markdown ───────────────────────────────────────────────────── */
+
+.axiom-md {
+  /* No fixed measure: the window IS the measure. Capping this at 78ch meant
+     widening the window changed nothing, which reads as broken resizing. */
+  width: 100%;
+  font-size: 13.5px;
+  line-height: 1.72;
+  color: #23302b;
+}
+
+.axiom-md__heading {
+  line-height: 1.3;
+  margin: 1.6em 0 0.6em;
+  color: #17211d;
+  font-weight: 600;
+}
+
+.axiom-md > .axiom-md__heading:first-child { margin-top: 0; }
+
+h1.axiom-md__heading {
+  font-size: 1.72em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #c4c0b0;
+}
+h2.axiom-md__heading {
+  font-size: 1.34em;
+  padding-bottom: 0.24em;
+  border-bottom: 1px solid #d2cec0;
+}
+h3.axiom-md__heading { font-size: 1.14em; }
+h4.axiom-md__heading, h5.axiom-md__heading, h6.axiom-md__heading {
+  font-size: 1em;
+  letter-spacing: 0.03em;
+  opacity: 0.9;
+}
+
+.axiom-md__p { margin: 0 0 1em; }
+
+.axiom-md a { color: #2f6a58; text-decoration: underline; text-underline-offset: 2px; }
+.axiom-md a:hover { color: #1f4c3f; }
+
+/* A link Axiom will not follow still shows its words, but does not pretend. */
+.axiom-md__deadlink { border-bottom: 1px dotted #8b958f; opacity: 0.85; }
+
+.axiom-md__code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.87em;
+  padding: 0.12em 0.38em;
+  border-radius: 3px;
+  background: #e6e2d3;
+  border: 1px solid #cbc7b7;
+  color: #2c5f4f;
+}
+
+.axiom-md__pre {
+  margin: 0 0 1.2em;
+  padding: 12px 14px;
+  overflow-x: auto;
+  background: #14201c;
+  border: 1px solid #cbc7b7;
+  border-radius: 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.axiom-md__pre code { background: none; border: none; padding: 0; color: #ccd5d0; }
+.axiom-md__line { display: inline; }
+
+.axiom-md__list { margin: 0 0 1em; padding-left: 1.5em; }
+.axiom-md__list li { margin: 0.3em 0; }
+
+.axiom-md__quote {
+  margin: 0 0 1.2em;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid #3c7d6a;
+  color: #46534d;
+}
+
+.axiom-md__quote > *:last-child { margin-bottom: 0; }
+
+.axiom-md__rule { border: none; border-top: 1px solid #c4c0b0; margin: 1.8em 0; }
+
+/* Wide tables scroll inside their own box rather than stretching the reader. */
+.axiom-md__tablewrap { overflow-x: auto; margin: 0 0 1.2em; }
+
+.axiom-md__table { border-collapse: collapse; font-size: 0.94em; }
+.axiom-md__table th,
+.axiom-md__table td {
+  border: 1px solid #c4c0b0;
+  padding: 6px 10px;
+  text-align: left;
+}
+.axiom-md__table th { background: #e4e0d1; font-weight: 600; }

@@ -1,0 +1,170 @@
+/* Canvas bins.
+
+   Two holding pens pinned to the viewport: documentation Axiom keeps but never
+   maps, and source files nobody has placed yet. Pinned rather than parked in
+   world space, so a bin is reachable from anywhere on the canvas instead of
+   being something you have to pan back to. */
+
+/* The bins own the bottom-right corner now that the minimap has moved to the
+   top. A drop target wants a corner: it is the easiest place on the screen to
+   throw something at, because two edges stop the cursor for you.
+
+   They used to be held 44px clear of it, because React Flow auto-pans within
+   40px of the pane edge and the map would scroll away from the cursor aiming at
+   the bin. That is now suspended through React Flow's own store the moment the
+   pointer reaches a bin, so the corner is free again. */
+.axiom-canvas-bins-panel {
+  margin: 0 12px 12px 0 !important;
+  pointer-events: none;
+}
+
+.axiom-bins {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.axiom-bins__row {
+  display: flex;
+  gap: 8px;
+}
+
+.axiom-bin {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 0 8px;
+  padding: 8px 12px 8px 10px;
+  /* Deliberately the dark workbench chrome, not the pale canvas stock. These
+     are controls resting ON the drafting board, and the cream card they used to
+     be simply disappeared against it. */
+  background: #26332e;
+  border: 1px solid #46554e;
+  border-radius: 3px;
+  box-shadow: 0 3px 10px rgba(12, 18, 16, 0.38);
+  color: #e6e3d9;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+}
+
+.axiom-bin:hover { background: #2f3f38; border-color: #6f8279; }
+.axiom-bin[data-open] {
+  background: #2f4a41;
+  border-color: #4c9a82;
+  box-shadow: 0 0 0 1px #4c9a82 inset, 0 3px 10px rgba(12, 18, 16, 0.38);
+}
+
+/* Mid-drag the unclassified bin becomes a target, so it says so. */
+.axiom-bin[data-receiving] {
+  background: #2f4a41;
+  border-color: #61c2a4;
+  border-style: dashed;
+  transform: translateY(-2px);
+}
+
+.axiom-bin svg {
+  grid-row: 1 / 3;
+  width: 20px;
+  height: 20px;
+  opacity: 0.85;
+}
+
+.axiom-bin__count {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.1;
+  text-align: left;
+}
+
+.axiom-bin__label {
+  font-size: 9px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  text-align: left;
+}
+
+/* Bin-specific bits of the shared window. Its chrome lives in windows.css. */
+.axiom-bin-window__empty {
+  margin: 0;
+  padding: 20px 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  opacity: 0.7;
+}
+
+/* The bin canvas is a waiting room, not the Floor: no minimap, no zoom
+   readout, no toolbar. Those belong to the surface that owns the workspace. */
+.axiom-bin-window .axiom-canvas-toolbar,
+.axiom-bin-window .axiom-canvas-zoom-panel,
+.axiom-bin-window .axiom-canvas-bins-panel,
+.axiom-bin-window .react-flow__minimap,
+.axiom-bin-window .react-flow__controls { display: none !important; }
+
+.axiom-bin-window .axiom-window__body > div { width: 100%; height: 100%; }
+
+/* A file that lands unsorted never materialises on the Floor, so the green
+   arrival signal is spent here instead - same vocabulary as the canvas create,
+   on the thing the file actually landed in. Remounted by key on every arrival
+   so a burst pulses once per file rather than once per burst. */
+@keyframes axiom-bin-arrival {
+  0%   { border-color: #61c2a4; box-shadow: 0 0 0 0 rgba(97, 194, 164, 0.6), 0 3px 10px rgba(12, 18, 16, 0.38); }
+  45%  { border-color: #61c2a4; box-shadow: 0 0 0 8px rgba(97, 194, 164, 0), 0 3px 10px rgba(12, 18, 16, 0.38); }
+  100% { border-color: #46554e; box-shadow: 0 0 0 0 rgba(97, 194, 164, 0), 0 3px 10px rgba(12, 18, 16, 0.38); }
+}
+
+.axiom-bin[data-arriving] {
+  animation: axiom-bin-arrival 1400ms ease-out;
+}
+
+.axiom-bin[data-arriving] .axiom-bin__count,
+.axiom-bin[data-arriving] svg {
+  animation: axiom-bin-arrival-ink 1400ms ease-out;
+}
+
+@keyframes axiom-bin-arrival-ink {
+  0%, 45% { color: #8fe0c4; opacity: 1; }
+  100%    { color: inherit; }
+}
+
+.axiom-bin__count[data-empty] { opacity: 0.45; font-weight: 500; }
+
+@media (prefers-reduced-motion: reduce) {
+  .axiom-bin[data-arriving],
+  .axiom-bin[data-arriving] .axiom-bin__count,
+  .axiom-bin[data-arriving] svg { animation: none; }
+  .axiom-bin[data-arriving] { border-color: #61c2a4; }
+}
+
+/* The bin window clips its own contents, so a file dragged out of it would
+   vanish at the edge. This ghost carries the gesture the rest of the way, at
+   document level, where no window can clip it. */
+.axiom-bin-ghost {
+  position: fixed;
+  z-index: 200;
+  transform-origin: center center;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 16px rgba(24, 34, 30, 0.34));
+}
+
+/* The node inside is the real component, so it must fill the ghost box rather
+   than be positioned by React Flow the way it would be on a canvas. */
+.axiom-bin-ghost > * {
+  width: 100% !important;
+  height: 100% !important;
+  position: relative !important;
+  transform: none !important;
+  left: auto !important;
+  top: auto !important;
+}
+
+.axiom-bin-ghost .react-flow__handle { display: none !important; }
+
+.axiom-bin-ghost[data-over-system] {
+  filter: drop-shadow(0 0 3px rgba(60, 125, 106, 0.85))
+          drop-shadow(0 6px 16px rgba(24, 34, 30, 0.34));
+}

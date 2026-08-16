@@ -75,6 +75,42 @@ func nodeBelongsToWorkspace(tx *sql.Tx, workspaceID, nodeType, nodeID string) (b
 
 // ApplyFloorLayoutBatch validates and commits an entire group transform in one
 // transaction so collaborators never observe half of a reparent/resize.
+// FloorLayoutRef names a layout row without carrying its geometry, which is
+// all a removal needs.
+type FloorLayoutRef struct {
+	NodeID   string `json:"nodeId"`
+	NodeType string `json:"nodeType"`
+}
+
+// RemoveFloorLayouts forgets authored geometry for these nodes.
+//
+// Forgetting is a real operation, not an absence of one: a node with no layout
+// row is one the renderer is free to place, which is exactly what "send it back
+// to the unsorted bin" means. Writing a row can express placement; only a
+// removal can express its withdrawal.
+func RemoveFloorLayouts(database *sql.DB, workspaceID string, refs []FloorLayoutRef) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	tx, err := database.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, ref := range refs {
+		if _, err := tx.Exec(
+			`DELETE FROM floor_layouts WHERE workspace_id=? AND node_type=? AND node_id=?`,
+			workspaceID, ref.NodeType, ref.NodeID,
+		); err != nil {
+			return fmt.Errorf("remove layout %s/%s: %w", ref.NodeType, ref.NodeID, err)
+		}
+	}
+	if err := bumpFloorLayoutRevisionTx(tx, workspaceID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func ApplyFloorLayoutBatch(db *sql.DB, workspaceID string, updates []FloorLayout) (*FloorLayoutBatchResult, error) {
 	if len(updates) == 0 {
 		return nil, fmt.Errorf("at least one layout is required")

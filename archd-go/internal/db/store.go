@@ -1,4 +1,4 @@
-// Package db — typed CRUD operations over the SQLite schema.
+// Package db - typed CRUD operations over the SQLite schema.
 // All public functions take a *sql.DB directly (caller manages the connection).
 package db
 
@@ -112,7 +112,7 @@ type InfraNode struct {
 	ID          string          `json:"id"`
 	WorkspaceID string          `json:"workspaceId"`
 	Name        string          `json:"name"`
-	InfraType   string          `json:"infraType"` // DEPRECATED — superseded by Category/Provider/Service
+	InfraType   string          `json:"infraType"` // DEPRECATED - superseded by Category/Provider/Service
 	Category    string          `json:"category"`  // 'database'|'cache'|'queue'|... (registry.Categories)
 	Provider    string          `json:"provider"`  // 'aws'|'openai'|'generic'|...
 	Service     string          `json:"service"`   // registry id 'aws/rds'; '' = unassigned generic
@@ -671,14 +671,68 @@ func FindFileByIDOrPath(db *sql.DB, workspaceID, ref string) (*File, error) {
 	return nil, nil
 }
 
-func AssignFileToSystem(db *sql.DB, fileID, systemID string) error {
-	_, err := db.Exec(`UPDATE files SET system_id=? WHERE id=?`, systemID, fileID)
-	return err
+// AssignFileToSystem moves a file into a system and drops any Floor layout that
+// the move has just contradicted.
+//
+// Geometry is relative to a parent, so a row written while the file lived
+// somewhere else is not merely stale - it is meaningless. Left behind, the file
+// reappears at coordinates belonging to its old frame, which reads as the file
+// vanishing rather than as a layout bug. Dropping the row lets the renderer
+// place it inside its new parent and persist that instead.
+//
+// `hosted_by` is deliberately spared: it is a visual infra relationship that
+// says nothing about semantic ownership, exactly as the classifier treats it.
+func AssignFileToSystem(database *sql.DB, fileID, systemID string) error {
+	return withFileLayoutReconcile(database, fileID, systemID, func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE files SET system_id=? WHERE id=?`, systemID, fileID)
+		return err
+	})
 }
 
-func ClearFileSystem(db *sql.DB, fileID string) error {
-	_, err := db.Exec(`UPDATE files SET system_id=NULL WHERE id=?`, fileID)
-	return err
+// ClearFileSystem takes a file out of every system - it becomes unsorted.
+// Its Floor layout goes with it, for the same reason as above: there is no
+// longer a frame those coordinates were measured against.
+func ClearFileSystem(database *sql.DB, fileID string) error {
+	return withFileLayoutReconcile(database, fileID, "", func(tx *sql.Tx) error {
+		_, err := tx.Exec(`UPDATE files SET system_id=NULL WHERE id=?`, fileID)
+		return err
+	})
+}
+
+func withFileLayoutReconcile(
+	database *sql.DB,
+	fileID, systemID string,
+	change func(*sql.Tx) error,
+) error {
+	tx, err := database.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := change(tx); err != nil {
+		return err
+	}
+	var target any
+	if systemID != "" {
+		target = systemID
+	}
+	if _, err := tx.Exec(`
+		DELETE FROM floor_layouts
+		WHERE node_type='file' AND node_id=?
+		  AND containment_kind IN ('root','part_of')
+		  AND COALESCE(
+			CASE
+				WHEN containment_kind='part_of' AND parent_node_type='system'
+				THEN parent_node_id
+				ELSE ''
+			END,
+			''
+		  ) <> COALESCE(?, '')`,
+		fileID, target,
+	); err != nil {
+		return fmt.Errorf("reconcile layout for file %s: %w", fileID, err)
+	}
+	return tx.Commit()
 }
 
 func UpdateFilePosition(db *sql.DB, id string, x, y float64) error {

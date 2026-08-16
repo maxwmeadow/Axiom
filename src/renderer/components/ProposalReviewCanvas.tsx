@@ -129,6 +129,24 @@ export function ProposalReviewCanvas({
     await saveLayouts(translateLayouts(updates))
   }, [saveLayouts, translateLayouts])
 
+  // What the bins judge against on this surface. "Has a home" during review
+  // means the proposal claimed the file, not that a classifier once placed it -
+  // so a file the agent skipped shows as unsorted here exactly as it will on
+  // the Floor after commit.
+  const placedBinFileIds = useMemo(() => {
+    const claimed = new Set<string>()
+    const byPath = new Map(indexedFiles.map(file => [
+      file.relPath.replaceAll('\\', '/').toLowerCase(), file.id,
+    ]))
+    for (const membership of proposal.memberships) {
+      if (membership.disposition !== 'assign') continue
+      const id = membership.fileId
+        ?? byPath.get(membership.filePath.replaceAll('\\', '/').toLowerCase())
+      if (id) claimed.add(id)
+    }
+    return claimed
+  }, [proposal.memberships, indexedFiles])
+
   const reviewScene = useMemo(() => ({
     // Layout saves and branch decisions must not create a "new" camera scene.
     // The proposal is one review surface for its whole lifetime.
@@ -136,6 +154,8 @@ export function ProposalReviewCanvas({
     workspaceId: proposal.workspaceId,
     systems: model.systems,
     files: model.files,
+    binFiles: indexedFiles,
+    placedBinFileIds,
     floorLayouts,
     editableNodeIds,
     selectedNodeId: selectedSystemKey
@@ -144,7 +164,7 @@ export function ProposalReviewCanvas({
     onSelectNode,
     onPreviewLayouts,
     onSaveLayouts,
-  }), [proposal.id, proposal.workspaceId, model, floorLayouts, editableNodeIds, selectedSystemKey, onSelectNode, onPreviewLayouts, onSaveLayouts])
+  }), [proposal.id, proposal.workspaceId, model, indexedFiles, placedBinFileIds, floorLayouts, editableNodeIds, selectedSystemKey, onSelectNode, onPreviewLayouts, onSaveLayouts])
 
   return <AxiomCanvas reviewScene={reviewScene} />
 }

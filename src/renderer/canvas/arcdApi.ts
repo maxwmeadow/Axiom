@@ -32,8 +32,8 @@ export async function apiGetDeltaForRoot(
 }
 
 /**
- * Acknowledges up to the moment the reviewed delta was computed — never "now"
- * — so changes that landed while the user was reading survive into the next
+ * Acknowledges up to the moment the reviewed delta was computed - never "now"
+ * - so changes that landed while the user was reading survive into the next
  * delta instead of being silently swallowed.
  */
 export async function apiAckDelta(workspaceId: string, until: number): Promise<void> {
@@ -105,7 +105,33 @@ export async function apiAssignFile(fileId: string, systemId: string | null, wor
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ systemId, workspaceId }),
   })
-  if (!res.ok) console.error('[arcdApi] assignFile failed', await res.text())
+  // Throw rather than log: a caller that rolls back an optimistic move cannot
+  // do so if the failure never reaches it. Swallowing this made a rejected
+  // assignment look exactly like a successful one that then vanished.
+  if (!res.ok) {
+    const detail = await res.text()
+    console.error('[arcdApi] assignFile failed', { fileId, systemId, status: res.status, detail })
+    throw new Error(`assignFile failed (${res.status}): ${detail}`)
+  }
+}
+
+/**
+ * Forget authored geometry for these nodes.
+ *
+ * The counterpart to saving a layout: a node with no row is one the renderer is
+ * free to place, which is what returning a file to the unsorted bin means.
+ */
+export async function apiRemoveFloorLayouts(
+  workspaceId: string,
+  remove: Array<{ nodeId: string; nodeType: 'system' | 'file' | 'infra' }>,
+): Promise<void> {
+  if (remove.length === 0) return
+  const res = await fetch(`${BASE}/api/layout/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspaceId, layouts: [], remove }),
+  })
+  if (!res.ok) throw new Error(`removeFloorLayouts failed (${res.status}): ${await res.text()}`)
 }
 
 export async function apiUpdateFileSize(fileId: string, w: number, h: number, workspaceId: string): Promise<void> {

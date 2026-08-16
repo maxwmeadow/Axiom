@@ -8,6 +8,8 @@ import './styles/agents.css'
 import './styles/spine.css'
 import './styles/proposal.css'
 import './styles/connectAgent.css'
+import './styles/windows.css'
+import './styles/bins.css'
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -39,7 +41,7 @@ class ErrorBoundary extends React.Component<
 
 const root = document.getElementById('root')
 if (!root) {
-  console.error('[axiom] #root element not found — check index.html')
+  console.error('[axiom] #root element not found - check index.html')
 } else {
   ReactDOM.createRoot(root).render(
     <React.StrictMode>

@@ -3,8 +3,8 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 
 /**
- * Node material is declared in exactly two blocks — Floor stock and sheet
- * stock — using the same token names.
+ * Node material is declared in exactly two blocks - Floor stock and sheet
+ * stock - using the same token names.
  *
  * These tests exist because of a bug that produced no error and no warning:
  * sheet-mode tokens were set on the `.axiom-sheet-mode` container, but
@@ -20,13 +20,34 @@ import { readFileSync } from 'node:fs'
 const css = readFileSync(new URL('./global.css', import.meta.url), 'utf8')
   .replace(/\r\n/g, '\n')
 
-/** The declarations inside a rule with exactly this selector text. */
+/**
+ * The declarations inside the rule that targets this selector.
+ *
+ * Matches a selector list, not just a lone selector: `.react-flow` carries the
+ * canvas palette and other surfaces legitimately share that rule, so requiring
+ * it to sit alone made an ordinary refactor look like a missing stylesheet.
+ */
 function ruleBody(selector) {
-  const index = css.indexOf(`\n${selector} {`)
-  assert.ok(index >= 0, `no rule found for "${selector}"`)
-  const start = css.indexOf('{', index)
-  const end = css.indexOf('}', start)
-  return css.slice(start + 1, end)
+  let cursor = 0
+  while (true) {
+    const open = css.indexOf('{', cursor)
+    if (open < 0) break
+    const close = css.indexOf('}', open)
+    if (close < 0) break
+    // Everything since the previous rule ended is this rule's selector list,
+    // minus any comment sitting between them.
+    const head = css.slice(cursor, open).replace(/\/\*[\s\S]*?\*\//g, '')
+    const selectors = head.split(',').map(part => part.trim()).filter(Boolean)
+    // Callers pass either one selector out of a list, or a whole list when the
+    // rule is only meaningful as a group.
+    const wanted = selector.split(',').map(part => part.trim()).filter(Boolean)
+    const matches = wanted.length > 1
+      ? wanted.join(',') === selectors.join(',')
+      : selectors.includes(selector)
+    if (matches) return css.slice(open + 1, close)
+    cursor = close + 1
+  }
+  assert.fail(`no rule found for "${selector}"`)
 }
 
 function tokenValue(selector, token) {

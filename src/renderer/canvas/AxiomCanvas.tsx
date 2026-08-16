@@ -1,11 +1,11 @@
 /**
- * AxiomCanvas — Infinity-zoom codebase graph.
+ * AxiomCanvas - Infinity-zoom codebase graph.
  *
- * Everything is a node. Zoom controls opacity only — layout never rebuilds on zoom.
+ * Everything is a node. Zoom controls opacity only - layout never rebuilds on zoom.
  *
  * Sizing philosophy:
  *   - Leaf systems: fixed size by depth (LEAF_W/H)
- *   - Container systems: recursive bottom-up — sized to fit their actual children
+ *   - Container systems: recursive bottom-up - sized to fit their actual children
  *   - Top-level: grid of depth-0 nodes with collision resolution
  *   Every level uses cols = ceil(sqrt(N)) for a square grid.
  *   Sizes cascade bottom-up: containers fit their children exactly.
@@ -14,10 +14,11 @@
  *   Dynamically computed from actual layout sizes after each layout pass.
  *   threshold[d] = TARGET_SCREEN_PX / smallestNodeWidth[d-1]
  *   This means children appear when the smallest parent at that depth fills
- *   ~400px of viewport — a "late reveal" Google Maps feel.
+ *   ~400px of viewport - a "late reveal" Google Maps feel.
  *   Transitions use continuous fade (opacity + scale + blur) over a 30% range.
  */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   ReactFlow,
   Background,
@@ -25,6 +26,7 @@ import {
   Controls,
   MiniMap,
   useReactFlow,
+  useStoreApi,
   useNodesInitialized,
   useViewport,
   type Node,
@@ -51,6 +53,10 @@ import { useGraphStore } from '../store/graphStore'
 import { useShallow } from 'zustand/react/shallow'
 import type { DbSystem, DbFile, DbInfraNode, DbDependency, FloorLayout, FloorNodeType } from '../../shared/types'
 import { isCanvasSourceFile } from '../../shared/fileKinds'
+import { BINNED_FILE_MIME, CanvasBins } from '../components/CanvasBins'
+import { partitionCanvasFiles } from './binModel'
+import { dropOnFloorAt, registerFloorDropTarget, systemAtFloorPoint } from './binDropBridge'
+import { hideBinGhost, hideRealNode, moveBinGhost, showBinGhost } from './binDragGhost'
 import { GroupDialog } from '../components/GroupDialog'
 import { NewSheetDialog } from '../components/NewSheetDialog'
 import { SheetPalette, type StencilDef } from '../components/SheetPalette'
@@ -58,7 +64,13 @@ import { InfraPickerDialog } from '../components/InfraPickerDialog'
 import { plannedMembers, plannedMetadata, sheetElementMetadata, useSheetStore } from '../store/sheetStore'
 import type { PlannedNodeKind, PlannedNodeMetadata, SheetLayoutMutation } from '../store/sheetStore'
 import { filenameForLanguage, languageFromFilename } from './languages'
-import { apiUpdateSystem, apiSaveNodePosition, apiSaveFloorLayouts } from './arcdApi'
+import {
+  apiAssignFile,
+  apiRemoveFloorLayouts,
+  apiSaveFloorLayouts,
+  apiSaveNodePosition,
+  apiUpdateSystem,
+} from './arcdApi'
 import { contentRectFor, FRAME_ITEM_GAP, FRAME_ROOT_GAP, frameContentInsets, normalizeGeometry } from './frameGeometry'
 import { packFrame, placeIncoming } from './packing'
 import { resizeChanged, type NodeResizeParams } from './resizeGeometry'
@@ -81,11 +93,9 @@ import { applyDeltaMarks, buildDeltaReview, claimFocusTargets, clampClaimCursor 
 import { applyAgentAttention, surfaceAgentAttention } from './agentAttentionProjection'
 import { useSheetPhase } from './sheetPhase'
 import { stampAgentPresence } from './agentPresence'
-import { CollisionDebugOverlay } from './CollisionDebugOverlay'
-import { absolutePositionsFromTree, buildCollisionModel } from './collisionModel'
 import { LivingFlowOverlay } from './LivingFlowOverlay'
 import { inspectFloorScene, partitionCanvasNodeChanges } from './sceneIntegrity'
-import { useCanvasWasdPan } from './useCanvasWasdPan'
+import { CANVAS_SCOPE_ATTR, useCanvasWasdPan } from './useCanvasWasdPan'
 import { routeWheelEvent, wheelScrollStep } from './wheelRouting'
 import { rectContainsRect } from './selectionResize'
 import { sheetEditableNodeIds } from './sheetEditability'
@@ -121,7 +131,7 @@ function dragTraceEnabled(): boolean {
 
 // ─── Node type registry ────────────────────────────────────────────────────
 
-const NODE_TYPES: NodeTypes = {
+export const NODE_TYPES: NodeTypes = {
   system:  SystemNode     as any,
   file:    FileNode       as any,
   infra:   InfraNode      as any,
@@ -207,8 +217,8 @@ function renderedNodeRect(nodeId: string): DOMRect | null {
 //   height = n_rows * ch + (n_rows + 1) * gap
 // The header area equals one gap, so the formula is symmetric in all directions.
 
-const BASE_FILE_W = 220   // cell width inside a depth-0 system
-const BASE_FILE_H = 110   // cell height inside a depth-0 system
+export const BASE_FILE_W = 220   // cell width inside a depth-0 system
+export const BASE_FILE_H = 110   // cell height inside a depth-0 system
 const FILE_SCALE  = 2.0   // cell size halves each depth level
 
 /** Cell (file node) size at a given depth. */
@@ -387,7 +397,7 @@ function runAlternateAxisLayout(
     // Bottom-up: layout children before the parent
     for (const cs of childSystems) layoutNode(cs.id, depth + 1)
 
-    // Empty system — minimum single-cell placeholder
+    // Empty system - minimum single-cell placeholder
     if (childSystems.length === 0 && childFiles.length === 0 && childInfra.length === 0) {
       if (systemId !== null) {
         const d = Math.max(0, depth)
@@ -863,7 +873,7 @@ export interface FileNodeData {
   depth: number
   currentZoom: number
   childrenVisible: number
-  worldScale: number  // fileNodeSize(parentDepth).w / BASE_FILE_W — drives proportional font/padding
+  worldScale: number  // fileNodeSize(parentDepth).w / BASE_FILE_W - drives proportional font/padding
   previewOffset?: { x: number; y: number } | null   // pixel offset showing predicted post-drop position
   frameScale?: number
   /** Optional synthetic symbols supplied by a sheet-local planned file/class. */
@@ -914,7 +924,7 @@ export interface InfraNodeData {
  * Without it the projection is NOT a pure function of persisted state: a
  * priority-2 node's position comes from `placeIncoming`, scored against the
  * live bounds and centroid of everything already registered in its frame. So
- * changing ONE node's geometry — any drop writes a row — shifts that centroid
+ * changing ONE node's geometry - any drop writes a row - shifts that centroid
  * and re-places every unpersisted sibling, which then shifts it again for the
  * next one. Dragging a single node made unrelated nodes scatter.
  *
@@ -1061,7 +1071,7 @@ function buildFloorFrameLayout(
         { baseGap: FRAME_ITEM_GAP },
       )
       // The title chrome scales with the frame's presentation scale, and the
-      // frame's size depends on the header in turn — iterate to the fixed
+      // frame's size depends on the header in turn - iterate to the fixed
       // point so children never start under the rendered title band.
       const base = defaultSize(containerId)
       const depth = depthOf(containerId)
@@ -1146,7 +1156,7 @@ function buildFloorFrameLayout(
         generatedPlacements.set(id, { parentId, x, y })
       }
     } else if (generatedPlacements.has(id)) {
-      // It has real geometry now — persisted, semantic, or freshly packed — so
+      // It has real geometry now - persisted, semantic, or freshly packed - so
       // the remembered guess must not outlive it.
       generatedPlacements.delete(id)
     }
@@ -1227,7 +1237,7 @@ function buildFloorFrameLayout(
   // A frame's own world scale and the scale it hands to its children are two
   // different numbers. They differ exactly when a container compresses its
   // interior, which is what lets that compression leave the container's own
-  // size — and everything derived from it — completely untouched.
+  // size - and everything derived from it - completely untouched.
   const resolveFrame = (id: string): { depth: number; worldScale: number; contentScale: number } => {
     const cachedDepth = depthById.get(id)
     const cachedScale = worldScaleById.get(id)
@@ -1288,6 +1298,10 @@ interface AxiomCanvasProps {
     workspaceId: string
     systems: DbSystem[]
     files: DbFile[]
+    /** Every indexed file, so the bins can see past what this proposal claimed. */
+    binFiles?: readonly DbFile[]
+    /** Real file ids this proposal places, by which the bins judge "has a home". */
+    placedBinFileIds?: ReadonlySet<string>
     floorLayouts: FloorLayout[]
     editableNodeIds: ReadonlySet<string>
     selectedNodeId: string | null
@@ -1295,10 +1309,57 @@ interface AxiomCanvasProps {
     onPreviewLayouts: (layouts: Array<Omit<FloorLayout, 'workspaceId' | 'updatedAt'>>) => void
     onSaveLayouts: (layouts: Array<Omit<FloorLayout, 'workspaceId' | 'updatedAt'>>) => Promise<void>
   }
+  /**
+   * The unsorted bin, rendered as a real canvas of real file nodes.
+   *
+   * Deliberately has no layout: the bin is a waiting room, so its contents pack
+   * themselves fresh every time rather than remembering an arrangement nobody
+   * asked to keep. Nothing here ever writes a layout row.
+   */
+  binScene?: {
+    workspaceId: string
+    files: readonly DbFile[]
+  }
 }
 
-export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps = {}) {
+/**
+ * Where a gesture ended, mouse or touch. A released touch reports its position
+ * on `changedTouches` and leaves `touches` empty, so reading the event blindly
+ * loses the drop point on exactly the gesture that needs it.
+ */
+function rectContains(element: Element | null, point: { x: number; y: number }): boolean {
+  if (!element) return false
+  const rect = element.getBoundingClientRect()
+  return point.x >= rect.left && point.x <= rect.right
+    && point.y >= rect.top && point.y <= rect.bottom
+}
+
+function pointerOf(event: React.MouseEvent | MouseEvent | TouchEvent): { x: number; y: number } | null {
+  if ('clientX' in event) return { x: event.clientX, y: event.clientY }
+  const touch = event.changedTouches[0]
+  return touch ? { x: touch.clientX, y: touch.clientY } : null
+}
+
+/**
+ * Bin drag diagnostics. Off by default; turn them on from the devtools console
+ * with `window.__axiomBinDragDebug = true` and repeat the gesture - read at
+ * call time so no rebuild is needed.
+ */
+function binDragDebug(): boolean {
+  return (window as unknown as { __axiomBinDragDebug?: boolean }).__axiomBinDragDebug !== false
+}
+
+/** Stable identities, so the bin canvas does not rebuild its layout every render. */
+const emptyBinSystems: DbSystem[] = []
+/** The bin never persists geometry, so it always packs from nothing. */
+const emptyBinLayouts: FloorLayout[] = []
+
+export function AxiomCanvas({ readOnly = false, reviewScene, binScene }: AxiomCanvasProps = {}) {
   const reviewMode = reviewScene !== undefined
+  const binMode = binScene !== undefined
+  // Both modes swap the scene data and cut every live subscription. The Floor
+  // is the only surface that owns the workspace's real state.
+  const isolatedScene = reviewMode || binMode
   const reviewEditableNodeIds = reviewScene?.editableNodeIds
   const previewReviewLayouts = reviewScene?.onPreviewLayouts
   const saveReviewLayouts = reviewScene?.onSaveLayouts
@@ -1348,26 +1409,68 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     agentAttention: new Map() as typeof liveAgentAttention,
   }), [])
 
-  // Review is a data/persistence mode of this component, not another canvas.
-  // Every interaction below therefore remains the live Floor implementation.
-  const systems = reviewScene?.systems ?? liveSystems
-  const sceneFiles = reviewScene?.files ?? liveFiles
-  const files = useMemo(() => sceneFiles.filter(isCanvasSourceFile), [sceneFiles])
-  const infraNodes = reviewMode ? emptyReviewLiveState.infraNodes : liveInfraNodes
-  const dependencies = reviewMode ? emptyReviewLiveState.dependencies : liveDependencies
-  const floorLayouts = reviewScene?.floorLayouts ?? liveFloorLayouts
+  // Review and the unsorted bin are data/persistence modes of this component,
+  // not other canvases. Every interaction below therefore remains the live
+  // Floor implementation - which is the whole point: a file in the bin is a
+  // real file node you can zoom into and read, not a lookalike card.
+  const systems = binScene ? emptyBinSystems : reviewScene?.systems ?? liveSystems
+  const sceneFiles = binScene?.files ?? reviewScene?.files ?? liveFiles
+  // The bins draw from the complete indexed population, which is not the same
+  // list the canvas draws. In review the scene holds only the files a proposal
+  // claimed, so the full set arrives alongside it.
+  const binSourceFiles = reviewScene?.binFiles ?? liveFiles
+  const reviewPlacedFileIds = reviewScene?.placedBinFileIds
+  const floorLayouts = binMode ? emptyBinLayouts : reviewScene?.floorLayouts ?? liveFloorLayouts
+
+  /**
+   * Files placed on the Floor by hand while belonging to no system.
+   *
+   * "Unclassified" covers two different situations and only one of them belongs
+   * in a bin: a file nobody has touched is waiting, while a file someone
+   * dragged onto the Floor has been put somewhere on purpose. A root layout row
+   * is the difference - it exists only because a person made it exist - so it
+   * is what separates "on the map, just not in a system" from "still unsorted".
+   */
+  const looseFileIds = useMemo(() => new Set(
+    floorLayouts
+      .filter(layout => layout.nodeType === 'file' && layout.containmentKind === 'root')
+      .map(layout => layout.nodeId),
+  ), [floorLayouts])
+  const fileBelongsOnFloor = useCallback(
+    (file: DbFile) => !!file.systemId || looseFileIds.has(file.id),
+    [looseFileIds],
+  )
+  const bins = useMemo(() => partitionCanvasFiles(binSourceFiles, {
+    hasHome: reviewPlacedFileIds
+      ? (file: DbFile) => reviewPlacedFileIds.has(file.id)
+      : fileBelongsOnFloor,
+  }), [binSourceFiles, reviewPlacedFileIds, fileBelongsOnFloor])
+
+  // An unclassified file only belongs in a bin once there is an architecture to
+  // be unclassified FROM. Before anyone has authored one, every file is
+  // unplaced - binning them all would empty the map and hide the whole project
+  // behind a tray, which is the opposite of "the map is always complete".
+  const binsHoldUnclassified = !binMode && systems.length > 0
+  const files = useMemo(
+    () => binsHoldUnclassified
+      ? sceneFiles.filter(file => isCanvasSourceFile(file) && fileBelongsOnFloor(file))
+      : sceneFiles.filter(isCanvasSourceFile),
+    [sceneFiles, binsHoldUnclassified, fileBelongsOnFloor],
+  )
+  const infraNodes = isolatedScene ? emptyReviewLiveState.infraNodes : liveInfraNodes
+  const dependencies = isolatedScene ? emptyReviewLiveState.dependencies : liveDependencies
   const selectedNodeId = reviewScene?.selectedNodeId ?? liveSelectedNodeId
-  const activeTrace = reviewMode ? emptyReviewLiveState.activeTrace : liveActiveTrace
-  const runtimeNodes = reviewMode ? emptyReviewLiveState.runtimeNodes : liveRuntimeNodes
-  const dataFlow = reviewMode ? null : liveDataFlow
-  const nodeFx = reviewMode ? emptyReviewLiveState.nodeFx : liveNodeFx
-  const relationshipFx = reviewMode ? emptyReviewLiveState.relationshipFx : liveRelationshipFx
-  const delta = reviewMode ? null : liveDelta
-  const activeWorkSessions = reviewMode ? emptyReviewLiveState.activeWorkSessions : liveActiveWorkSessions
-  const deltaReviewing = reviewMode ? false : liveDeltaReviewing
-  const deltaCursor = reviewMode ? 0 : liveDeltaCursor
-  const agentAttention = reviewMode ? emptyReviewLiveState.agentAttention : liveAgentAttention
-  const isIndexing = reviewMode ? false : liveIsIndexing
+  const activeTrace = isolatedScene ? emptyReviewLiveState.activeTrace : liveActiveTrace
+  const runtimeNodes = isolatedScene ? emptyReviewLiveState.runtimeNodes : liveRuntimeNodes
+  const dataFlow = isolatedScene ? null : liveDataFlow
+  const nodeFx = isolatedScene ? emptyReviewLiveState.nodeFx : liveNodeFx
+  const relationshipFx = isolatedScene ? emptyReviewLiveState.relationshipFx : liveRelationshipFx
+  const delta = isolatedScene ? null : liveDelta
+  const activeWorkSessions = isolatedScene ? emptyReviewLiveState.activeWorkSessions : liveActiveWorkSessions
+  const deltaReviewing = isolatedScene ? false : liveDeltaReviewing
+  const deltaCursor = isolatedScene ? 0 : liveDeltaCursor
+  const agentAttention = isolatedScene ? emptyReviewLiveState.agentAttention : liveAgentAttention
+  const isIndexing = isolatedScene ? false : liveIsIndexing
 
   const { setLiveSelectedNode, setInspectedNode, setInfraPickerNode, setSelectionMode } = useGraphStore(
     useShallow(s => ({
@@ -1380,6 +1483,10 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   const setSelectedNode = reviewScene?.onSelectNode ?? setLiveSelectedNode
   const currentProject = useGraphStore(s => s.currentProject)
   const { fitView, getViewport, setViewport, getInternalNode, screenToFlowPosition } = useReactFlow()
+  const reactFlowStore = useStoreApi()
+  // Subscribed rather than read once: the bin button shows whether the reader
+  // is open, and a stale read would leave it stuck looking closed.
+  const documentsOpen = useGraphStore(state => state.documentsOpen)
   // Semantically hidden descendants are intentionally not mounted. Camera
   // readiness therefore tracks the visible render set rather than waiting for
   // measurements that hidden nodes should never produce.
@@ -1410,7 +1517,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     ...infraNodes.map(infra => infra.id),
   ]), [systems, files, infraNodes])
   const canonicalNodeCount = canonicalNodeIds.size
-  const sceneProjectId = reviewScene?.id ?? currentProject?.id ?? 'demo'
+  const sceneProjectId = binScene ? "bin" : reviewScene?.id ?? currentProject?.id ?? "demo"
   const [reviewReadySceneId, setReviewReadySceneId] = useState<string | null>(null)
   const reviewLayoutReady = !reviewMode || reviewReadySceneId === sceneProjectId
   const classifiedFileCount = useMemo(
@@ -1485,7 +1592,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   // the scene-mutation tracer so a teleporting frame names its own cause.
   const sceneSourceRef = useRef<string>('init')
   const sceneSnapshotRef = useRef<SceneNodeGeometry[]>([])
-  // Semantic visibility only changes with zoom — track the last zoom we restamped
+  // Semantic visibility only changes with zoom - track the last zoom we restamped
   // at so panning (zoom unchanged) never re-renders every node.
   const lastVisibilityZoomRef = useRef(0.5)
   // Live reframing: gently fit the growing graph into view, but yield to the
@@ -1552,6 +1659,28 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     }
     cameraFitTimerRef.current = setTimeout(runWhenIdle, delay)
   }, [fitView])
+
+  /**
+   * Moving a node between the Floor and the bin must not move the camera.
+   *
+   * The live reframe exists for files streaming in from the watcher - the map
+   * genuinely growing as code is written. A file crossing between two views of
+   * the same workspace is not that: it is one node the user deliberately moved,
+   * and reframing on it yanks the view out from under the gesture they are
+   * still performing.
+   *
+   * Both halves matter. The flag stops the next reframe from being scheduled,
+   * and the cancel kills one already counting down from an earlier crossing -
+   * which is why the camera only jumped on some drops and not others.
+   */
+  const suppressGrowthFitRef = useRef(false)
+  const holdCameraForGesture = useCallback(() => {
+    suppressGrowthFitRef.current = true
+    if (cameraFitTimerRef.current) {
+      clearTimeout(cameraFitTimerRef.current)
+      cameraFitTimerRef.current = null
+    }
+  }, [])
   const [groupDialogOpen, setGroupDialogOpen] = useState(false)
   const [sheetDialogOpen, setSheetDialogOpen] = useState(false)
   // ── Sheet overlay (REVISION 2: sheets are layers over the Floor) ─────────
@@ -1559,9 +1688,9 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   // live nodes in place (stencil highlight), draw planned UML elements and
   // planned edges on top. Live members keep their Floor positions.
   const liveOverlaySheetId = useSheetStore(s => s.activeSheetId)
-  const overlaySheetId = reviewMode ? null : liveOverlaySheetId
+  const overlaySheetId = isolatedScene ? null : liveOverlaySheetId
   // Sheet mode outlives its own exit so the departure can animate. See
-  // sheetPhase.ts — a class that vanishes with the state can only fade IN.
+  // sheetPhase.ts - a class that vanishes with the state can only fade IN.
   const sheetPhase = useSheetPhase(overlaySheetId)
   const liveVisibleSheetIds = useSheetStore(s => s.visibleSheetIds)
   const emptyReviewVisibleSheetIds = useMemo<string[]>(() => [], [])
@@ -1947,7 +2076,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
           ...(isStructuralFloorContext ? { width: renderedW, height: renderedH } : {}),
           // Structural context is NOT scenery. It renders at full fidelity and
           // stays clickable, because a sheet is where you work on the
-          // architecture — dimming the thing you are reasoning about is what
+          // architecture - dimming the thing you are reasoning about is what
           // made a sheet feel like drawing on glass over the map.
           ...(isFloorContextNode ? { pointerEvents: 'auto' as const } : {}),
           transition,
@@ -1980,8 +2109,8 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   /**
    * Record a new selection and repaint the scene from it in one step.
    *
-   * Selection reaches the screen by several routes — the layout projection, the
-   * sheet projection, React Flow's own select changes — and any gesture that
+   * Selection reaches the screen by several routes - the layout projection, the
+   * sheet projection, React Flow's own select changes - and any gesture that
    * updated only some of them left the highlight disagreeing with what the next
    * drag would actually pick up. Every deliberate selection change goes through
    * here so the set and the pixels can never drift apart. The sheet snapshot is
@@ -2036,7 +2165,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     [livingDisplayNodes, deltaReview, deltaFocusTargets],
   )
   // Agent attention: "my agent is reading here, right now". A projection like
-  // every other live signal, and the only visual the action stream owns —
+  // every other live signal, and the only visual the action stream owns -
   // writes and traces are animated by the semantic stream that already
   // broadcasts them, never twice. See agentActionVisual.ts.
   const surfacedAttention = useMemo(
@@ -2102,16 +2231,337 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     ]
   }, [rfEdges, visibleLayers, overlayPlannedEdges, displayNodes, livingVisibilityOptions])
 
+  /**
+   * Was this gesture released over the unclassified bin?
+   *
+   * The bin is pinned to the viewport, not placed in world space, so this is a
+   * screen-space hit test against the rendered element rather than anything the
+   * layout engine knows about. Reading the live rect means the test cannot
+   * drift out of sync with where the bin actually is.
+   */
+  /**
+   * Is this screen point over somewhere a Floor node can be dropped to unsort it?
+   *
+   * The closed bin and the open bin window are both valid targets: once the
+   * window is open it is the obvious place to drop, and refusing it because the
+   * small tile is now behind it would be a trap.
+   */
+  const pointOverBinTarget = useCallback((point: { x: number; y: number } | null): boolean => {
+    if (readOnly || isolatedScene || !point) return false
+    const targets = document.querySelectorAll('[data-bin="unclassified"], [data-bin-window]')
+    for (const target of targets) {
+      const rect = target.getBoundingClientRect()
+      if (point.x >= rect.left && point.x <= rect.right
+        && point.y >= rect.top && point.y <= rect.bottom) return true
+    }
+    return false
+  }, [readOnly, isolatedScene])
+
+  const droppedOnUnclassifiedBin = useCallback(
+    (event: React.MouseEvent | MouseEvent | TouchEvent): boolean =>
+      pointOverBinTarget(pointerOf(event)),
+    [pointOverBinTarget],
+  )
+
+  const systemAtScreenPoint = useCallback((
+    clientX: number,
+    clientY: number,
+    explain = false,
+  ): string | null => {
+    const point = screenToFlowPosition({ x: clientX, y: clientY })
+    const systemIds = new Set(systems.map(system => system.id))
+    let target: { id: string; depth: number } | null = null
+    const examined: Array<Record<string, unknown>> = []
+    for (const node of rfNodesRef.current) {
+      if (!systemIds.has(node.id)) continue
+      const internal = getInternalNode(node.id)
+      const origin = internal?.internals.positionAbsolute ?? node.position
+      const width = Number(node.style?.width ?? node.measured?.width ?? 0)
+      const height = Number(node.style?.height ?? node.measured?.height ?? 0)
+      const hit = point.x >= origin.x && point.x <= origin.x + width
+        && point.y >= origin.y && point.y <= origin.y + height
+      if (explain && binDragDebug() && examined.length < 6) {
+        examined.push({ id: node.id, x: origin.x, y: origin.y, width, height, hit })
+      }
+      if (!hit) continue
+      const depth = Number((node.data as Record<string, unknown> | undefined)?.depth ?? 0)
+      if (!target || depth >= target.depth) target = { id: node.id, depth }
+    }
+    if (explain && binDragDebug()) {
+      console.log('[bins] systemAtScreenPoint', {
+        client: { x: clientX, y: clientY },
+        flow: point,
+        systemsInScene: systemIds.size,
+        nodesInScene: rfNodesRef.current.length,
+        systemNodesFound: rfNodesRef.current.filter(n => systemIds.has(n.id)).length,
+        firstFew: examined,
+        result: target?.id ?? null,
+      })
+    }
+    return target?.id ?? null
+  }, [screenToFlowPosition, systems, getInternalNode])
+
+  /**
+   * Move a file into a system, or out of every system when null.
+   *
+   * Optimistic, because the file must leave the bin on the same frame the
+   * pointer released it. A failed write puts it back rather than leaving the
+   * canvas asserting a placement the daemon rejected.
+   */
+  const placeFile = useCallback((fileId: string, systemId: string | null) => {
+    holdCameraForGesture()
+    const state = useGraphStore.getState()
+    const workspaceId = state.currentProject?.id
+    const known = state.files.find(file => file.id === fileId)
+    const previous = known?.systemId ?? null
+    if (binDragDebug()) {
+      console.log('[bins] placeFile', {
+        fileId, systemId, workspaceId, previous,
+        fileIsKnownToTheStore: !!known,
+        willWrite: !!workspaceId && previous !== systemId,
+      })
+    }
+    if (!workspaceId || previous === systemId) return
+    useGraphStore.setState(current => ({
+      files: current.files.map(file => file.id === fileId ? { ...file, systemId } : file),
+    }))
+    void apiAssignFile(fileId, systemId, workspaceId).catch(error => {
+      console.error('[bins] could not move file', error)
+      useGraphStore.setState(current => ({
+        files: current.files.map(file => file.id === fileId ? { ...file, systemId: previous } : file),
+      }))
+    })
+  }, [holdCameraForGesture])
+
+  /**
+   * Put a file on the Floor at a screen point without giving it a system.
+   *
+   * The row itself is the statement: geometry at the Floor root exists only
+   * because someone put it there, which is what distinguishes a file placed on
+   * the map from one still waiting in the bin.
+   */
+  const placeFileLoose = useCallback((fileId: string, clientX: number, clientY: number) => {
+    holdCameraForGesture()
+    const workspaceId = useGraphStore.getState().currentProject?.id
+    if (!workspaceId) return
+    const point = screenToFlowPosition({ x: clientX, y: clientY })
+    const layout = {
+      nodeId: fileId,
+      nodeType: 'file' as const,
+      parentNodeId: null,
+      parentNodeType: null,
+      containmentKind: 'root' as const,
+      // Dropped by the cursor, so the cursor marks the middle of the card.
+      positionX: point.x - BASE_FILE_W / 2,
+      positionY: point.y - BASE_FILE_H / 2,
+      width: BASE_FILE_W,
+      height: BASE_FILE_H,
+      scale: 1,
+      interiorScale: 1,
+    }
+    useGraphStore.setState(state => ({
+      floorLayouts: [
+        ...state.floorLayouts.filter(item => !(item.nodeType === 'file' && item.nodeId === fileId)),
+        { ...layout, workspaceId, updatedAt: Date.now() },
+      ],
+    }))
+    void apiSaveFloorLayouts(workspaceId, [layout]).catch(error => {
+      console.error('[bins] could not place file on the Floor', error)
+      useGraphStore.setState(state => ({
+        floorLayouts: state.floorLayouts.filter(
+          item => !(item.nodeType === 'file' && item.nodeId === fileId),
+        ),
+      }))
+    })
+  }, [screenToFlowPosition, holdCameraForGesture])
+
+  // The Floor answers "which system is under this point?" for the bin canvas,
+  // which cannot know that itself. Registered only by the real Floor: an
+  // isolated scene has no authority over the workspace.
+  useEffect(() => {
+    if (isolatedScene || readOnly) return
+    return registerFloorDropTarget({
+      systemAt: systemAtScreenPoint,
+      place: placeFile,
+      placeLoose: placeFileLoose,
+      element: () => canvasRootRef.current,
+    })
+  }, [isolatedScene, readOnly, systemAtScreenPoint, placeFile, placeFileLoose])
+
+  /**
+   * Resolve a bin drag, wherever the pointer let go.
+   *
+   * Idempotent: React Flow's own `onNodeDragStop` still fires when the gesture
+   * ends inside the bin, so both paths call this and the first one wins.
+   */
+  /** Whether the pointer is currently over a bin, so enter/leave fire once. */
+  const binCrossingRef = useRef(false)
+  const binDragNodeRef = useRef<string | null>(null)
+  const finishBinDrag = useCallback((clientX: number, clientY: number, source: string) => {
+    const nodeId = binDragNodeRef.current
+    if (!nodeId) return
+    binDragNodeRef.current = null
+    hideBinGhost()
+    const placed = dropOnFloorAt(nodeId, clientX, clientY)
+    if (binDragDebug()) {
+      console.debug('[bins] drag ended', {
+        source, nodeId, clientX, clientY, placed,
+        systemUnderPointer: systemAtFloorPoint(clientX, clientY),
+      })
+    }
+    if (placed) return
+    // Refused, or released back inside the bin. The node keeps whatever
+    // position the gesture left it at, which for a drag that went outside the
+    // window is somewhere the window clips - so it would simply be gone. Put it
+    // back; the bin owns no geometry worth keeping.
+    const origin = dragPositionRef.current.get(nodeId)
+    if (origin) {
+      setRfNodes(current => current.map(item =>
+        item.id === nodeId ? { ...item, position: { ...origin } } : item))
+    }
+  }, [holdCameraForGesture])
+
+  const beginBinDrag = useCallback((nodeId: string) => {
+    binDragNodeRef.current = nodeId
+    const onPointerUp = (event: PointerEvent) => {
+      window.removeEventListener('pointerup', onPointerUp, true)
+      window.removeEventListener('pointercancel', onPointerUp, true)
+      finishBinDrag(event.clientX, event.clientY, 'window-pointerup')
+    }
+    window.addEventListener('pointerup', onPointerUp, true)
+    window.addEventListener('pointercancel', onPointerUp, true)
+    if (binDragDebug()) console.debug('[bins] drag started', { nodeId })
+  }, [finishBinDrag])
+
+  /**
+   * Send a file back to the bin: out of its system, and out of any placement it
+   * had on the bare Floor.
+   *
+   * Both have to go. Clearing the system alone would leave a loose file still
+   * holding root geometry, which is exactly what marks it as placed - so it
+   * would sit on the Floor claiming to be sorted while the bin said otherwise.
+   */
+  const unclassifyDraggedFile = useCallback((nodeId: string) => {
+    holdCameraForGesture()
+    const state = useGraphStore.getState()
+    const workspaceId = state.currentProject?.id
+    const file = state.files.find(item => item.id === nodeId)
+    // Systems and infra have no "unclassified" state to fall into, so the bin
+    // simply refuses them rather than pretending the drop did something.
+    if (!workspaceId || !file) return
+    const previousSystem = file.systemId ?? null
+    const previousLayouts = state.floorLayouts
+    if (!previousSystem && !previousLayouts.some(
+      item => item.nodeType === 'file' && item.nodeId === nodeId,
+    )) return
+
+    useGraphStore.setState(current => ({
+      files: current.files.map(item => item.id === nodeId ? { ...item, systemId: null } : item),
+      floorLayouts: current.floorLayouts.filter(
+        item => !(item.nodeType === 'file' && item.nodeId === nodeId),
+      ),
+    }))
+    const restore = (error: unknown) => {
+      console.error('[bins] could not return file to the bin', error)
+      useGraphStore.setState(current => ({
+        files: current.files.map(item =>
+          item.id === nodeId ? { ...item, systemId: previousSystem } : item),
+        floorLayouts: previousLayouts,
+      }))
+    }
+    void Promise.all([
+      previousSystem ? apiAssignFile(nodeId, null, workspaceId) : Promise.resolve(),
+      apiRemoveFloorLayouts(workspaceId, [{ nodeId, nodeType: 'file' }]),
+    ]).catch(restore)
+  }, [])
+
+  /**
+   * Resolve a Floor drag that ended over a bin, wherever the pointer let go.
+   *
+   * The mirror of the bin's problem, and the same cure. The bin window is
+   * portalled to the document, so releasing over it means releasing over a
+   * different React Flow instance's pane - whose own pointer handling swallows
+   * the event the Floor's drag terminates on. The node stayed on the cursor
+   * until it wandered back over the Floor, exactly as it did in reverse.
+   *
+   * So the Floor owns this terminating event too. Idempotent with React Flow's
+   * own dragStop, whichever arrives first.
+   */
+  const floorBinDragRef = useRef<string | null>(null)
+  const finishFloorBinDrag = useCallback((clientX: number, clientY: number, source: string) => {
+    binCrossingRef.current = false
+    reactFlowStore.setState({ autoPanOnNodeDrag: true })
+    const nodeId = floorBinDragRef.current
+    if (!nodeId) return false
+    floorBinDragRef.current = null
+    hideBinGhost()
+    const overBin = pointOverBinTarget({ x: clientX, y: clientY })
+    if (binDragDebug()) {
+      console.log('[bins] floor drag ended', { source, nodeId, clientX, clientY, overBin })
+    }
+    if (!overBin) return false
+    unclassifyDraggedFile(nodeId)
+    return true
+  }, [pointOverBinTarget, unclassifyDraggedFile, reactFlowStore])
+
+  const beginFloorBinDrag = useCallback((nodeId: string) => {
+    floorBinDragRef.current = nodeId
+    const onPointerUp = (event: PointerEvent) => {
+      window.removeEventListener('pointerup', onPointerUp, true)
+      window.removeEventListener('pointercancel', onPointerUp, true)
+      finishFloorBinDrag(event.clientX, event.clientY, 'window-pointerup')
+    }
+    window.addEventListener('pointerup', onPointerUp, true)
+    window.addEventListener('pointercancel', onPointerUp, true)
+  }, [finishFloorBinDrag])
+
+  /**
+   * Innermost system under a screen point, or null for bare canvas. Deepest
+   * frame wins, matching how a node drop resolves its parent rather than
+   * whichever container the hit test happens to reach first.
+   */
+
   // Stencil drop: palette → canvas → planned element born in name-edit mode.
   const onOverlayDragOver = useCallback((e: React.DragEvent) => {
     if (e.dataTransfer.types.includes('application/axiom-stencil')) {
       e.preventDefault()
       e.stopPropagation()
       e.dataTransfer.dropEffect = 'copy'
+    } else if (e.dataTransfer.types.includes(BINNED_FILE_MIME)) {
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'move'
     }
   }, [])
+
+  /**
+   * A file dragged out of the unclassified bin onto a system joins it.
+   *
+   * The system is read from what is under the cursor rather than from a
+   * selection, because the gesture already said where it goes. Dropping on bare
+   * canvas is deliberately a no-op: the Floor root is not a system, so there is
+   * nothing there for the file to join and silently leaving it unsorted is
+   * more honest than inventing a home for it.
+   */
+  const onBinnedFileDrop = useCallback((e: React.DragEvent): boolean => {
+    const raw = e.dataTransfer.getData(BINNED_FILE_MIME)
+    if (!raw || readOnly || reviewMode) return false
+    e.preventDefault()
+    e.stopPropagation()
+    let fileId: string
+    try {
+      fileId = (JSON.parse(raw) as { fileId: string }).fileId
+    } catch (error) {
+      console.error('[bins] ignored invalid binned-file payload', error)
+      return true
+    }
+    const systemId = systemAtScreenPoint(e.clientX, e.clientY)
+    if (systemId) placeFile(fileId, systemId)
+    return true
+  }, [readOnly, reviewMode, systemAtScreenPoint, placeFile])
   const onOverlayDrop = useCallback((e: React.DragEvent) => {
     if (readOnly) return
+    if (onBinnedFileDrop(e)) return
     const raw = e.dataTransfer.getData('application/axiom-stencil')
     if (!raw || !overlaySheetId) return
     e.preventDefault()
@@ -2126,7 +2576,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     const store = useSheetStore.getState()
     if (stencil.shape === 'note') {
-      void store.createFloatingNote(workspaceIdForOverlay, overlaySheetId, 'New note — double-click to edit', pos.x, pos.y)
+      void store.createFloatingNote(workspaceIdForOverlay, overlaySheetId, 'New note - double-click to edit', pos.x, pos.y)
       return
     }
     void store.createPlanned(workspaceIdForOverlay, overlaySheetId, {
@@ -2158,23 +2608,6 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   const [focusEnabled, setFocusEnabled] = useState(true)
   // Bumped whenever the layout is fully rebuilt, so overlay effects restamp.
   const [layoutVersion, setLayoutVersion] = useState(0)
-
-  // ── Collision debug ───────────────────────────────────────────────────────
-  // One instrument for both layers: it draws the boxes the placement engine
-  // actually tests against, on the Floor and on a Sheet alike. Off by default
-  // and gated everywhere it costs anything, because it recomputes the whole
-  // scene's geometry on every frame of a drag.
-  const [collisionDebug, setCollisionDebug] = useState(false)
-  const [debugDragNodeId, setDebugDragNodeId] = useState<string | null>(null)
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || !event.altKey || event.key.toLowerCase() !== 'b') return
-      event.preventDefault()
-      setCollisionDebug(value => !value)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
 
   const tidyCanvas = useCallback(async () => {
     if (systems.length === 0 && infraNodes.length === 0) return
@@ -2281,7 +2714,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
         width: Number(selectedContainer.style?.width ?? selectedContainer.measured?.width ?? 1) / parentScale,
         height: Number(selectedContainer.style?.height ?? selectedContainer.measured?.height ?? 1) / parentScale,
       } : { width: 2600, height: 1800 }
-      // The projected base is canonical already — dividing by world scale here
+      // The projected base is canonical already - dividing by world scale here
       // would reintroduce exactly the coupling the isolation removes.
       const ownContent = scopeId
         ? contentRectFor(parentCanonical, Number(containerData?.depth ?? 0), parentScale)
@@ -2576,13 +3009,13 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
       return
     }
     // The map must always show every file. A fresh project (agent building into
-    // an empty folder) has files before any system exists — render them at the
+    // an empty folder) has files before any system exists - render them at the
     // top level rather than an empty Floor; live classification groups them into
     // systems as the topology emerges.
     if (systems.length === 0 && infraNodes.length === 0 && files.length === 0) return
 
     const projectId = sceneProjectId
-    // On first layout for a project, don't use existing positions — force fresh grid layout.
+    // On first layout for a project, don't use existing positions - force fresh grid layout.
     // On subsequent data updates (same project), preserve user-dragged positions.
     const isFirstLayout = layoutBuiltRef.current !== projectId
     const {
@@ -2669,7 +3102,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
       } else if (reviewLayoutPersistingSceneRef.current !== projectId) {
         setReviewReadySceneId(current => current === projectId ? current : projectId)
       }
-    } else if (!reviewMode && !readOnly && currentProject && systems.length > 0 && everyFileClassified && floorLayouts.length === 0 && initialFloorPersistRef.current !== projectId) {
+    } else if (!reviewMode && !binMode && !readOnly && currentProject && systems.length > 0 && everyFileClassified && floorLayouts.length === 0 && initialFloorPersistRef.current !== projectId) {
       initialFloorPersistRef.current = projectId
       const initialLayouts = layout.map(serializeFloorNode)
       const optimistic = initialLayouts.map(item => ({ ...item, workspaceId: currentProject.id, updatedAt: Date.now() }))
@@ -2679,7 +3112,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
         initialFloorPersistRef.current = null
         useGraphStore.setState({ floorLayouts: [] })
       })
-    } else if (!reviewMode && !readOnly && currentProject && floorLayouts.length > 0) {
+    } else if (!reviewMode && !binMode && !readOnly && currentProject && floorLayouts.length > 0) {
       // Do not pin a just-created, still-unclassified file to the Floor root.
       // Its semantic parent arrives in the classifier's atomic snapshot.
       const persistableGeneratedIds = [...generatedLayoutNodeIds].filter(nodeId => {
@@ -2692,7 +3125,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
       if (updates.length > 0) {
         const signature = currentProject.id + ':' + updates
           // Every field the write actually changes. Omitting one makes a real
-          // change look like a repeat and get skipped — `interiorScale` and
+          // change look like a repeat and get skipped - `interiorScale` and
           // `containmentKind` were both missing.
           .map(update => [
             update.nodeType, update.nodeId, update.parentNodeId ?? '', update.parentNodeType ?? '',
@@ -2753,7 +3186,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     }))
     // A large first projection is about to be fitted to an overview. Starting
     // its semantic tier at the default 0.5x would briefly mount every child of
-    // a large root before fitView reaches the real overview zoom — exactly the
+    // a large root before fitView reaches the real overview zoom - exactly the
     // expensive flash this path is meant to prevent.
     const visibilityZoom = isFirstLayout && layout.length > LARGE_SCENE_NODE_COUNT
       ? MIN_CANVAS_ZOOM
@@ -2847,7 +3280,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     return () => cancelAnimationFrame(frame)
   }, [fitView, getInternalNode, getViewport, nodesInitialized, rfNodes, sceneProjectId, reviewMode])
 
-  // Live reframing — as files stream in from the watcher, gently fit the growing
+  // Live reframing - as files stream in from the watcher, gently fit the growing
   // graph so new nodes come into view at a sensible zoom, instead of leaving the
   // camera parked on the first node. Skips the initial 0→N population (handled by
   // the first-layout fit) and yields while the user is actively navigating.
@@ -2855,20 +3288,26 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     const count = systems.length + files.length + infraNodes.length
     const prev = liveNodeCountRef.current
     liveNodeCountRef.current = count
+    if (suppressGrowthFitRef.current) {
+      // Consumed once: the baseline above is already updated, so the next real
+      // growth still reframes normally.
+      suppressGrowthFitRef.current = false
+      return
+    }
     if (deferCanvasMaterialization || reviewMode) return
     if (prev === 0 || count <= prev) return
     queueCameraFit(1800, { padding: 0.28, duration: 1100, maxZoom: 1.0 })
   }, [systems.length, files.length, infraNodes.length, queueCameraFit, deferCanvasMaterialization, reviewMode])
 
-  // Revealing a node from outside the canvas — search, the agent log, the
-  // detail panel — selects it, exactly as clicking it would.
+  // Revealing a node from outside the canvas - search, the agent log, the
+  // detail panel - selects it, exactly as clicking it would.
   //
   // This used to paint `selected` straight onto the scene without telling the
   // authoritative set, so the canvas and the set disagreed from that moment on:
   // the highlight said one thing, and the next drag acted on another. It also
   // fired on every change of the pointer, including to null, silently wiping a
   // multi-selection the user had just made. A null pointer now means "no single
-  // node is current" — a group has no single node — and clears nothing.
+  // node is current" - a group has no single node - and clears nothing.
   useEffect(() => {
     if (!selectedNodeId) return
     const current = selectedIdsRef.current
@@ -2905,7 +3344,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   // plus their ancestor systems (so a focused file's containers stay lit).
   // Everything else is dimmed. Off when nothing is active or the user disables it.
   // Stable content key: the SET of focused files changes only when a watch is
-  // added/removed or the trace changes — not on every runtime metric tick. This
+  // added/removed or the trace changes - not on every runtime metric tick. This
   // keeps the focus effect from re-running (and re-mapping all nodes) ~12×/sec.
   const focusKey = useMemo(() => {
     const ids: string[] = []
@@ -2986,7 +3425,17 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   }, [activeTrace, layoutVersion])
 
   // ── WASD pan ────────────────────────────────────────────────────────────
-  useCanvasWasdPan(getViewport, setViewport)
+  // Keyboard panning listens on the window, so every mounted canvas would
+  // answer the same keypress. Only the Floor owns WASD; the bin is navigated
+  // by dragging it, which is unambiguous about which surface you meant.
+  // WASD follows the pointer: whichever canvas you are hovering is the one
+  // that pans. The Floor is the fallback for when the pointer is over neither
+  // (a toolbar, a side panel), so the keys never simply stop working.
+  const wasdScope = useMemo(() => ({
+    element: () => canvasRootRef.current,
+    fallback: !binMode,
+  }), [binMode])
+  useCanvasWasdPan(getViewport, setViewport, true, wasdScope)
 
   useEffect(() => {
     if (readOnly || !overlaySheetId || !selectedNodeId) return
@@ -3027,6 +3476,13 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   }, [])
 
   const handleWheel = useCallback((e: WheelEvent) => {
+    // This canvas consumes the gesture, whatever it decides to do with it.
+    //
+    // The bin window is positioned against the viewport but is still a DOM
+    // descendant of the Floor, so without this a wheel over the bin bubbled
+    // into the Floor's listener and zoomed both canvases at once. Stopping
+    // here means the surface under the cursor is the only one that answers.
+    e.stopPropagation()
     // Scrollable node content (symbol lists, class members) gets the wheel
     // while it can still scroll; the canvas takes over at the boundary.
     const route = routeWheelEvent(
@@ -3162,7 +3618,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     zoomRafRef.current = requestAnimationFrame(() => {
       const draggingId = draggingNodeIdRef.current
       // Panning (zoom unchanged) never alters semantic visibility. Restamping
-      // every node on each pan frame is what made panning feel janky — skip it
+      // every node on each pan frame is what made panning feel janky - skip it
       // unless the zoom actually changed (or a node is being dragged).
       if (!draggingId && Math.abs(visibilityZoom - lastVisibilityZoomRef.current) < 1e-4) return
       lastVisibilityZoomRef.current = visibilityZoom
@@ -3248,7 +3704,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
       // dimensions. Apply the complete React Flow change set so the edge under
       // the pointer remains under the pointer and child compensation stays live.
       const interactionChanges = interaction
-      // Planned overlay nodes live in the sheet store, not rfNodes — route
+      // Planned overlay nodes live in the sheet store, not rfNodes - route
       // their drags there and keep the rest on the normal path.
       if (overlaySheetId) {
         const geometryChanges = interactionChanges.filter(change => change.type === 'position' ||
@@ -3268,7 +3724,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
     // By the time this runs, the press has ALREADY been turned into a selection
-    // — React Flow applies the platform-standard rule on pointer down (plain
+    // - React Flow applies the platform-standard rule on pointer down (plain
     // press replaces, modifier press toggles) and those changes have already
     // flowed through onNodesChange into the authoritative set.
     //
@@ -3309,6 +3765,15 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     if (resizingNodeIdRef.current === node.id) return
     setIsTransitioningLayout(false)
     setIsDraggingScene(true)
+    // A drag out of the bin ends outside the canvas that started it, which is
+    // not a gesture React Flow models: released over the Floor, its drag never
+    // terminated and the node stayed glued to the cursor. Released back over
+    // the bin it ended normally - the asymmetry that gave this away.
+    //
+    // So the bin owns the terminating event itself. Bound on the window in the
+    // capture phase, it fires wherever the pointer happens to be.
+    if (binMode) beginBinDrag(node.id)
+    else if (!readOnly) beginFloorBinDrag(node.id)
     // Grabbing a node that was not part of the selection makes it the whole
     // selection, before anything reads the group this gesture will move. A drag
     // never silently carries along whatever was selected beforehand. React Flow
@@ -3316,16 +3781,13 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     // here keeps Axiom's authoritative set from lagging a frame behind them.
     //
     // Held modifier means the press was building a selection, not starting a
-    // fresh gesture — including a press that just toggled this node OUT. Reset
+    // fresh gesture - including a press that just toggled this node OUT. Reset
     // it there and the node the user was deselecting snaps back on the smallest
     // jitter of the mouse.
     if (!isAdditiveEvent(event) && !selectedIdsRef.current.has(node.id)) {
       applySelection(selectionAfterDragStart(selectedIdsRef.current, node.id))
       setSelectedNode(node.id)
     }
-    // Two renders per gesture, not per frame: the overlay tracks movement
-    // through the node positions it already re-reads, not through this.
-    setDebugDragNodeId(node.id)
     draggingNodeIdRef.current = node.id
     dragPositionRef.current.set(node.id, { x: node.position.x, y: node.position.y })
     dragAbsolutePositionsRef.current.clear()
@@ -3337,7 +3799,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     // Forcing the dragged node fully visible is drag BEHAVIOR, not
     // instrumentation, so it has to run before the tracing gate below. A
     // semantically faded node keeps `pointerEvents: none`, and a node that
-    // cannot receive its own pointerup never ends its drag — it just follows
+    // cannot receive its own pointerup never ends its drag - it just follows
     // the cursor until the app is reloaded.
     updateInteractiveNodes(curr => curr.map(n => n.id === node.id ? makeFullyVisible(n) : n))
     // The pointer/geometry move trace samples getBoundingClientRect and builds
@@ -3406,6 +3868,47 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   }, [applySelection, getInternalNode, getViewport, screenToFlowPosition, setSelectedNode, updateInteractiveNodes])
 
   const onNodeDrag: OnNodeDrag = useCallback((event, node) => {
+    // Dragging a file out of the bin crosses a window boundary. The window
+    // clips its own contents, so the real node vanishes the moment it leaves -
+    // a ghost carries the gesture the rest of the way, at document level,
+    // where nothing can clip it.
+    // A drag that crosses between the Floor and the bin is one gesture over two
+    // canvases, and whichever surface it is leaving clips or covers it. A ghost
+    // carries the node the rest of the way, portalled to the document where
+    // nothing can clip or stack above it.
+    const crossPoint = pointerOf(event)
+    const crossing = binMode
+      // Leaving the bin window, which clips its own contents.
+      ? !!crossPoint && !rectContains(document.querySelector('[data-bin-window]'), crossPoint)
+      // Entering a bin, which is portalled above the Floor and so covers it.
+      : pointOverBinTarget(crossPoint)
+
+    if (crossing !== binCrossingRef.current) {
+      binCrossingRef.current = crossing
+      if (!binMode) {
+        // Over a bin the canvas must hold still: the bin sits in the corner,
+        // which is exactly where edge auto-pan would scroll the target out from
+        // under the cursor aiming at it.
+        reactFlowStore.setState({ autoPanOnNodeDrag: !crossing })
+      }
+    }
+    if (!crossing || !crossPoint) {
+      hideBinGhost()
+    } else {
+      const dragged = rfNodesRef.current.find(item => item.id === node.id)
+      if (dragged) {
+        showBinGhost({ node: dragged, scale: currentZoomRef.current })
+        hideRealNode(node.id)
+        // Position never enters React state, so following the cursor costs no
+        // renders and cannot disturb the gesture React Flow is tracking.
+        moveBinGhost(
+          crossPoint.x,
+          crossPoint.y,
+          binMode ? !!systemAtFloorPoint(crossPoint.x, crossPoint.y) : true,
+        )
+      }
+    }
+    if (binMode) return
     if (resizingNodeIdRef.current === node.id) return
     const pointer = pointerTraceCoordinates(event)
     const clientX = pointer.clientX
@@ -3490,7 +3993,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     }
 
     // Freeform hit-testing: the CURSOR chooses which frame you are dropping
-    // into — that is the gesture the hand is making, and requiring the whole
+    // into - that is the gesture the hand is making, and requiring the whole
     // node to be inside made frames nearly impossible to hit. Containment is
     // enforced separately, at commit, by nudging the node fully inside the
     // frame it landed in. No barriers, cell snapping, sibling displacement,
@@ -3601,9 +4104,9 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
           y: (finalPosition.y - moveTrace.startNodeY) * viewport.zoom,
         },
       }
-      console.groupCollapsed(`[AxiomMoveTrace #${moveTrace.session}] COMPLETE — ${node.id}`)
+      console.groupCollapsed(`[AxiomMoveTrace #${moveTrace.session}] COMPLETE - ${node.id}`)
       console.info('Summary and unit conversion', summary)
-      console.info('Drag callback samples — pointer input compared with node output')
+      console.info('Drag callback samples - pointer input compared with node output')
       console.table(moveTrace.callbackRows)
       console.info('Raw onNodesChange position emissions from React Flow')
       console.table(moveTrace.changeRows)
@@ -3615,9 +4118,31 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
       console.groupEnd()
       dragTraceRef.current = null
     }
-    // Clear drag state — restore zoom visibility, clear drop highlight
+    // Clear drag state - restore zoom visibility, clear drop highlight
     setIsDraggingScene(false)
-    setDebugDragNodeId(null)
+    // Both bin gestures are resolved before any layout write, because a file
+    // crossing between canvases must not also persist a position on the canvas
+    // it just left.
+    const pointer = pointerOf(event)
+    if (binMode) {
+      // The window listener normally got here first; this covers the gesture
+      // that ended inside the bin, where React Flow's own drag does terminate.
+      if (pointer) finishBinDrag(pointer.x, pointer.y, 'react-flow-dragstop')
+      draggingNodeIdRef.current = null
+      dropTargetRef.current = null
+      return
+    }
+    // The window listener normally got here first; this covers a release the
+    // Floor's own drag did terminate.
+    if (!binMode && pointer && finishFloorBinDrag(pointer.x, pointer.y, 'react-flow-dragstop')) {
+      draggingNodeIdRef.current = null
+      dropTargetRef.current = null
+      return
+    }
+    if (!binMode) {
+      floorBinDragRef.current = null
+      hideBinGhost()
+    }
     draggingNodeIdRef.current = null
     const prevTarget = dropTargetRef.current
     dropTargetRef.current = null
@@ -3632,7 +4157,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
     // Floor drops are one atomic frame transform. They never rewrite semantic
     // system/file ownership.
     const sheetState = useSheetStore.getState()
-    const sheetId = reviewMode ? null : sheetState.activeSheetId
+    const sheetId = isolatedScene ? null : sheetState.activeSheetId
     const graph = useGraphStore.getState()
     const workspaceId = reviewScene?.workspaceId ?? (sheetId ? workspaceIdForOverlay : graph.currentProject?.id)
     const all = displayNodesRef.current
@@ -3797,23 +4322,6 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   )
   const renderedNodesRef = useRef(renderedNodes)
   renderedNodesRef.current = renderedNodes
-
-  // The drop target is read back off the nodes rather than off `dropTargetRef`,
-  // because the ref is invisible to rendering. `isDropTarget` is already
-  // committed to node data on both layers by the same drag handler, so the
-  // overlay and the highlighted frame can never disagree.
-  const collisionModel = useMemo(() => {
-    if (!collisionDebug) return null
-    return buildCollisionModel({
-      layer: overlaySheetId ? 'sheet' : 'floor',
-      nodes: renderedNodes,
-      absolutePositions: absolutePositionsFromTree(renderedNodes),
-      draggedNodeId: debugDragNodeId,
-      targetNodeId: renderedNodes.find(node =>
-        (node.data as Record<string, unknown> | undefined)?.isDropTarget)?.id ?? null,
-      editableNodeIds: overlaySheetId ? activeNodeIds : null,
-    })
-  }, [collisionDebug, renderedNodes, debugDragNodeId, overlaySheetId, activeNodeIds])
 
   // Scene-mutation tracer. Diffs what is actually about to be painted, so a
   // frame where geometry jumps is attributed to the path that caused it.
@@ -3989,6 +4497,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
   return (
     <div
       ref={canvasRootRef}
+      {...{ [CANVAS_SCOPE_ATTR]: '' }}
       className={[
         reviewMode ? 'axiom-canvas-review' : '',
         reviewMode && reviewLayoutReady ? 'axiom-canvas-review-ready' : '',
@@ -4047,12 +4556,16 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
         // graphs where the per-move visibility recompute isn't worth it.
         onlyRenderVisibleElements={rfNodes.length > LARGE_SCENE_NODE_COUNT}
       >
-        {/* Pattern color transparent — the drafting line grid is painted by
+        {/* Pattern color transparent - the drafting line grid is painted by
             .react-flow__background CSS; this component just provides the element. */}
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="transparent" />
         <Controls className="axiom-canvas-controls" showInteractive={false} />
         <MiniMap
           className="axiom-canvas-minimap"
+          position="top-right"
+          // Top-right, leaving the bottom-right corner to the bins. They are
+          // drop targets and the minimap is not, so the corner belongs to the
+          // thing you have to be able to throw something at.
           style={{ width: 160, height: 100 }}
           nodeColor={(n) => {
             const d = n.data as unknown as SystemNodeData | FileNodeData | InfraNodeData
@@ -4078,12 +4591,6 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
               </div>
             </div>
           </Panel>
-        )}
-        {collisionModel && (
-          <CollisionDebugOverlay
-            model={collisionModel}
-            onClose={() => setCollisionDebug(false)}
-          />
         )}
         <Panel position="top-left" className="axiom-canvas-toolbar">
           <button
@@ -4143,22 +4650,25 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
               Focus{focusEnabled ? ' On' : ' Off'}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setCollisionDebug(value => !value)}
-            title="Draw the boxes the placement engine collides against (Ctrl+Alt+B)"
-            className={collisionDebug
-              ? 'axiom-canvas-command axiom-canvas-command--trace-active'
-              : 'axiom-canvas-command'}
-          >
-            <svg style={{ width: '14px', height: '14px' }} viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="10" height="10" rx="1" />
-              <rect x="11" y="11" width="10" height="10" rx="1" strokeDasharray="3 2" />
-            </svg>
-            Boxes{collisionDebug ? ' On' : ' Off'}
-          </button>
         </Panel>
+        {/* The bin canvas must not grow its own bins. Gated on mount rather
+            than hidden in CSS, so the inner canvas never subscribes to a
+            bin it is itself the inside of. */}
+        {!binMode && (
+          <Panel position="bottom-right" className="axiom-canvas-bins-panel">
+            <CanvasBins
+              documents={bins.documents}
+              unclassified={binsHoldUnclassified ? bins.unclassified : []}
+              documentsOpen={documentsOpen}
+              onToggleDocuments={() => {
+                const store = useGraphStore.getState()
+                store.setDocumentsOpen(!store.documentsOpen)
+              }}
+              dragActive={isDraggingScene}
+              readOnly={readOnly}
+            />
+          </Panel>
+        )}
         <Panel position="bottom-left" className="axiom-canvas-zoom-panel">
           <ZoomIndicator />
         </Panel>
@@ -4180,7 +4690,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene }: AxiomCanvasProps 
           <button
             type="button"
             onClick={() => setSheetDialogOpen(true)}
-            title="Curate the selection onto a named sheet — a live diagram telling one story"
+            title="Curate the selection onto a named sheet - a live diagram telling one story"
             className="axiom-selection-action"
           >
             New Sheet

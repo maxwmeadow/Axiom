@@ -7,6 +7,7 @@ import { Toolbar } from './components/Toolbar'
 import { StatusBar } from './components/StatusBar'
 import { DetailPanel } from './components/DetailPanel'
 import { DocumentsPanel } from './components/DocumentsPanel'
+import { BinDragGhostLayer } from './components/BinDragGhostLayer'
 import { SearchBar } from './components/SearchBar'
 import { InjectConfirmBanner } from './components/InjectConfirmBanner'
 import { AgentLogPanel } from './components/AgentLogPanel'
@@ -24,6 +25,11 @@ import { ProjectReviewScreen } from './screens/ProjectReviewScreen'
 import { ConnectAgentScreen } from './screens/ConnectAgentScreen'
 import { readAuthorship } from './canvas/architectureAuthorship.ts'
 import { isCanvasSourceFile } from '../shared/fileKinds'
+import {
+  agentSetupIsComplete,
+  markAgentSetupComplete,
+  migrateLegacyProjectCreationSource,
+} from './projectLocalState'
 
 import { useGraphStore, connectToArchd } from './store/graphStore'
 import { useOnboardingStore } from './store/onboardingStore'
@@ -34,6 +40,7 @@ import { SheetRail } from './components/SheetRail'
 import type { ProjectConfig } from '../shared/types'
 import {
   completeSourceBoundaries,
+  projectUsesBlankSetup,
   resolveProjectSourceBoundaries,
   sourceBoundariesAreComplete,
 } from '../shared/projectLifecycle'
@@ -48,6 +55,7 @@ const E2E_HOME = E2E_MODE && APP_PARAMS.get('home') === '1'
 const E2E_SETUP = E2E_MODE && APP_PARAMS.get('setup') === '1'
 const E2E_CONNECT = E2E_MODE && APP_PARAMS.get('connect') === '1'
 const E2E_REVIEW = E2E_MODE && APP_PARAMS.get('review') === '1'
+const E2E_BLANK_PROJECT = E2E_MODE && APP_PARAMS.get('blank') === '1'
 const E2E_PROJECT: ProjectConfig = {
   id: 'demo',
   name: 'Axiom Canvas Fixture',
@@ -85,16 +93,21 @@ function forgetOpenProject() {
   } catch { /* see rememberOpenProject */ }
 }
 
-/** Setup finished: boundaries chosen AND the baseline review closed. */
+/** Setup finished according to the journey that created this project. */
 function projectIsReady(config: ProjectConfig): boolean {
-  return sourceBoundariesAreComplete(config) &&
-    localStorage.getItem(`review_completed_${config.id}`) === 'true'
+  config = migrateLegacyProjectCreationSource(config)
+  if (!sourceBoundariesAreComplete(config)) return false
+  return projectUsesBlankSetup(config)
+    ? agentSetupIsComplete(config.id)
+    : localStorage.getItem(`review_completed_${config.id}`) === 'true'
 }
 
 export default function App() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [agentLogOpen, setAgentLogOpen] = useState(false)
-  const [documentsOpen, setDocumentsOpen] = useState(false)
+  // Shared with the canvas documents bin, so both entry points open one browser.
+  const documentsOpen = useGraphStore(state => state.documentsOpen)
+  const setDocumentsOpen = useGraphStore(state => state.setDocumentsOpen)
   const [currentProject, setCurrentProject] = useState<ProjectConfig | null>(
     E2E_MODE && !E2E_HOME && !E2E_SETUP ? E2E_PROJECT : null
   )
@@ -111,22 +124,15 @@ export default function App() {
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null)
   const enterOnboardingProject = useOnboardingStore(s => s.enterProject)
 
-  // Whether this codebase has an architecture anyone chose. Gated on that and
-  // NOT on any "seen the onboarding" flag: those live in local storage, outlive
-  // every reset of the workspace data, and had the effect of hiding the setup a
-  // user needed because some earlier journey had once been completed here.
   const { files: graphFiles, systems: graphSystems, isIndexing: graphIndexing } =
     useGraphStore(useShallow(s => ({
       files: s.files,
       systems: s.systems,
       isIndexing: s.isIndexing,
     })))
+  const [completedAgentSetupId, setCompletedAgentSetupId] = useState<string | null>(null)
   const [browsingWithoutAgent, setBrowsingWithoutAgent] = useState<string | null>(null)
   const sourceGraphFiles = useMemo(() => graphFiles.filter(isCanvasSourceFile), [graphFiles])
-  // Authored, not "unnamed": a project mid-index has no files yet, and asking
-  // whether its map is guesswork answers "no" for the wrong reason — there is
-  // nothing there to be guesswork. What matters is whether anyone has decided
-  // what this codebase's parts are, which is false until they have.
   const architectureIsAuthored = readAuthorship({
     systems: graphSystems,
     files: sourceGraphFiles,
@@ -167,7 +173,7 @@ export default function App() {
     if (!window.axiom) {
       connectToArchd()
     }
-    // Infra service registry — one fetch, shared by canvas nodes and dialogs
+    // Infra service registry - one fetch, shared by canvas nodes and dialogs
     void useRegistryStore.getState().fetchRegistry()
   }, [applySnapshot, setConnectionStatus, setStoreProject])
 
@@ -197,7 +203,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [currentProject])
 
-  const openProject = useCallback(async (config: ProjectConfig) => {
+  const openProject = useCallback(async (incomingConfig: ProjectConfig) => {
+    const config = migrateLegacyProjectCreationSource(incomingConfig)
     setCurrentProject(config)
     setStoreProject(config)
     // Questions and failures belong to the project that raised them. A new
@@ -205,8 +212,10 @@ export default function App() {
     useInterruptionStore.getState().clear()
     rememberOpenProject(config.id)
 
-    const isCompleted = localStorage.getItem(`review_completed_${config.id}`) === 'true'
-    setReviewActive(!isCompleted)
+    const isBlankProject = projectUsesBlankSetup(config)
+    const reviewCompleted = localStorage.getItem(`review_completed_${config.id}`) === 'true'
+    setReviewActive(!isBlankProject && !reviewCompleted)
+    setCreatedProjectId(isBlankProject ? config.id : null)
 
     if (window.axiom) {
       beginIndexing()
@@ -243,7 +252,7 @@ export default function App() {
         }),
       }).then(() => {
         // Snapshot is pushed over WS on open, but if the socket connects a
-        // beat late the broadcast is missed and the canvas stays empty — pull
+        // beat late the broadcast is missed and the canvas stays empty - pull
         // it explicitly, retrying while indexing warms up.
         let tries = 0
         const pull = async () => {
@@ -281,7 +290,7 @@ export default function App() {
           raiseFailure(
             'snapshot-cold-load',
             'Could not load this project from archd',
-            'The daemon did not answer after 15 seconds. Your code is untouched — this is the map, not the repository.',
+            'The daemon did not answer after 15 seconds. Your code is untouched - this is the map, not the repository.',
             [{
               label: 'Retry',
               primary: true,
@@ -298,13 +307,13 @@ export default function App() {
         setIndexingComplete()
         console.error('[openProject] archd workspace error:', err)
         // The retry above only exists once the workspace POST resolves. When
-        // the POST itself rejects — archd not listening, port taken, refused
-        // — nothing downstream ever runs, so this was the path that actually
+        // the POST itself rejects - archd not listening, port taken, refused
+        // - nothing downstream ever runs, so this was the path that actually
         // produced the silent blank canvas.
         raiseFailure(
           'workspace-register',
           'Could not reach archd to open this project',
-          `${err instanceof Error ? err.message : String(err)} — your code is untouched; this is the map, not the repository.`,
+          `${err instanceof Error ? err.message : String(err)} - your code is untouched; this is the map, not the repository.`,
           [{
             label: 'Retry',
             primary: true,
@@ -368,7 +377,7 @@ export default function App() {
 
   // Resume where you were. Axiom opened on the launcher every single time, so
   // reaching your own codebase cost a click through a list you had already
-  // chosen from yesterday — the wrong first impression for a tool meant to be
+  // chosen from yesterday - the wrong first impression for a tool meant to be
   // opened every morning. Runs once per launch, before anything is open.
   useEffect(() => {
     if (resumeChecked) return
@@ -405,6 +414,8 @@ export default function App() {
     useInterruptionStore.getState().clear()
     setCurrentProject(null)
     setStoreProject(null)
+    setCompletedAgentSetupId(null)
+    setBrowsingWithoutAgent(null)
     setReviewActive(false)
     setDocumentsOpen(false)
   }, [setStoreProject])
@@ -453,10 +464,13 @@ export default function App() {
         }}
         onOpenDialog={openProjectDialog}
         onCreateProject={(config) => {
-          // A brand-new empty project has nothing to scope or review — land
-          // directly on the live Floor so files materialize as they're built.
-          const completed = completeSourceBoundaries(config, [])
-          localStorage.setItem(`review_completed_${completed.id}`, 'true')
+          // A brand-new project has no source boundaries to choose, but it still
+          // needs a live agent before the user begins on its empty Floor.
+          const completed = completeSourceBoundaries({
+            ...config,
+            creationSource: 'new-project',
+            rootIsEmpty: true,
+          }, [])
           setCreatedProjectId(completed.id)
           openProject(completed)
         }}
@@ -464,15 +478,26 @@ export default function App() {
     )
   }
 
-  // A codebase nobody has mapped starts here. Everything the map can say is
-  // downstream of an agent having read it, so this is the work rather than a
-  // detour from it.
-  if (currentProject && (E2E_CONNECT || (!E2E_MODE && !architectureIsAuthored && browsingWithoutAgent !== currentProject.id))) {
+  const blankProject = currentProject
+    ? E2E_BLANK_PROJECT || projectUsesBlankSetup(currentProject)
+    : false
+  const blankAgentSetupComplete = currentProject
+    ? completedAgentSetupId === currentProject.id || agentSetupIsComplete(currentProject.id)
+    : false
+  const needsAgentSetup = currentProject && (blankProject
+    ? !blankAgentSetupComplete
+    : !architectureIsAuthored && browsingWithoutAgent !== currentProject.id)
+  if (currentProject && (E2E_CONNECT || (!E2E_MODE && needsAgentSetup))) {
     return (
       <ConnectAgentScreen
         project={currentProject}
         fileCount={sourceGraphFiles.length}
         indexing={graphIndexing}
+        blankProject={blankProject}
+        onComplete={() => {
+          markAgentSetupComplete(currentProject.id)
+          setCompletedAgentSetupId(currentProject.id)
+        }}
         onReview={() => setBrowsingWithoutAgent(currentProject.id)}
         onSkip={() => {
           setBrowsingWithoutAgent(currentProject.id)
@@ -484,7 +509,6 @@ export default function App() {
     )
   }
 
-  // Review screen for project indexing review phase
   if (currentProject && reviewActive) {
     return (
       <ProjectReviewScreen
@@ -508,8 +532,6 @@ export default function App() {
           projectName={currentProject.name}
           agentLogOpen={agentLogOpen}
           onToggleAgentLog={() => setAgentLogOpen(open => !open)}
-          documentsOpen={documentsOpen}
-          onToggleDocuments={() => setDocumentsOpen(open => !open)}
         />
 
         {/* Sheet rail + canvas area */}
@@ -517,17 +539,22 @@ export default function App() {
           <SheetRail />
           <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
           {/* REVISION 2: sheets are layers over the live canvas, not separate
-              views — AxiomCanvas renders the base layer + active sheet overlay. */}
+              views - AxiomCanvas renders the base layer + active sheet overlay. */}
           <ErrorBoundary>
             <AxiomCanvas />
           </ErrorBoundary>
+
+          {/* Beside the canvas, not inside it: the ghost that carries a node
+              between the Floor and the unsorted bin must be able to appear
+              without re-rendering the canvas that owns the drag. */}
+          <BinDragGhostLayer />
 
           {documentsOpen && <DocumentsPanel onClose={() => setDocumentsOpen(false)} />}
 
           {/* Paint servers every node references. Defined once; renders nothing. */}
           <PaperTextureDefs />
 
-          {/* Morning Delta — what changed while you weren't watching */}
+          {/* Morning Delta - what changed while you weren't watching */}
           <DeltaPanel />
 
           {/* The architecture an agent proposed, for you to confirm */}
@@ -554,7 +581,7 @@ export default function App() {
             suppress={createdProjectId === currentProject.id}
           />
 
-          {/* Agent activity log — everything the agent is doing, live */}
+          {/* Agent activity log - everything the agent is doing, live */}
           {agentLogOpen && <AgentLogPanel onClose={() => setAgentLogOpen(false)} />}
 
           {/* Investigation Capture replay controls */}
@@ -564,7 +591,7 @@ export default function App() {
 
           {/* Which worktree each agent is in, and how the branches relate.
               Boundaried because a panel throwing during render takes the whole
-              workbench with it — a malformed collisions response did exactly
+              workbench with it - a malformed collisions response did exactly
               that, blanking the app behind a "Render Error" screen. Losing one
               panel is acceptable; losing the canvas is not. */}
           <ErrorBoundary>

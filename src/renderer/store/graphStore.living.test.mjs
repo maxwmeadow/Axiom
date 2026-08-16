@@ -284,3 +284,61 @@ test('a callee edit flows outward and impacts the other file instead of replayin
     globalThis.setTimeout = originalSetTimeout
   }
 })
+
+// ── Where an arrival is announced ───────────────────────────────────────────
+// A file nobody has placed is not drawn on the Floor, so playing the green
+// create on its node spends the signal on nothing the user can see.
+
+test('an unplaced file announces itself on the bin, not the canvas', () => {
+  useGraphStore.setState({
+    files: [], systems: [{ id: 'sys-1' }], nodeFx: {}, unsortedArrivalKey: 0,
+  })
+  useGraphStore.getState().applyDbPatch({
+    type: 'file:updated',
+    payload: { file: { id: 'loose.py', relPath: 'loose.py', systemId: null }, animate: true },
+  })
+  const state = useGraphStore.getState()
+  assert.equal(state.unsortedArrivalKey, 1, 'the bin should have been pulsed')
+  assert.equal(state.nodeFx['loose.py'], undefined, 'no canvas animation for a node that is not drawn')
+})
+
+test('a placed file still materialises on the canvas', () => {
+  useGraphStore.setState({
+    files: [], systems: [{ id: 'sys-1' }], nodeFx: {}, unsortedArrivalKey: 0,
+  })
+  useGraphStore.getState().applyDbPatch({
+    type: 'file:updated',
+    payload: { file: { id: 'placed.py', relPath: 'placed.py', systemId: 'sys-1' }, animate: true },
+  })
+  const state = useGraphStore.getState()
+  assert.equal(state.nodeFx['placed.py']?.kind, 'enter')
+  assert.equal(state.unsortedArrivalKey, 0, 'the bin is not involved when the file is drawn')
+})
+
+// Before anyone authors an architecture every file is unplaced and the Floor
+// draws them all, so the arrival belongs on the canvas as it always did.
+test('with no systems yet, an unplaced file still materialises on the canvas', () => {
+  useGraphStore.setState({
+    files: [], systems: [], nodeFx: {}, unsortedArrivalKey: 0,
+  })
+  useGraphStore.getState().applyDbPatch({
+    type: 'file:updated',
+    payload: { file: { id: 'first.py', relPath: 'first.py', systemId: null }, animate: true },
+  })
+  const state = useGraphStore.getState()
+  assert.equal(state.nodeFx['first.py']?.kind, 'enter')
+  assert.equal(state.unsortedArrivalKey, 0)
+})
+
+test('each arrival in a burst restarts the pulse rather than being swallowed', () => {
+  useGraphStore.setState({
+    files: [], systems: [{ id: 'sys-1' }], nodeFx: {}, unsortedArrivalKey: 0,
+  })
+  for (const name of ['a.py', 'b.py', 'c.py']) {
+    useGraphStore.getState().applyDbPatch({
+      type: 'file:updated',
+      payload: { file: { id: name, relPath: name, systemId: null }, animate: true },
+    })
+  }
+  assert.equal(useGraphStore.getState().unsortedArrivalKey, 3)
+})
