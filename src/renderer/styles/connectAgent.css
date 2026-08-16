@@ -101,6 +101,10 @@
   background: #e7ebe6;
 }
 
+.axiom-connect__step-nav[data-mode='blank'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .axiom-connect__step-nav button {
   position: relative;
   display: flex;
@@ -474,6 +478,18 @@
   animation: axiom-connect-wait 1.4s ease-in-out infinite;
 }
 
+.axiom-connect__waiting-line[data-state='connected'] {
+  border-color: #75a393;
+  background: #e4eee8;
+  color: #245f4c;
+}
+
+.axiom-connect__waiting-line[data-state='connected'] span {
+  background: #35c985;
+  box-shadow: 0 0 0 4px rgba(53, 201, 133, 0.14);
+  animation: none;
+}
+
 @keyframes axiom-connect-wait { 50% { opacity: 0.25; } }
 
 .axiom-connect__review {
@@ -512,6 +528,12 @@
 
 .axiom-connect__primary { border: 1px solid #285e4d; background: #34735f; color: #f7faf5; }
 .axiom-connect__primary:hover { background: #3e866f; }
+.axiom-connect__primary:disabled {
+  border-color: #aeb8b2;
+  background: #d8ddd8;
+  color: #7a8780;
+  cursor: not-allowed;
+}
 .axiom-connect__secondary { border: 1px solid #b8beb8; background: #f8f7f2; color: #56655e; }
 .axiom-connect__secondary:hover { border-color: #75867e; color: #23362f; }
 
@@ -548,136 +570,9 @@
   filter: drop-shadow(3px 5px 0 rgba(39, 56, 49, 0.11));
 }
 
-.axiom-connect__mascot svg path,
-.axiom-connect__mascot svg ellipse,
-.axiom-connect__mascot svg circle,
-.axiom-connect__mascot svg rect {
-  vector-effect: non-scaling-stroke;
+.axiom-connect__mascot > .axiom-final-gemini {
+  width: min(100%, 320px);
 }
-
-.agent-shadow { fill: rgba(23, 42, 35, 0.18); stroke: none; }
-.agent-hatch-line { fill: none; stroke: rgba(23, 42, 35, 0.22); stroke-width: 1.5; }
-.agent-character { transform-origin: 160px 292px; animation: axiom-agent-doze 3.4s ease-in-out infinite; }
-.agent-head-shadow { fill: rgba(23, 42, 35, 0.2); stroke: none; transform: translate(5px, 7px); }
-.agent-head { fill: #90aa9d; stroke: #172a23; stroke-linejoin: round; stroke-width: 5; }
-.agent-head-highlight { fill: none; stroke: rgba(248, 244, 230, 0.6); stroke-linecap: round; stroke-width: 2; }
-.agent-faceplate { fill: #f4efdf; stroke: #172a23; stroke-linejoin: round; stroke-width: 3.5; }
-.agent-ear { fill: url(#axiom-agent-brass); stroke: #172a23; stroke-linejoin: round; stroke-width: 4; }
-.agent-ear-rivet { fill: #f0d98f; stroke: #172a23; stroke-width: 2; }
-.agent-neck { fill: #61796e; stroke: #172a23; stroke-width: 4; }
-.agent-body-shadow { fill: rgba(23, 42, 35, 0.18); stroke: none; transform: translate(6px, 7px); }
-.agent-body { fill: #819b8e; stroke: #172a23; stroke-linejoin: round; stroke-width: 5; }
-.agent-body-hatch { fill: url(#axiom-agent-hatch); opacity: 0.48; stroke: none; }
-.agent-collar { fill: #f1ead6; stroke: #172a23; stroke-linejoin: round; stroke-width: 3; }
-.agent-tie { fill: url(#axiom-agent-brass); stroke: #172a23; stroke-linejoin: round; stroke-width: 3; }
-.agent-coat-button { fill: #d8b151; stroke: #172a23; stroke-width: 2; }
-.agent-pocket { fill: none; stroke: #29443a; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
-.agent-badge path:first-child { fill: #f1ead6; stroke: #172a23; stroke-width: 2.5; }
-.agent-badge path:last-child { fill: none; stroke: #34735f; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.5; }
-.agent-blueprint path:first-child { fill: #dbe6de; stroke: #172a23; stroke-linejoin: round; stroke-width: 3; }
-.agent-blueprint path:nth-child(2) { fill: none; stroke: #497768; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
-.agent-blueprint path:last-child { fill: #f0e8d2; stroke: #172a23; stroke-width: 3; }
-.agent-antenna,
-.agent-antenna-spring,
-.agent-leg,
-.agent-sock,
-.agent-arm,
-.agent-shoe-shine,
-.agent-brow,
-.agent-glove-detail {
-  fill: none;
-  stroke: #172a23;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.agent-antenna { stroke-width: 5; }
-.agent-antenna-spring { stroke-width: 2.5; }
-.agent-beacon-ring { fill: #f1ead6; stroke: #172a23; stroke-width: 3.5; }
-.agent-beacon { fill: #b5b9ae; stroke: #172a23; stroke-width: 2.5; }
-.agent-leg { stroke-width: 7; }
-.agent-sock { stroke: #d8b151; stroke-width: 4; }
-.agent-shoe { fill: #22382f; stroke: #172a23; stroke-linejoin: round; stroke-width: 4; }
-.agent-shoe-shine { stroke: rgba(244, 239, 223, 0.72); stroke-width: 2; }
-.agent-arm { stroke-width: 8; }
-.agent-glove { fill: #f4efdf; stroke: #172a23; stroke-linecap: round; stroke-linejoin: round; stroke-width: 3.5; }
-.agent-glove-detail { stroke-width: 2; }
-.agent-face { fill: none; stroke: #172a23; stroke-linecap: round; stroke-linejoin: round; stroke-width: 4; }
-.agent-face--awake ellipse { fill: #fffdf4; stroke: #172a23; }
-.agent-face--awake circle { fill: #172a23; stroke: none; }
-.agent-brow { stroke-width: 3.5; }
-.agent-cheek { fill: #d8b151; stroke: none; opacity: 0.55; }
-.agent-rays { opacity: 0; }
-.agent-rays path { fill: none; stroke: #4da783; stroke-linecap: round; stroke-width: 4; }
-.agent-zs { fill: #496a5d; font-family: var(--font-ui); font-size: 24px; font-weight: 900; paint-order: stroke; stroke: #e6e9e3; stroke-width: 3px; }
-.agent-zs text:nth-child(2) { font-size: 18px; }
-.agent-zs text:nth-child(3) { font-size: 14px; }
-.agent-zs text:nth-child(1) { animation: axiom-agent-z 2.4s ease-in-out infinite; }
-.agent-zs text:nth-child(2) { animation: axiom-agent-z 2.4s 0.3s ease-in-out infinite; }
-.agent-zs text:nth-child(3) { animation: axiom-agent-z 2.4s 0.6s ease-in-out infinite; }
-.agent-face--awake { display: none; }
-.agent-arms--awake { display: none; }
-
-.axiom-connect__mascot[data-state='awake'] .agent-zs,
-.axiom-connect__mascot[data-state='proposed'] .agent-zs,
-.axiom-connect__mascot[data-state='awake'] .agent-face--sleeping,
-.axiom-connect__mascot[data-state='proposed'] .agent-face--sleeping,
-.axiom-connect__mascot[data-state='awake'] .agent-arms--sleeping,
-.axiom-connect__mascot[data-state='proposed'] .agent-arms--sleeping { display: none; }
-.axiom-connect__mascot[data-state='awake'] .agent-face--awake,
-.axiom-connect__mascot[data-state='proposed'] .agent-face--awake,
-.axiom-connect__mascot[data-state='awake'] .agent-arms--awake,
-.axiom-connect__mascot[data-state='proposed'] .agent-arms--awake { display: block; }
-
-.axiom-connect__mascot[data-state='awake'] .agent-beacon {
-  fill: #46d699;
-  animation: axiom-agent-beacon 900ms ease-in-out infinite;
-}
-.axiom-connect__mascot[data-state='awake'] .agent-rays { opacity: 1; animation: axiom-agent-rays 1.1s ease-in-out infinite; }
-.axiom-connect__mascot[data-state='awake'] .agent-brow--left { transform-origin: 137px 84px; animation: axiom-agent-brow 1.8s ease-in-out infinite; }
-.axiom-connect__mascot[data-state='awake'] .agent-wave-arm,
-.axiom-connect__mascot[data-state='awake'] .agent-wave-hand { transform-origin: 209px 174px; animation: axiom-agent-wave 1.2s ease-in-out infinite; }
-.axiom-connect__mascot[data-state='awake'] .agent-character,
-.axiom-connect__mascot[data-state='proposed'] .agent-character { animation: none; }
-.axiom-connect__mascot[data-state='awake'] svg { animation: axiom-agent-wake 420ms cubic-bezier(.2, .9, .25, 1.3) both; }
-.axiom-connect__mascot[data-state='proposed'] .agent-beacon { fill: #e0b44b; }
-
-@keyframes axiom-agent-doze { 50% { transform: translateY(2px) scaleY(0.993); } }
-@keyframes axiom-agent-z { 0%, 100% { opacity: 0.25; transform: translateY(4px); } 50% { opacity: 1; transform: translateY(-2px); } }
-@keyframes axiom-agent-beacon { 50% { filter: drop-shadow(0 0 8px #45db9b); transform: scale(1.16); transform-origin: 160px 33px; } }
-@keyframes axiom-agent-rays { 50% { opacity: 0.45; } }
-@keyframes axiom-agent-brow { 50% { transform: rotate(-7deg); } }
-@keyframes axiom-agent-wave { 50% { transform: rotate(-10deg); } }
-@keyframes axiom-agent-wake { from { transform: translateY(7px) scaleY(0.96); } to { transform: translateY(0) scaleY(1); } }
-
-.axiom-connect__mascot-copy {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  width: 100%;
-  max-width: 265px;
-  gap: 2px 9px;
-  margin-top: 4px;
-  padding: 13px 14px;
-  border: 1px solid #aeb9b3;
-  background: rgba(247, 246, 239, 0.78);
-}
-
-.axiom-connect__mascot-light {
-  grid-row: 1 / 3;
-  align-self: center;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #9aa49f;
-}
-
-.axiom-connect__mascot[data-state='awake'] .axiom-connect__mascot-light {
-  background: #38cc8d;
-  box-shadow: 0 0 9px rgba(56, 204, 141, 0.75);
-}
-
-.axiom-connect__mascot[data-state='proposed'] .axiom-connect__mascot-light { background: #c6952e; }
-.axiom-connect__mascot-copy strong { color: #1b3129; font-size: 11px; }
-.axiom-connect__mascot-copy small { color: #6e7c75; font-size: 9px; line-height: 1.35; }
 
 .axiom-connect__footer {
   display: flex;
@@ -704,6 +599,7 @@
   text-underline-offset: 3px;
 }
 
+
 .axiom-connect button:focus-visible,
 .axiom-connect__host-signal:focus-visible {
   outline: 2px solid #34735f;
@@ -713,15 +609,7 @@
 @media (prefers-reduced-motion: reduce) {
   .axiom-connect__step-panel,
   .axiom-connect__host-signal,
-  .axiom-connect__waiting-line span,
-  .axiom-connect__mascot svg,
-  .axiom-connect__mascot .agent-character,
-  .axiom-connect__mascot .agent-zs text,
-  .axiom-connect__mascot .agent-beacon,
-  .axiom-connect__mascot .agent-rays,
-  .axiom-connect__mascot .agent-brow,
-  .axiom-connect__mascot .agent-arm,
-  .axiom-connect__mascot .agent-wave-hand { animation: none !important; transition: none !important; }
+  .axiom-connect__waiting-line span { animation: none !important; transition: none !important; }
 }
 
 @media (max-width: 850px) {

@@ -1,0 +1,941 @@
+/* ==========================================================================
+   Axiom Mascot Competition - Final Synthesis Round
+   Namespace: axiom-final-gemini
+   ========================================================================== */
+
+/* Production Agent Setup field-agent illustration. */
+.axiom-final-gemini {
+  --axg-ink: #172a23;
+  --axg-paper: #f4efdf;
+  --axg-paper-cool: #f3f1e9;
+  --axg-sage: #819b8e;
+  --axg-sage-deep: #5d7b6d;
+  --axg-green: #34735f;
+  --axg-live: #46d699;
+  --axg-brass: #d8b151;
+  --axg-blueprint: #244e3f;
+
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  user-select: none;
+}
+
+.axiom-final-gemini__svg {
+  width: min(100%, 300px);
+  height: auto;
+  overflow: visible;
+  display: block;
+}
+
+/* --------------------------------------------------------- Ink Language - */
+
+.axiom-final-gemini__svg path,
+.axiom-final-gemini__svg rect,
+.axiom-final-gemini__svg circle,
+.axiom-final-gemini__svg ellipse {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.axiom-final-gemini__paper {
+  fill: var(--axg-paper);
+  stroke: var(--axg-ink);
+  stroke-width: 3.4;
+}
+
+.axiom-final-gemini__sage {
+  fill: var(--axg-sage);
+  stroke: var(--axg-ink);
+  stroke-width: 3.4;
+}
+
+.axiom-final-gemini__brass,
+.axiom-final-gemini__brassRing {
+  stroke: var(--axg-ink);
+  stroke-width: 2.4;
+}
+
+.axiom-final-gemini__brassFill {
+  stroke: var(--axg-ink);
+  stroke-width: 2;
+}
+
+/* Fine pen pass linework */
+.axiom-final-gemini__hair {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 1.9;
+  opacity: 0.74;
+}
+
+.axiom-final-gemini__rivet {
+  fill: var(--axg-ink);
+  stroke: none;
+}
+
+.axiom-final-gemini__groundShadow {
+  fill: rgba(23, 42, 35, 0.16);
+  stroke: none;
+}
+
+.axiom-final-gemini__visorBrim {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 2.4;
+}
+
+/* ----------------------------------------------------------------- Face - */
+
+.axiom-final-gemini__irisBody {
+  fill: var(--axg-ink);
+  stroke: none;
+}
+
+.axiom-final-gemini__glint {
+  fill: var(--axg-paper) !important;
+  stroke: none;
+}
+
+.axiom-final-gemini__starGlint {
+  fill: #ffd566;
+  stroke: none;
+}
+
+.axiom-final-gemini__lensReticle {
+  fill: none;
+  stroke: var(--axg-live);
+  stroke-width: 1.5;
+}
+
+.axiom-final-gemini__pupil {
+  fill: var(--axg-ink);
+  stroke: none;
+}
+
+.axiom-final-gemini__lid,
+.axiom-final-gemini__mouth,
+.axiom-final-gemini__wink {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 3.2;
+}
+
+.axiom-final-gemini__winkCrinkle {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 2;
+}
+
+.axiom-final-gemini__mouthOpen {
+  fill: #2c1c1c;
+  stroke: var(--axg-ink);
+  stroke-width: 2.6;
+}
+
+.axiom-final-gemini__grin {
+  fill: #2c1c1c;
+  stroke: var(--axg-ink);
+  stroke-width: 2.8;
+}
+
+.axiom-final-gemini__toothLine {
+  fill: none;
+  stroke: var(--axg-paper);
+  stroke-width: 2.2;
+}
+
+.axiom-final-gemini__cheekBlush {
+  fill: #d8b151;
+  fill-opacity: 0.45;
+  stroke: none;
+}
+
+.axiom-final-gemini__cheekLive {
+  fill: #46d699;
+  fill-opacity: 0.4;
+  stroke: none;
+}
+
+.axiom-final-gemini__cheekGold {
+  fill: #d8b151;
+  fill-opacity: 0.6;
+  stroke: none;
+}
+
+/* Spirit-level vial on crown */
+.axiom-final-gemini__spiritFrame {
+  stroke: var(--axg-ink);
+  stroke-width: 2.4;
+}
+
+.axiom-final-gemini__spiritBubble {
+  fill: #a2b4aa;
+  stroke: var(--axg-ink);
+  stroke-width: 1.6;
+  transition: fill 240ms ease;
+}
+
+/* Coiled Spring Antenna & Crown Beacon */
+.axiom-final-gemini__antennaStem {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.axiom-final-gemini__antennaCoil {
+  fill: none;
+  stroke: var(--axg-brass);
+  stroke-width: 2;
+}
+
+.axiom-final-gemini__beaconCollar {
+  stroke: var(--axg-ink);
+  stroke-width: 1.8;
+}
+
+.axiom-final-gemini__beaconCage {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 1.8;
+}
+
+.axiom-final-gemini__beaconFinial {
+  stroke: var(--axg-ink);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+
+.axiom-final-gemini__beaconBulb {
+  fill: #789285;
+  stroke: var(--axg-ink);
+  stroke-width: 1.8;
+  transition: fill 240ms ease;
+}
+
+.axiom-final-gemini__beaconShine {
+  fill: #ffffff;
+  fill-opacity: 0.75;
+  stroke: none;
+}
+
+.axiom-final-gemini__beaconAura {
+  opacity: 0;
+  stroke: none;
+}
+
+.axiom-final-gemini__sparkleRay {
+  fill: none;
+  stroke: #ffd566;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+/* ------------------------------------------------- Wardrobe & Torso - */
+
+.axiom-final-gemini__coatShadow {
+  fill: rgba(23, 42, 35, 0.15);
+  stroke: none;
+}
+
+.axiom-final-gemini__coatHatch {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 1.4;
+  opacity: 0.35;
+}
+
+.axiom-final-gemini__shoulderCap {
+  fill: var(--axg-sage);
+  stroke: var(--axg-ink);
+  stroke-width: 2.6;
+}
+
+.axiom-final-gemini__lapel {
+  fill: var(--axg-paper);
+  stroke: var(--axg-ink);
+  stroke-width: 2.8;
+}
+
+.axiom-final-gemini__cravat {
+  fill: var(--axg-green);
+  stroke: var(--axg-ink);
+  stroke-width: 2.2;
+}
+
+.axiom-final-gemini__pocketPouch {
+  fill: #6e877a;
+  stroke: var(--axg-ink);
+  stroke-width: 2.2;
+}
+
+.axiom-final-gemini__ruler {
+  fill: #faf8f2;
+  stroke: var(--axg-ink);
+  stroke-width: 1.4;
+}
+
+.axiom-final-gemini__rulerTicks {
+  fill: none;
+  stroke: var(--axg-green);
+  stroke-width: 1;
+}
+
+.axiom-final-gemini__miniCompass {
+  fill: none;
+  stroke: var(--axg-brass);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.axiom-final-gemini__miniCompassJoint {
+  fill: #f8e59e;
+  stroke: var(--axg-ink);
+  stroke-width: 1;
+}
+
+.axiom-final-gemini__badgeShield {
+  stroke: var(--axg-ink);
+  stroke-width: 1.8;
+}
+
+.axiom-final-gemini__badgeDelta {
+  fill: var(--axg-green);
+  stroke: none;
+}
+
+.axiom-final-gemini__strapInk {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 12;
+}
+
+.axiom-final-gemini__strap {
+  fill: none;
+  stroke: var(--axg-sage-deep);
+  stroke-width: 7.5;
+}
+
+.axiom-final-gemini__neckInk {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 17;
+}
+
+.axiom-final-gemini__neck {
+  fill: none;
+  stroke: var(--axg-sage);
+  stroke-width: 11;
+}
+
+/* -------------------------------------------------- Limbs & Compass - */
+
+.axiom-final-gemini__hoseInk {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 16;
+}
+
+.axiom-final-gemini__hoseCore {
+  fill: none;
+  stroke: var(--axg-paper);
+  stroke-width: 10.5;
+}
+
+.axiom-final-gemini__needle {
+  fill: var(--axg-ink);
+  stroke: var(--axg-ink);
+  stroke-width: 1.5;
+}
+
+.axiom-final-gemini__graphite {
+  fill: #2a3b34;
+  stroke: var(--axg-ink);
+  stroke-width: 1.8;
+}
+
+.axiom-final-gemini__gloveCuff {
+  fill: var(--axg-paper);
+  stroke: var(--axg-ink);
+  stroke-width: 2.2;
+}
+
+/* --------------------------------------------------------- Sleeping - */
+
+.axiom-final-gemini__rollBody {
+  fill: #ece7da;
+  stroke: var(--axg-ink);
+  stroke-width: 3.6;
+}
+
+.axiom-final-gemini__rollEnd {
+  fill: var(--axg-paper);
+  stroke: var(--axg-ink);
+  stroke-width: 3;
+}
+
+.axiom-final-gemini__rollSpiral {
+  fill: none;
+  stroke: var(--axg-ink);
+  stroke-width: 2;
+}
+
+.axiom-final-gemini__rollRibbon {
+  fill: none;
+  stroke: var(--axg-green);
+  stroke-width: 3;
+}
+
+.axiom-final-gemini__rollBow {
+  fill: none;
+  stroke: var(--axg-green);
+  stroke-width: 2.5;
+}
+
+.axiom-final-gemini__markRing {
+  fill: none;
+  stroke: var(--axg-sage);
+  stroke-width: 2.2;
+}
+
+.axiom-final-gemini__markCross {
+  fill: none;
+  stroke: var(--axg-sage);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.axiom-final-gemini__markZ {
+  fill: none;
+  stroke: var(--axg-sage);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.axiom-final-gemini__markZ--med {
+  stroke-width: 2.6;
+}
+
+.axiom-final-gemini__markZ--large {
+  stroke-width: 3.2;
+}
+
+.axiom-final-gemini__markSpark,
+.axiom-final-gemini__markAngle {
+  fill: none;
+  stroke: var(--axg-sage);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.axiom-final-gemini__markDegree {
+  fill: none;
+  stroke: var(--axg-sage);
+  stroke-width: 1.6;
+}
+
+.axiom-final-gemini__markDeltaText {
+  font-family: monospace, sans-serif;
+  font-size: 11px;
+  font-weight: bold;
+  fill: var(--axg-sage);
+  dominant-baseline: central;
+}
+
+/* Static drift opacities for resting / reduced motion read */
+.axiom-final-gemini__mark--1 { opacity: 0.85; }
+.axiom-final-gemini__mark--2 { opacity: 0.7; }
+.axiom-final-gemini__mark--3 { opacity: 0.55; }
+.axiom-final-gemini__mark--4 { opacity: 0.45; }
+.axiom-final-gemini__mark--5 { opacity: 0.35; }
+.axiom-final-gemini__mark--6 { opacity: 0.25; }
+
+.axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: axiom-final-gemini-drift 5.4s ease-in-out infinite;
+}
+.axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark--2 { animation-delay: 0.9s; }
+.axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark--3 { animation-delay: 1.8s; }
+.axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark--4 { animation-delay: 2.7s; }
+.axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark--5 { animation-delay: 3.6s; }
+.axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark--6 { animation-delay: 4.5s; }
+
+.axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__breather {
+  transform-box: fill-box;
+  transform-origin: 50% 92%;
+  animation: axiom-final-gemini-breathe 5.4s ease-in-out infinite;
+}
+
+/* -------------------------------------------------------- Connected - */
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__spiritBubble {
+  fill: var(--axg-live);
+  stroke: #14493a;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__pose {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: axiom-final-gemini-wake 540ms cubic-bezier(0.2, 0.92, 0.28, 1.25) both;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__breatherAwake {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: axiom-final-gemini-breathe-awake 3.8s ease-in-out 600ms infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__iris {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: axiom-final-gemini-blink 6.2s ease-in-out 1.4s infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__focusHand {
+  transform-box: fill-box;
+  transform-origin: 50% 30%;
+  animation: axiom-final-gemini-knob 3.4s ease-in-out 700ms infinite;
+}
+
+.axiom-final-gemini__telemetryBroadcast {
+  pointer-events: none;
+}
+
+.axiom-final-gemini__telemetryWave {
+  fill: none;
+  stroke: var(--axg-live);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+.axiom-final-gemini__telemetryWave--inner {
+  stroke-width: 2.6;
+  opacity: 0.9;
+}
+
+.axiom-final-gemini__telemetryWave--outer {
+  stroke-width: 2;
+  opacity: 0.6;
+}
+
+.axiom-final-gemini__telemetryWave--zenith {
+  stroke-width: 2.2;
+  opacity: 0.75;
+}
+
+.axiom-final-gemini__telemetryDiamond,
+.axiom-final-gemini__telemetryStar {
+  fill: var(--axg-live);
+  stroke: none;
+}
+
+.axiom-final-gemini__telemetryReticle,
+.axiom-final-gemini__telemetryDegree {
+  fill: none;
+  stroke: var(--axg-live);
+  stroke-width: 1.4;
+}
+
+.axiom-final-gemini__telemetryCross {
+  fill: none;
+  stroke: var(--axg-live);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.axiom-final-gemini__telemetryGlyph {
+  font-family: monospace, sans-serif;
+  font-size: 7.5px;
+  font-weight: bold;
+  fill: var(--axg-live);
+  dominant-baseline: central;
+  text-anchor: middle;
+}
+
+/* Animations for Telemetry Pulse & Datum Particles */
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryWave--inner {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: axiom-final-gemini-telemetry-wave 2.2s ease-out infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryWave--outer {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: axiom-final-gemini-telemetry-wave 2.2s ease-out 500ms infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryWave--zenith {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: axiom-final-gemini-telemetry-wave 2.2s ease-out 250ms infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--1 {
+  animation: axiom-final-gemini-sparkle 2.8s ease-in-out infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--2 {
+  animation: axiom-final-gemini-sparkle 3.2s ease-in-out 600ms infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--3 {
+  animation: axiom-final-gemini-sparkle 2.9s ease-in-out 1200ms infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--4 {
+  animation: axiom-final-gemini-sparkle 3.4s ease-in-out 1800ms infinite;
+}
+
+.axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--5 {
+  animation: axiom-final-gemini-sparkle 3s ease-in-out 900ms infinite;
+}
+
+/* --------------------------------------------------- Proposal Ready - */
+
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__spiritBubble {
+  fill: var(--axg-brass);
+  stroke: #6c4f14;
+}
+
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__beaconBulb {
+  fill: #ffd566;
+  stroke: #6c4f14;
+}
+
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__beaconAura {
+  opacity: 0.8;
+  fill: rgba(255, 213, 102, 0.4);
+}
+
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__proposalSparkles {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: axiom-final-gemini-sparkle 2.8s ease-in-out infinite;
+}
+
+.axiom-final-gemini__sheetShadow {
+  fill: rgba(23, 42, 35, 0.24);
+  stroke: none;
+}
+
+.axiom-final-gemini__sheetBody {
+  fill: #244e3f;
+  stroke: var(--axg-ink);
+  stroke-width: 3.4;
+}
+
+.axiom-final-gemini__sheetGridFill {
+  stroke: none;
+}
+
+.axiom-final-gemini__sheetGridLine {
+  fill: none;
+  stroke: rgba(70, 214, 153, 0.16);
+  stroke-width: 0.9;
+}
+
+.axiom-final-gemini__sheetFold {
+  fill: none;
+  stroke: rgba(243, 241, 233, 0.14);
+  stroke-width: 1.8;
+}
+
+.axiom-final-gemini__sheetHeader {
+  fill: rgba(243, 241, 233, 0.35);
+  stroke: none;
+}
+
+.axiom-final-gemini__sheetTitle {
+  font-family: monospace, sans-serif;
+  font-size: 6.8px;
+  font-weight: bold;
+  fill: #f3f1e9;
+  letter-spacing: 0.06em;
+  dominant-baseline: middle;
+}
+
+.axiom-final-gemini__sheetNode {
+  fill: rgba(23, 42, 35, 0.45);
+  stroke: #f3f1e9;
+  stroke-width: 2;
+}
+
+.axiom-final-gemini__sheetNode--core {
+  fill: rgba(70, 214, 153, 0.22);
+  stroke: var(--axg-live);
+  stroke-width: 2.4;
+}
+
+.axiom-final-gemini__nodeGlow {
+  fill: none;
+  stroke: var(--axg-live);
+  stroke-width: 1.2;
+  stroke-opacity: 0.6;
+}
+
+.axiom-final-gemini__nodeBar {
+  fill: #547c6e;
+  stroke: none;
+}
+
+.axiom-final-gemini__nodeBar--core {
+  fill: #215c48;
+  stroke: none;
+}
+
+.axiom-final-gemini__nodeLabel {
+  font-family: monospace, sans-serif;
+  font-size: 6.5px;
+  font-weight: bold;
+  fill: #f4efdf;
+  letter-spacing: 0.04em;
+  dominant-baseline: middle;
+}
+
+.axiom-final-gemini__nodeLabel--core {
+  font-family: monospace, sans-serif;
+  font-size: 7.5px;
+  font-weight: bold;
+  fill: #46d699;
+  letter-spacing: 0.05em;
+  dominant-baseline: middle;
+}
+
+.axiom-final-gemini__sheetEdge {
+  fill: none;
+  stroke: rgba(243, 241, 233, 0.65);
+  stroke-width: 2.2;
+}
+
+.axiom-final-gemini__sheetEdge--bus {
+  stroke-dasharray: 4 3;
+}
+
+.axiom-final-gemini__sheetPin {
+  fill: var(--axg-paper-cool);
+  stroke: none;
+}
+
+.axiom-final-gemini__sheetPin--live {
+  fill: var(--axg-live);
+  stroke: #172a23;
+  stroke-width: 0.8;
+}
+
+.axiom-final-gemini__sheetLine {
+  fill: none;
+  stroke: rgba(243, 241, 233, 0.45);
+  stroke-width: 1.8;
+}
+
+.axiom-final-gemini__stampWash {
+  fill: rgba(216, 177, 81, 0.18);
+  stroke: none;
+}
+
+.axiom-final-gemini__stampRing {
+  fill: none;
+  stroke: var(--axg-brass);
+  stroke-width: 4;
+}
+
+.axiom-final-gemini__stampInner {
+  fill: none;
+  stroke: var(--axg-brass);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+
+.axiom-final-gemini__stampCheck {
+  fill: none;
+  stroke: var(--axg-brass);
+  stroke-width: 4.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.axiom-final-gemini__stampBurst path {
+  fill: none;
+  stroke: var(--axg-brass);
+  stroke-width: 2.8;
+  stroke-linecap: round;
+}
+
+/* Resting burst is spent (opacity 0) */
+.axiom-final-gemini__stampBurst { opacity: 0; }
+
+/* Top-down vertical reveal animation (Gemini) */
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__sheet {
+  transform-box: fill-box;
+  transform-origin: 50% 0%;
+  animation: axiom-final-gemini-unfurl 620ms cubic-bezier(0.18, 0.89, 0.32, 1.15) both;
+}
+
+/* Physical stamp strike payoff (Claude) */
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__stamp {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: axiom-final-gemini-strike 500ms cubic-bezier(0.4, 0, 0.2, 1) 620ms both;
+}
+
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__stampBurst {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: axiom-final-gemini-burst 460ms ease-out 1060ms both;
+}
+
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__headMount {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: axiom-final-gemini-nod 800ms ease-in-out 1040ms 2 both;
+}
+
+.axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__pose {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: axiom-final-gemini-sway 8.5s ease-in-out 1.6s infinite;
+}
+
+/* ------------------------------------------------------------ Caption - */
+
+.axiom-final-gemini__caption {
+  margin: 0;
+  max-width: 260px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+  color: #62716a;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* ---------------------------------------------------------- Keyframes - */
+
+@keyframes axiom-final-gemini-breathe {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  50% { transform: translateY(1.5px) scaleY(0.988); }
+}
+
+@keyframes axiom-final-gemini-breathe-awake {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  50% { transform: translateY(-1.4px) scaleY(1.008); }
+}
+
+@keyframes axiom-final-gemini-drift {
+  0% { opacity: 0; transform: translate(0, 8px) scale(0.8); }
+  25% { opacity: 0.85; }
+  70% { opacity: 0.45; }
+  100% { opacity: 0; transform: translate(6px, -16px) scale(1.05); }
+}
+
+@keyframes axiom-final-gemini-wake {
+  0% { transform: translateY(14px) scaleY(0.9) scaleX(1.05); }
+  55% { transform: translateY(-4px) scaleY(1.035) scaleX(0.985); }
+  100% { transform: none; }
+}
+
+@keyframes axiom-final-gemini-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95.5% { transform: scaleY(0.08); }
+}
+
+@keyframes axiom-final-gemini-knob {
+  0%, 100% { transform: rotate(0deg); }
+  35% { transform: rotate(-7deg); }
+  70% { transform: rotate(5deg); }
+}
+
+@keyframes axiom-final-gemini-telemetry-wave {
+  0% { opacity: 0; transform: scale(0.65); }
+  35% { opacity: 0.95; }
+  75% { opacity: 0.55; }
+  100% { opacity: 0; transform: scale(1.35); }
+}
+
+@keyframes axiom-final-gemini-unfurl {
+  0% { opacity: 0.2; transform: translateY(-20px) scaleY(0.3); }
+  70% { opacity: 1; transform: translateY(2px) scaleY(1.03); }
+  100% { opacity: 1; transform: translateY(0) scaleY(1); }
+}
+
+@keyframes axiom-final-gemini-strike {
+  0% { opacity: 0; transform: translateY(-30px) scale(1.8) rotate(9deg); }
+  70% { opacity: 1; transform: translateY(0) scale(0.94); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes axiom-final-gemini-burst {
+  0% { opacity: 0; transform: scale(0.4); }
+  15% { opacity: 1; transform: scale(0.85); }
+  100% { opacity: 0; transform: scale(1.3); }
+}
+
+@keyframes axiom-final-gemini-nod {
+  0%, 100% { transform: rotate(0deg); }
+  40% { transform: rotate(-4deg) translateY(-2px); }
+}
+
+@keyframes axiom-final-gemini-sway {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(0.6deg) translateY(-1.2px); }
+}
+
+@keyframes axiom-final-gemini-sparkle {
+  0%, 100% { opacity: 0.6; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+/* ----------------------------------------------------- Reduced Motion - */
+
+@media (prefers-reduced-motion: reduce) {
+  .axiom-final-gemini,
+  .axiom-final-gemini *,
+  .axiom-final-gemini *::before,
+  .axiom-final-gemini *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark--1 { opacity: 0.85; }
+  .axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark--2 { opacity: 0.6; }
+  .axiom-final-gemini[data-state='sleeping'] .axiom-final-gemini__mark--3 { opacity: 0.35; }
+  .axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryWave,
+  .axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--1,
+  .axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--2,
+  .axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--3,
+  .axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--4,
+  .axiom-final-gemini[data-state='connected'] .axiom-final-gemini__telemetryDatum--5 {
+    opacity: 0.85;
+  }
+  .axiom-final-gemini[data-state='proposal-ready'] .axiom-final-gemini__proposalSparkles { opacity: 0.85; }
+}
+
+/* --------------------------------------------------------- Small Size - */
+
+@container (max-width: 150px) {
+  .axiom-final-gemini__hair,
+  .axiom-final-gemini__rulerTicks,
+  .axiom-final-gemini__miniCompass,
+  .axiom-final-gemini__coatHatch,
+  .axiom-final-gemini__sheetGridFill,
+  .axiom-final-gemini__sheetFold,
+  .axiom-final-gemini__stampInner,
+  .axiom-final-gemini__nodeGlow {
+    opacity: 0;
+  }
+  .axiom-final-gemini__paper,
+  .axiom-final-gemini__sage {
+    stroke-width: 4.2;
+  }
+  .axiom-final-gemini__caption {
+    display: none;
+  }
+}

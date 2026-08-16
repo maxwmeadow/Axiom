@@ -6,7 +6,12 @@ import fs from 'fs'
 import type { ProjectConfig, WsMessage } from '../src/shared/types'
 import { completeSourceBoundaries, mergePersistedProjectConfig } from '../src/shared/projectLifecycle'
 import { buildHosts, detectHosts, inspectHostConfiguration } from './agentInstallers'
-import { createProjectId, findProjectByRoot, removeProjectData } from './projectRegistry'
+import {
+  createProjectId,
+  findProjectByRoot,
+  refreshProjectDiskState,
+  removeProjectData,
+} from './projectRegistry'
 
 // electron-vite sets VITE_DEV_SERVER_URL in dev/preview mode only
 const IS_DEV = !!process.env.VITE_DEV_SERVER_URL
@@ -74,7 +79,7 @@ function startArchd(): void {
 
   const binary = archdBinaryPath()
   if (!fs.existsSync(binary)) {
-    console.warn(`[main] archd binary not found at ${binary} — run: npm run build:archd`)
+    console.warn(`[main] archd binary not found at ${binary} - run: npm run build:archd`)
     return
   }
 
@@ -216,7 +221,7 @@ function createWindow(): void {
   } else {
     // Show as soon as the renderer is usable. ready-to-show alone is NOT
     // reliable on Windows (it can simply never fire for initially-hidden
-    // windows on some GPU/driver combos — the app stays invisible while
+    // windows on some GPU/driver combos - the app stays invisible while
     // everything else runs). did-finish-load always fires, so show on
     // whichever comes first, with a timed fallback as the last resort.
     const showOnce = (source: string) => {
@@ -249,7 +254,7 @@ function createWindow(): void {
 // ─── IPC Handlers ──────────────────────────────────────────────────────────
 
 function setupIPC(): void {
-  // Open a project directory — returns config only; caller is responsible for sending to archd
+  // Open a project directory - returns config only; caller is responsible for sending to archd
   ipcMain.handle('project:open-dialog', async () => {
     const result = await dialog.showOpenDialog(mainWindow!, {
       properties: ['openDirectory'],
@@ -264,15 +269,17 @@ function setupIPC(): void {
       id,
       name: rootPath.split(/[/\\]/).pop() ?? 'Project',
       rootPath,
+      creationSource: 'open-codebase',
+      rootIsEmpty: fs.readdirSync(rootPath).length === 0,
       ignoredPaths: [],
       languageOverrides: {},
       layoutPreferences: { zoom: 1, panX: 0, panY: 0 },
       openedAt: Date.now(),
     }
     let config = mergePersistedProjectConfig(existing, freshConfig)
-    // Opening a genuinely empty folder is equivalent to creating a new
-    // project: there is no source scope to decide yet.
-    if (fs.readdirSync(rootPath).length === 0) {
+    // An empty codebase has no source scope to choose, but it still follows the
+    // Open Codebase journey because the launcher action is authoritative.
+    if (config.rootIsEmpty) {
       config = completeSourceBoundaries(config, [])
     }
     upsertRecentProject(config)
@@ -281,14 +288,15 @@ function setupIPC(): void {
 
   // Open a specific project path directly
   ipcMain.handle('project:open', async (_event, config: ProjectConfig) => {
-    upsertRecentProject({ ...config, openedAt: Date.now() })
+    const currentConfig = refreshProjectDiskState({ ...config, openedAt: Date.now() })
+    upsertRecentProject(currentConfig)
     fs.mkdirSync(DATA_DIR, { recursive: true })
     fs.writeFileSync(
       join(DATA_DIR, 'active_project.json'),
-      JSON.stringify({ workspaceId: config.id, name: config.name, rootPath: config.rootPath }, null, 2)
+      JSON.stringify({ workspaceId: currentConfig.id, name: currentConfig.name, rootPath: currentConfig.rootPath }, null, 2)
     )
-    sendToArchd({ type: 'open:project', payload: config })
-    return config
+    sendToArchd({ type: 'open:project', payload: currentConfig })
+    return currentConfig
   })
 
   // Choose a directory to hold a new project (New Project flow → location).
@@ -318,6 +326,8 @@ function setupIPC(): void {
       id,
       name: safe,
       rootPath,
+      creationSource: 'new-project',
+      rootIsEmpty: true,
       ignoredPaths: [],
       languageOverrides: {},
       layoutPreferences: { zoom: 1, panX: 0, panY: 0 },
@@ -328,7 +338,7 @@ function setupIPC(): void {
   })
 
   // Get recent projects
-  ipcMain.handle('project:list-recent', () => loadRecentProjects())
+  ipcMain.handle('project:list-recent', () => loadRecentProjects().map(refreshProjectDiskState))
 
   // Deleting is a verified lifecycle boundary. Keep the recent entry if any
   // daemon or filesystem step fails so the UI cannot claim data was removed.
@@ -428,7 +438,7 @@ function setupIPC(): void {
   })
 
   // How an agent actually connects. Axiom speaks MCP over stdio, so the thing a
-  // user needs is a server entry naming this install — never a URL. The old
+  // user needs is a server entry naming this install - never a URL. The old
   // invitation copied http://127.0.0.1:7743/mcp, which archd does not serve and
   // never did, so following the app's own instruction could not work.
   ipcMain.handle('agent:connection', () => {
@@ -457,12 +467,12 @@ function setupIPC(): void {
 // The body of Axiom's architecture-mapping workflow. Kept beside the installer
 // so the workflow a user invokes and the instructions Axiom means to give are
 // the same text, rather than two copies that drift.
-const NAME_ARCHITECTURE_COMMAND = `# Axiom — map this codebase's architecture
+const NAME_ARCHITECTURE_COMMAND = `# Axiom - map this codebase's architecture
 
 Map this codebase's architecture for its owner, who is watching a spatial map
 of it in Axiom. Produce a TREE OF SEMANTIC SYSTEMS.
 
-**What a system is.** A responsibility — something the codebase does. Name it
+**What a system is.** A responsibility - something the codebase does. Name it
 the way an engineer would say it aloud explaining the project to a new
 colleague.
 
@@ -472,19 +482,19 @@ serve the same responsibility, and one directory often holds several distinct
 systems.
 
 **Nesting is the point.** Every system may contain sub-systems, and those may
-contain more. Go as deep as the code justifies — a large area earns four or
+contain more. Go as deep as the code justifies - a large area earns four or
 five levels, a small utility earns none. If a system holds more than about ten
 files, ask whether it is really one thing or several. There may be hundreds of
 systems in the tree; what must stay small is how many appear at any one level.
 
-**Shape.** Around a dozen systems at the top — the parts you would list if
+**Shape.** Around a dozen systems at the top - the parts you would list if
 asked what this application is made of. For each: a name of two to four words,
 one sentence saying what it is responsible for, and for leaf systems the files
 that belong to it.
 
 **How to work.** Start from the file tree only to orient yourself. Then READ.
 Open entry points, the largest files, anything whose name suggests it
-coordinates others. Do not infer from filenames — a file called utils.ts may be
+coordinates others. Do not infer from filenames - a file called utils.ts may be
 the core of a system. Do not begin from the systems already on the map: those
 were named automatically from word frequency and describe nothing.
 

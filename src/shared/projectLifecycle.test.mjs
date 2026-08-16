@@ -4,9 +4,17 @@ import test from 'node:test'
 import {
   completeSourceBoundaries,
   mergePersistedProjectConfig,
+  projectUsesBlankSetup,
   resolveProjectSourceBoundaries,
   sourceBoundariesAreComplete,
 } from './projectLifecycle.ts'
+
+test('blank setup requires both the New Project button and an empty folder', () => {
+  assert.equal(projectUsesBlankSetup({ creationSource: 'new-project', rootIsEmpty: true }), true)
+  assert.equal(projectUsesBlankSetup({ creationSource: 'new-project', rootIsEmpty: false }), false)
+  assert.equal(projectUsesBlankSetup({ creationSource: 'open-codebase', rootIsEmpty: true }), false)
+  assert.equal(projectUsesBlankSetup({ rootIsEmpty: true }), false)
+})
 
 function project(overrides = {}) {
   return {

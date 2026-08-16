@@ -4,7 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { createProjectId, findProjectByRoot, removeProjectData } from './projectRegistry.ts'
+import {
+  createProjectId,
+  findProjectByRoot,
+  refreshProjectDiskState,
+  removeProjectData,
+} from './projectRegistry.ts'
 
 test('an existing recent path keeps its project lifetime but a removed path gets a new id', () => {
   const rootPath = path.join(os.tmpdir(), 'axiom-project-lifetime')
@@ -12,6 +17,23 @@ test('an existing recent path keeps its project lifetime but a removed path gets
   assert.equal(findProjectByRoot([existing], rootPath)?.id, 'old-id')
   assert.notEqual(createProjectId(), createProjectId())
   assert.notEqual(createProjectId(), existing.id)
+})
+
+test('project disk state follows the current folder contents without losing its launcher origin', () => {
+  const rootPath = fs.mkdtempSync(path.join(os.tmpdir(), 'axiom-project-state-'))
+  const project = {
+    id: 'workspace-1',
+    name: 'Blank project',
+    rootPath,
+    creationSource: 'new-project',
+  }
+  try {
+    assert.deepEqual(refreshProjectDiskState(project), { ...project, rootIsEmpty: true })
+    fs.writeFileSync(path.join(rootPath, 'main.ts'), 'export {}')
+    assert.deepEqual(refreshProjectDiskState(project), { ...project, rootIsEmpty: false })
+  } finally {
+    fs.rmSync(rootPath, { recursive: true, force: true })
+  }
 })
 
 test('project removal verifies data deletion and clears the active MCP pointer', async () => {

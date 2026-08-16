@@ -24,9 +24,9 @@ interface CommandDeckStatus {
 }
 
 const WORKBENCH_CAPABILITIES = [
-  { index: '01', title: 'Live source model', detail: 'The map follows the repository as agents rewrite it.' },
-  { index: '02', title: 'Semantic zoom', detail: 'Move from systems to symbols without changing tools.' },
-  { index: '03', title: 'Draw → dispatch → build', detail: 'Design what should exist; watch the agent fill it in.' },
+  { index: '01', title: 'Living code topology', detail: 'Automatically maps system boundaries, imports, and call graphs as code changes.' },
+  { index: '02', title: 'Visual agent dispatch', detail: 'Sketch new components on canvas; connected MCP agents turn your design into code.' },
+  { index: '03', title: 'Semantic zoom', detail: 'Glide seamlessly from high-level architecture down to files, symbols, and live source.' },
 ] as const
 
 // Mirror of the folder-name sanitiser in main.ts, for the live path preview.
@@ -40,6 +40,7 @@ function safeFolderName(name: string): string {
 export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: HomeScreenProps) {
   const [recentProjects, setRecentProjects] = useState<ProjectConfig[]>([])
   const [deckStatus, setDeckStatus] = useState<Record<string, CommandDeckStatus>>({})
+  const [projectToDelete, setProjectToDelete] = useState<ProjectConfig | null>(null)
   const [removingProjectId, setRemovingProjectId] = useState<string | null>(null)
   const [removeError, setRemoveError] = useState<string | null>(null)
 
@@ -79,17 +80,23 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
     return () => { active = false }
   }, [])
 
-  const removeProject = async (projectId: string) => {
-    if (!window.axiom) return
-    setRemovingProjectId(projectId)
+  const confirmDelete = async () => {
+    if (!projectToDelete) return
+    if (!window.axiom) {
+      setRecentProjects(previous => previous.filter(project => project.id !== projectToDelete.id))
+      setProjectToDelete(null)
+      return
+    }
+    setRemovingProjectId(projectToDelete.id)
     setRemoveError(null)
     try {
-      await window.axiom.removeProject(projectId)
+      await window.axiom.removeProject(projectToDelete.id)
       // Deleting is deleting. The database goes with the project; so does every
       // local hint keyed to it, or reopening the same folder later inherits
       // "you already reviewed this" from a workspace that no longer exists.
-      clearProjectLocalState(projectId)
-      setRecentProjects(previous => previous.filter(project => project.id !== projectId))
+      clearProjectLocalState(projectToDelete.id)
+      setRecentProjects(previous => previous.filter(project => project.id !== projectToDelete.id))
+      setProjectToDelete(null)
     } catch (error) {
       setRemoveError(error instanceof Error
         ? error.message
@@ -146,16 +153,17 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
 
       <div className="axiom-launcher__body">
         <section className="axiom-launcher__introduction" aria-labelledby="axiom-launcher-title">
-          <div className="axiom-launcher__eyebrow">SOFTWARE ARCHITECTURE / WORKBENCH</div>
+          <div className="axiom-launcher__eyebrow">SPATIAL ARCHITECTURE WORKBENCH</div>
           <AxiomMark />
           <h1 id="axiom-launcher-title">Axiom</h1>
           <p className="axiom-launcher__statement">
-            Map the system you have.<br />
-            Build the system you intend.
+            See your entire codebase.<br />
+            Steer what your agents build.
           </p>
           <p className="axiom-launcher__description">
-            A living architecture environment wired to your source. Start a fresh model or open an existing
-            codebase — then watch the Floor stay true as you and your agents build.
+            A live architecture canvas wired directly to your repository and AI coding agents.
+            Explore real system topology, sketch new features as visual blueprints, and review
+            agent changes spatially instead of reading 40-file diffs.
           </p>
 
           <ol className="axiom-launcher__capabilities">
@@ -176,7 +184,7 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
             <span>START</span>
             <div>
               <h2 id="axiom-workspace-title">Command Deck</h2>
-              <p>See what changed, what agents are doing, and what intent is still open — then enter the map.</p>
+              <p>See what changed, what agents are doing, and what intent is still open — then enter the canvas.</p>
             </div>
           </div>
 
@@ -185,7 +193,7 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
               <span className="axiom-launcher__fork-glyph" aria-hidden="true">＋</span>
               <span className="axiom-launcher__fork-copy">
                 <strong>New Project</strong>
-                <small>Create an empty workspace and build it live with an agent.</small>
+                <small>Create an empty workspace and sketch architecture for agents to build.</small>
               </span>
               <span className="axiom-launcher__fork-arrow" aria-hidden="true">→</span>
             </button>
@@ -194,7 +202,7 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
               <span className="axiom-launcher__fork-glyph" aria-hidden="true">▤</span>
               <span className="axiom-launcher__fork-copy">
                 <strong>Open Codebase</strong>
-                <small>Index an existing repository into a living architecture map.</small>
+                <small>Index an existing repository into a living, agent-connected architecture map.</small>
               </span>
               <span className="axiom-launcher__fork-arrow" aria-hidden="true">→</span>
             </button>
@@ -227,7 +235,10 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
                     </button>
                     <button
                       className="axiom-launcher__recent-remove"
-                      onClick={() => void removeProject(project.id)}
+                      onClick={() => {
+                        setRemoveError(null)
+                        setProjectToDelete(project)
+                      }}
                       disabled={removingProjectId !== null}
                       aria-label={`Remove ${project.name} from recent projects`}
                       title="Remove from recents and delete the cached index"
@@ -246,6 +257,66 @@ export function HomeScreen({ onOpenProject, onOpenDialog, onCreateProject }: Hom
           </footer>
         </section>
       </div>
+
+      {projectToDelete && (
+        <div
+          className="axiom-create__scrim"
+          onClick={() => removingProjectId === null && setProjectToDelete(null)}
+        >
+          <div
+            className="axiom-remove-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="axiom-remove-title"
+            onClick={event => event.stopPropagation()}
+            onKeyDown={event => {
+              if (event.key === 'Escape' && removingProjectId === null) {
+                setProjectToDelete(null)
+              } else if (event.key === 'Enter' && removingProjectId === null) {
+                void confirmDelete()
+              }
+            }}
+            tabIndex={-1}
+          >
+            <div className="axiom-remove-modal__head">
+              <span className="axiom-remove-modal__kicker">REMOVE FROM AXIOM</span>
+              <h3 id="axiom-remove-title">Remove &ldquo;{projectToDelete.name}&rdquo;?</h3>
+              <button
+                className="axiom-remove-modal__close"
+                onClick={() => setProjectToDelete(null)}
+                aria-label="Cancel"
+                disabled={removingProjectId !== null}
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="axiom-remove-modal__body">
+              This will remove the project and its cached index from Axiom. Your source files on disk will not be affected.
+            </p>
+
+            {removeError && <div className="axiom-create__error" role="alert">{removeError}</div>}
+
+            <div className="axiom-remove-modal__actions">
+              <button
+                className="axiom-remove-modal__cancel"
+                onClick={() => setProjectToDelete(null)}
+                disabled={removingProjectId !== null}
+              >
+                Cancel
+              </button>
+              <button
+                className="axiom-remove-modal__danger"
+                onClick={() => void confirmDelete()}
+                disabled={removingProjectId !== null}
+                autoFocus
+              >
+                {removingProjectId !== null ? 'Removing…' : 'Remove Project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {creating && (
         <div className="axiom-create__scrim" onClick={() => !createBusy && setCreating(false)}>

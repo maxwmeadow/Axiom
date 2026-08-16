@@ -8,6 +8,13 @@ export function sourceBoundariesAreComplete(
     project.sourceBoundariesReviewedAt > 0
 }
 
+/** Only a still-empty folder created through New Project uses the blank flow. */
+export function projectUsesBlankSetup(
+  project: Pick<ProjectConfig, 'creationSource' | 'rootIsEmpty'>,
+): boolean {
+  return project.creationSource === 'new-project' && project.rootIsEmpty === true
+}
+
 export function completeSourceBoundaries(
   project: ProjectConfig,
   ignoredPaths: string[],

@@ -4,7 +4,7 @@ export type Layer = 'INFRA' | 'SERVICE' | 'MODULE' | 'FILE' | 'SYMBOL'
 
 export const LAYER_ORDER: Layer[] = ['INFRA', 'SERVICE', 'MODULE', 'FILE', 'SYMBOL']
 
-/** Legacy zoom thresholds kept for minimap coloring — canvas now uses semanticDepth */
+/** Legacy zoom thresholds kept for minimap coloring - canvas now uses semanticDepth */
 export const LAYER_ZOOM_THRESHOLDS: Record<Layer, [number, number]> = {
   INFRA:   [0,    0.15],
   SERVICE: [0.15, 0.4],
@@ -168,6 +168,10 @@ export interface ProjectConfig {
   id: string
   name: string
   rootPath: string
+  /** Which launcher action established this project record. */
+  creationSource?: 'new-project' | 'open-codebase'
+  /** Refreshed from disk when the project is created, opened, or listed. */
+  rootIsEmpty?: boolean
   ignoredPaths: string[]
   // Explicitly distinguishes "reviewed and include everything" (an empty
   // ignoredPaths array) from "the source-boundary decision has never run".
@@ -267,7 +271,7 @@ export interface DbDependency {
   evidence?: string | null
 }
 
-/** Infra category — the semantic role that defines edge kinds and silhouette. */
+/** Infra category - the semantic role that defines edge kinds and silhouette. */
 export type InfraCategory =
   | 'database' | 'cache' | 'queue' | 'storage' | 'search' | 'llm'
   | 'api' | 'auth' | 'platform' | 'cdn' | 'observability' | 'email'
@@ -310,7 +314,7 @@ export interface FloorLayout {
   /**
    * How much this frame compresses its CONTENTS, independent of its own size.
    * A container that runs out of room shrinks its interior by moving this
-   * number alone — its own geometry, chrome, and presentation scale are not
+   * number alone - its own geometry, chrome, and presentation scale are not
    * expressed in terms of it, so they cannot react to interior compression.
    *
    * Required rather than optional on purpose: a layout write is a full row
@@ -440,7 +444,7 @@ export interface DeltaCounts {
 /**
  * A claim is the unit of architectural review: the smallest statement that
  * changes your understanding of the architecture. Call sites, imports and
- * individual files are EVIDENCE nested under the claim they support — twenty
+ * individual files are EVIDENCE nested under the claim they support - twenty
  * files newly importing one module is one claim, never twenty rows.
  */
 export type DeltaClaimKind =
@@ -474,7 +478,7 @@ export interface DeltaClaim {
   createsCycle: boolean
   /** Churn inside one system; hidden until the user asks for it. */
   internal: boolean
-  /** For a boundary claim the boundary IS the claim — frame both systems. */
+  /** For a boundary claim the boundary IS the claim - frame both systems. */
   focusSystemIds?: string[]
   focusFileIds?: string[]
   evidence: DeltaEvidence[]
@@ -487,7 +491,7 @@ export interface DeltaClaim {
 
 /**
  * An agent's own account of what it set out to do. Structural facts are true
- * but thin — "Handlers now depends on Record" says the topology moved without
+ * but thin - "Handlers now depends on Record" says the topology moved without
  * saying why. Narration is the bidirectional half: the agent writes intent
  * into the map rather than leaving the map to infer meaning it cannot know.
  */

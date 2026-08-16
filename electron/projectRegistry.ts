@@ -23,6 +23,22 @@ export function createProjectId(): string {
   return randomUUID()
 }
 
+/**
+ * Refresh the part of project setup state that the filesystem owns. Keeping
+ * this on the persisted project record lets the renderer distinguish a blank
+ * project created by Axiom from a codebase opened through the launcher, while
+ * still switching to the codebase journey as soon as files appear.
+ */
+export function refreshProjectDiskState(config: ProjectConfig): ProjectConfig {
+  let rootIsEmpty = false
+  try {
+    rootIsEmpty = fs.statSync(config.rootPath).isDirectory() && fs.readdirSync(config.rootPath).length === 0
+  } catch {
+    // A missing or unreadable folder is not an empty blank project.
+  }
+  return { ...config, rootIsEmpty }
+}
+
 function validatedProjectDataDir(dataDir: string, projectId: string): string {
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(projectId) || projectId === '.' || projectId === '..') {
     throw new Error('Invalid project id.')
