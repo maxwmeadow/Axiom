@@ -14,9 +14,14 @@ import {
   removeProjectData,
 } from './projectRegistry'
 
-// electron-vite sets VITE_DEV_SERVER_URL in dev/preview mode only
-const IS_DEV = !!process.env.VITE_DEV_SERVER_URL
-const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
+// electron-vite injects ELECTRON_RENDERER_URL in dev. The name matters: this
+// used to read VITE_DEV_SERVER_URL, which is vite-plugin-electron's variable
+// and one electron-vite never sets - so IS_DEV was always false and `npm run
+// dev` silently served the last `npm run build` output from disk instead of
+// the dev server. A stale out/renderer therefore rendered an arbitrarily old
+// UI, and hot reload never worked at all.
+const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL
+const IS_DEV = !!DEV_SERVER_URL
 const IS_E2E = process.env.AXIOM_E2E === '1'
 const IS_E2E_HOME = process.env.AXIOM_E2E_HOME === '1'  // route straight to the launcher for capture
 const CONFIG_DIR = join(os.homedir(), '.axiom')
