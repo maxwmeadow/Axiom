@@ -3,7 +3,7 @@ import type { ProjectConfig } from '../../shared/types'
 import type { AgentHostInfo, AgentInstallResult } from '../../../electron/preload'
 import { AgentMascot } from '../components/AgentMascot'
 import { WorkbenchTitleBar } from '../components/ui/WorkbenchTitleBar'
-import { commandKind, presentAgentHost } from './connectAgentPresentation'
+import { commandKind, presentAgentHost, presentAgentFamily } from './connectAgentPresentation'
 
 const POLL_MS = 2000
 
@@ -24,6 +24,12 @@ interface Props {
   onReview: () => void
   onSkip: () => void
   onBack: () => void
+}
+
+interface AgentFamilyGroup {
+  id: string
+  label: string
+  modalities: AgentHostInfo[]
 }
 
 const BLANK_PROJECT_STEPS: Array<{ id: SetupStep; label: string }> = [
@@ -64,17 +70,12 @@ export function ConnectAgentScreen({
   }, [project.id])
 
   const showHosts = useCallback((found: AgentHostInfo[]) => {
-    const ordered = [...found].sort((left, right) =>
-      Number(right.configured && right.workflowInstalled) - Number(left.configured && left.workflowInstalled) ||
-      Number(right.detected) - Number(left.detected) ||
-      left.label.localeCompare(right.label),
-    )
-    setHosts(ordered)
+    setHosts(found)
     setSelectedHostId(current => {
-      if (current && ordered.some(host => host.id === current)) return current
-      return ordered.find(host => host.configured && host.workflowInstalled)?.id
-        ?? ordered.find(host => host.detected)?.id
-        ?? ordered[0]?.id
+      if (current && found.some(host => host.id === current)) return current
+      return found.find(host => host.configured && host.workflowInstalled)?.id
+        ?? found.find(host => host.detected)?.id
+        ?? found[0]?.id
         ?? null
     })
   }, [])
@@ -90,8 +91,23 @@ export function ConnectAgentScreen({
     if (liveHost) setSelectedHostId(liveHost.id)
   }, [hosts, liveHostIds])
 
-  // A live presence response is the gate. Historical actions and installed
-  // configuration prove earlier activity, not that an agent is listening now.
+  // Group hosts by family
+  const families: AgentFamilyGroup[] = useMemo(() => {
+    const map = new Map<string, AgentFamilyGroup>()
+    for (const host of hosts) {
+      const fid = host.familyId || host.id
+      const flabel = host.familyLabel || host.label
+      const existing = map.get(fid)
+      if (existing) {
+        existing.modalities.push(host)
+      } else {
+        map.set(fid, { id: fid, label: flabel, modalities: [host] })
+      }
+    }
+    return [...map.values()]
+  }, [hosts])
+
+  // A live presence response is the gate.
   useEffect(() => {
     const poll = async () => {
       const workspace = encodeURIComponent(project.id)
@@ -135,22 +151,26 @@ export function ConnectAgentScreen({
   }, [blankProject, phase, project.id, setPhase])
 
   const selectedHost = useMemo(
-    () => hosts.find(host => host.id === selectedHostId) ?? null,
+    () => hosts.find(host => host.id === selectedHostId) ?? hosts[0] ?? null,
     [hosts, selectedHostId],
   )
+
+  const selectedFamily = useMemo(() => {
+    if (!selectedHost) return families[0] ?? null
+    return families.find(f => f.id === selectedHost.familyId) ?? null
+  }, [families, selectedHost])
+
   const mascotState = !blankProject && phase === 'proposed'
     ? 'proposal-ready'
     : hasLivePresence
       ? 'connected'
       : 'sleeping'
+
   const selectedPresentation = selectedHost
     ? presentAgentHost(selectedHost, results[selectedHost.id], liveHostIds.has(selectedHost.id))
     : null
+
   const selectedReady = selectedPresentation?.state === 'installed' || selectedPresentation?.state === 'live'
-  const anyInstalled = hosts.some(host => {
-    const state = presentAgentHost(host, results[host.id], liveHostIds.has(host.id)).state
-    return state === 'installed' || state === 'live'
-  })
 
   const chooseHost = (hostId: string) => {
     userSelectedHost.current = true
@@ -179,10 +199,36 @@ export function ConnectAgentScreen({
     }
   }
 
-  const copyCommand = async () => {
-    if (!selectedHost?.command) return
+  const installFamily = async (family: AgentFamilyGroup) => {
+    setInstalling(family.id)
     try {
-      await navigator.clipboard.writeText(selectedHost.command)
+      const outcome = await window.axiom.installFamily(family.id, project.rootPath)
+      setResults(current => {
+        const next = { ...current }
+        for (const m of family.modalities) {
+          next[m.id] = outcome
+        }
+        return next
+      })
+      if (outcome.ok) showHosts(await window.axiom.listAgentHosts(project.rootPath))
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Could not install family.'
+      setResults(current => {
+        const next = { ...current }
+        for (const m of family.modalities) {
+          next[m.id] = { ok: false, detail, paths: [] }
+        }
+        return next
+      })
+    } finally {
+      setInstalling(null)
+    }
+  }
+
+  const copyText = async (text?: string | null) => {
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
       setCopied(true)
       if (copiedTimer.current) clearTimeout(copiedTimer.current)
       copiedTimer.current = setTimeout(() => setCopied(false), 2200)
@@ -192,7 +238,12 @@ export function ConnectAgentScreen({
   }
 
   const stepComplete = (step: SetupStep) => {
-    if (step === 1) return anyInstalled
+    if (step === 1) {
+      return hosts.some(host => {
+        const state = presentAgentHost(host, results[host.id], liveHostIds.has(host.id)).state
+        return state === 'installed' || state === 'live'
+      })
+    }
     if (step === 2) return blankProject ? hasLivePresence : phase !== 'waiting'
     if (step === 3) return phase === 'proposed'
     return false
@@ -253,56 +304,139 @@ export function ConnectAgentScreen({
                 <h2>Add Axiom to your agent</h2>
                 <p className="axiom-connect__step-copy">
                   {blankProject
-                    ? 'Choose the agent you use. Axiom adds its MCP connection and the correct reusable workflow.'
-                    : 'Choose the agent you use. Axiom adds its MCP connection and the correct reusable mapping workflow.'}
+                    ? 'Choose the agent and harness you use. Axiom adds its MCP connection and reusable workflows.'
+                    : 'Choose the agent and harness you use. Axiom adds its MCP connection and reusable mapping workflows.'}
                 </p>
 
-                <ul className="axiom-connect__agents" aria-label="Supported agents">
-                  {hosts.map(candidate => {
-                    const presentation = presentAgentHost(
-                      candidate,
-                      results[candidate.id],
-                      liveHostIds.has(candidate.id),
+                <ul className="axiom-connect__families" aria-label="Supported agents and modalities">
+                  {families.map(family => {
+                    const familyPres = presentAgentFamily(
+                      family.id,
+                      family.label,
+                      family.modalities,
+                      results,
+                      liveHostIds,
                     )
-                    const isSelected = selectedHostId === candidate.id
-                    const result = results[candidate.id]
+                    const isFamilyActive = selectedFamily?.id === family.id
+                    const activeModalityInFamily = isFamilyActive
+                      ? selectedHost
+                      : family.modalities[0]
+
+                    const modPresentation = activeModalityInFamily
+                      ? presentAgentHost(
+                          activeModalityInFamily,
+                          results[activeModalityInFamily.id],
+                          liveHostIds.has(activeModalityInFamily.id),
+                        )
+                      : null
+
+                    const activeResult = activeModalityInFamily ? results[activeModalityInFamily.id] : undefined
+
                     return (
-                      <li key={candidate.id} data-selected={isSelected} data-state={presentation.state}>
-                        <label className="axiom-connect__agent-choice">
-                          <input
-                            type="radio"
-                            name="axiom-agent"
-                            value={candidate.id}
-                            checked={isSelected}
-                            onChange={() => chooseHost(candidate.id)}
-                          />
-                          <span
-                            className="axiom-connect__host-signal"
-                            data-state={presentation.state}
-                            data-tooltip={presentation.detail}
-                            tabIndex={0}
-                            aria-label={`${candidate.label} status: ${presentation.detail}`}
-                          />
-                          <strong>{candidate.label}</strong>
-                        </label>
-                        {presentation.action !== 'none' && (
-                          <button
-                            type="button"
-                            className="axiom-connect__install"
-                            disabled={installing === candidate.id}
-                            onClick={() => void installHost(candidate)}
-                          >
-                            {installing === candidate.id
-                              ? 'Working…'
-                              : presentation.action === 'install'
-                                ? 'Install'
-                                : presentation.action === 'repair'
-                                  ? 'Repair'
-                                  : 'Reinstall'}
-                          </button>
+                      <li
+                        key={family.id}
+                        className="axiom-connect__family-card"
+                        data-selected={isFamilyActive}
+                        data-state={familyPres.state}
+                      >
+                        <div className="axiom-connect__family-header">
+                          <label className="axiom-connect__agent-choice">
+                            <input
+                              type="radio"
+                              name="axiom-agent-family"
+                              value={family.id}
+                              checked={isFamilyActive}
+                              onChange={() => {
+                                const target = family.modalities.find(m => m.detected) ?? family.modalities[0]
+                                chooseHost(target.id)
+                              }}
+                            />
+                            {/* Parent Intelligent Light Signal */}
+                            <span
+                              className="axiom-connect__host-signal"
+                              data-state={familyPres.state}
+                              data-tooltip={familyPres.detail}
+                              tabIndex={0}
+                              aria-label={`${family.label} status: ${familyPres.detail}`}
+                            />
+                            <strong>{family.label}</strong>
+                          </label>
+
+                          <div className="axiom-connect__family-actions">
+                            {familyPres.canBatchInstall && familyPres.batchAction !== 'none' && (
+                              <button
+                                type="button"
+                                className="axiom-connect__install axiom-connect__install--batch"
+                                disabled={installing === family.id}
+                                onClick={() => void installFamily(family)}
+                              >
+                                {installing === family.id
+                                  ? 'Working…'
+                                  : familyPres.batchAction === 'install'
+                                    ? 'Install all detected'
+                                    : 'Reinstall all'}
+                              </button>
+                            )}
+
+                            {modPresentation && modPresentation.action !== 'none' && (
+                              <button
+                                type="button"
+                                className="axiom-connect__install"
+                                disabled={installing === activeModalityInFamily?.id}
+                                onClick={() => {
+                                  if (activeModalityInFamily) void installHost(activeModalityInFamily)
+                                }}
+                              >
+                                {installing === activeModalityInFamily?.id
+                                  ? 'Working…'
+                                  : modPresentation.action === 'install'
+                                    ? `Install`
+                                    : modPresentation.action === 'repair'
+                                      ? 'Repair'
+                                      : 'Reinstall'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Modality Tabs */}
+                        {family.modalities.length > 1 && (
+                          <div className="axiom-connect__modality-tabs" role="tablist" aria-label={`${family.label} modalities`}>
+                            {family.modalities.map(modality => {
+                              const isSelected = selectedHostId === modality.id
+                              const mPres = presentAgentHost(
+                                modality,
+                                results[modality.id],
+                                liveHostIds.has(modality.id),
+                              )
+                              return (
+                                <button
+                                  key={modality.id}
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={isSelected}
+                                  className="axiom-connect__modality-tab"
+                                  data-selected={isSelected}
+                                  data-state={mPres.state}
+                                  onClick={() => chooseHost(modality.id)}
+                                >
+                                  {/* Modality child status dot */}
+                                  <span
+                                    className="axiom-connect__modality-dot"
+                                    data-state={mPres.state}
+                                    title={mPres.detail}
+                                  />
+                                  <span>{modality.modalityLabel || modality.label}</span>
+                                </button>
+                              )
+                            })}
+                          </div>
                         )}
-                        {result && isSelected && (
-                          <p className="axiom-connect__install-result" data-ok={result.ok}>{result.detail}</p>
+
+                        {activeResult && isFamilyActive && (
+                          <p className="axiom-connect__install-result" data-ok={activeResult.ok}>
+                            {activeResult.detail}
+                          </p>
                         )}
                       </li>
                     )
@@ -310,7 +444,7 @@ export function ConnectAgentScreen({
                 </ul>
 
                 <StepActions
-                  nextLabel={selectedReady ? `Continue with ${selectedHost?.label}` : 'Continue'}
+                  nextLabel={selectedReady ? `Continue with ${selectedHost?.modalityLabel || selectedHost?.label}` : 'Continue'}
                   onNext={() => setActiveStep(2)}
                   nextDisabled={!selectedReady}
                 />
@@ -320,11 +454,11 @@ export function ConnectAgentScreen({
             {activeStep === 2 && blankProject && (
               <div className="axiom-connect__step-panel">
                 <p className="axiom-connect__step-kicker">Step 2 of 2</p>
-                <h2>Connect {selectedHost?.label ?? 'your agent'}</h2>
+                <h2>Connect {selectedHost?.modalityLabel || selectedHost?.label || 'your agent'}</h2>
                 {hasLivePresence ? (
                   <>
                     <p className="axiom-connect__step-copy">
-                      {selectedHost?.label ?? 'Your agent'} is connected and Axiom is ready.
+                      {selectedHost?.modalityLabel || selectedHost?.label} is connected and Axiom is ready.
                     </p>
                     <div className="axiom-connect__waiting-line" data-state="connected" aria-live="polite">
                       <span aria-hidden="true" /> Live connection confirmed
@@ -333,11 +467,11 @@ export function ConnectAgentScreen({
                 ) : selectedReady ? (
                   <>
                     <p className="axiom-connect__step-copy">
-                      Restart it and open a new session. Agents load MCP connections and workflows at startup.
+                      {selectedHost?.restartDetail || 'Restart it and open a new session. Agents load MCP connections at startup.'}
                     </p>
                     <div className="axiom-connect__instruction-card">
                       <span aria-hidden="true">↻</span>
-                      <p><strong>Start fresh.</strong> Keep Axiom open while the new agent session connects.</p>
+                      <p><strong>{selectedHost?.restartAction || 'Start fresh.'}</strong> Keep Axiom open while the agent connects.</p>
                     </div>
                     <div className="axiom-connect__waiting-line" aria-live="polite">
                       <span aria-hidden="true" /> Waiting for a live agent
@@ -361,15 +495,33 @@ export function ConnectAgentScreen({
             {activeStep === 2 && !blankProject && (
               <div className="axiom-connect__step-panel">
                 <p className="axiom-connect__step-kicker">Step 2 of 4</p>
-                <h2>Restart {selectedHost?.label ?? 'your agent'}</h2>
+                <h2>{selectedHost?.restartAction || `Restart ${selectedHost?.modalityLabel || selectedHost?.label}`}</h2>
+
+                {/* Modality switcher if multiple are in this family */}
+                {selectedFamily && selectedFamily.modalities.length > 1 && (
+                  <div className="axiom-connect__step-tabs" role="tablist">
+                    {selectedFamily.modalities.map(m => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className="axiom-connect__step-tab"
+                        data-selected={selectedHostId === m.id}
+                        onClick={() => chooseHost(m.id)}
+                      >
+                        {m.modalityLabel || m.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {selectedReady ? (
                   <>
                     <p className="axiom-connect__step-copy">
-                      Close its existing session and open a new one. Agents load MCP connections and workflows at startup.
+                      {selectedHost?.restartDetail || 'Close its existing session and open a new one. Agents load MCP connections and workflows at startup.'}
                     </p>
                     <div className="axiom-connect__instruction-card">
                       <span aria-hidden="true">↻</span>
-                      <p><strong>Start fresh.</strong> Reopening only the chat is not enough in every harness; restart the agent application or CLI session.</p>
+                      <p><strong>{selectedHost?.restartAction || 'Restart'}:</strong> {selectedHost?.restartDetail}</p>
                     </div>
                   </>
                 ) : (
@@ -389,15 +541,48 @@ export function ConnectAgentScreen({
             {activeStep === 3 && !blankProject && (
               <div className="axiom-connect__step-panel">
                 <p className="axiom-connect__step-kicker">Step 3 of 4</p>
-                <h2>Ask {selectedHost?.label ?? 'your agent'} to map this project</h2>
-                {selectedHost?.command ? (
+                <h2>Ask {selectedHost?.modalityLabel || selectedHost?.label} to map this project</h2>
+
+                {/* Modality switcher if multiple are in this family */}
+                {selectedFamily && selectedFamily.modalities.length > 1 && (
+                  <div className="axiom-connect__step-tabs" role="tablist">
+                    {selectedFamily.modalities.map(m => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className="axiom-connect__step-tab"
+                        data-selected={selectedHostId === m.id}
+                        onClick={() => chooseHost(m.id)}
+                      >
+                        {m.modalityLabel || m.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {selectedHost?.triggerKind === 'chat prompt' ? (
                   <>
                     <p className="axiom-connect__step-copy">
-                      {selectedReady ? 'In the new session, run' : 'Once Axiom is installed, run'} this {commandKind(selectedHost.command)} exactly as shown.
+                      In {selectedHost.modalityLabel || selectedHost.label}, paste this instruction into the chat:
                     </p>
-                    <div className="axiom-connect__command" data-kind={commandKind(selectedHost.command)}>
+                    <div className="axiom-connect__command" data-kind="chat prompt">
+                      <span>{selectedHost.promptText || selectedHost.command}</span>
+                      <button type="button" onClick={() => void copyText(selectedHost.promptText || selectedHost.command)}>
+                        {copied ? 'Copied ✓' : 'Copy prompt'}
+                      </button>
+                    </div>
+                    <p className="axiom-connect__command-note">
+                      This prompts {selectedHost.modalityLabel || selectedHost.label} to use Axiom&apos;s tools to map the codebase.
+                    </p>
+                  </>
+                ) : selectedHost?.command ? (
+                  <>
+                    <p className="axiom-connect__step-copy">
+                      {selectedReady ? 'In the new session, run' : 'Once Axiom is installed, run'} this {commandKind(selectedHost.command, selectedHost.triggerKind)} exactly as shown.
+                    </p>
+                    <div className="axiom-connect__command" data-kind={commandKind(selectedHost.command, selectedHost.triggerKind)}>
                       <span>{selectedHost.command}</span>
-                      <button type="button" onClick={() => void copyCommand()}>{copied ? 'Copied ✓' : 'Copy'}</button>
+                      <button type="button" onClick={() => void copyText(selectedHost.command)}>{copied ? 'Copied ✓' : 'Copy'}</button>
                     </div>
                     <p className="axiom-connect__command-note">
                       The workflow carries Axiom’s mapping brief. You do not need to paste any extra prompt.
@@ -405,7 +590,7 @@ export function ConnectAgentScreen({
                   </>
                 ) : (
                   <p className="axiom-connect__step-copy">
-                    {selectedHost?.label ?? 'This agent'} is not ready yet. Return to step 1 and install or repair Axiom first.
+                    {selectedHost?.modalityLabel || selectedHost?.label} is not ready yet. Return to step 1 and install or repair Axiom first.
                   </p>
                 )}
                 <StepActions
@@ -425,7 +610,7 @@ export function ConnectAgentScreen({
                   {phase === 'proposed'
                     ? 'Your agent finished mapping the codebase. Review its systems, nesting, and file placement before anything becomes canonical.'
                     : hasLivePresence
-                      ? `${selectedHost?.label ?? 'Your agent'} is connected and working. Axiom will light this step when the proposal arrives.`
+                      ? `${selectedHost?.modalityLabel || selectedHost?.label} is connected and working. Axiom will light this step when the proposal arrives.`
                       : 'Keep Axiom open while the agent maps the project. You can return to any earlier step without losing progress.'}
                 </p>
                 {phase === 'proposed' ? (
@@ -441,7 +626,7 @@ export function ConnectAgentScreen({
           </section>
 
           <aside className="axiom-connect__mascot">
-            <AgentMascot state={mascotState} hostLabel={selectedHost?.label ?? 'agent'} />
+            <AgentMascot state={mascotState} hostLabel={selectedHost?.modalityLabel || selectedHost?.label || 'agent'} />
           </aside>
         </div>
 

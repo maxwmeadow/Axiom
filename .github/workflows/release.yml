@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# Produces the installable artifact for each platform. macOS is split across
+# two runners on purpose: macos-latest is arm64, macos-13 is the last x64
+# image, and an Intel build cannot be produced from an Apple Silicon host once
+# native modules are involved.
+jobs:
+  package:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  label: linux-x64 }
+          - { os: macos-latest,   label: macos-arm64 }
+          - { os: macos-13,       label: macos-x64 }
+          - { os: windows-latest, label: windows-x64 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: archd-go/go.mod
+          cache-dependency-path: archd-go/go.sum
+
+      - name: Put mingw64 on PATH
+        if: runner.os == 'Windows'
+        run: echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+
+      - run: npm ci
+
+      # Runs prepackage -> build:archd, so the daemon copied in via
+      # extraResources is always freshly built for this host.
+      - name: Package
+        run: npm run package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axiom-${{ matrix.label }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+          if-no-files-found: error

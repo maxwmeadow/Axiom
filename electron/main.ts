@@ -5,7 +5,8 @@ import os from 'os'
 import fs from 'fs'
 import type { ProjectConfig, WsMessage } from '../src/shared/types'
 import { completeSourceBoundaries, mergePersistedProjectConfig } from '../src/shared/projectLifecycle'
-import { buildHosts, detectHosts, inspectHostConfiguration } from './agentInstallers'
+import { buildHosts, detectHosts, inspectHostConfiguration, installFamily } from './agentInstallers'
+import { resolveNodeCommand } from './platformPaths'
 import {
   createProjectId,
   findProjectByRoot,
@@ -386,7 +387,7 @@ function setupIPC(): void {
   ipcMain.handle('app:info', () => {
     const isPackaged = app.isPackaged
     const mcpPath = isPackaged
-      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.js')
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
       : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
     return {
       version: app.getVersion(),
@@ -407,32 +408,60 @@ function setupIPC(): void {
       return {
         id: host.id,
         label: host.label,
+        familyId: host.familyId,
+        familyLabel: host.familyLabel,
+        modality: host.modality,
+        modalityLabel: host.modalityLabel,
         detected: present[host.id] === true,
         configPath: host.configPath(),
         command: host.command ?? null,
+        triggerKind: host.triggerKind,
+        promptText: host.promptText,
+        restartAction: host.restartAction,
+        restartDetail: host.restartDetail,
         ...configuration,
       }
     })
   })
 
-  // Install Axiom into one agent: its MCP server entry and reusable workflow
-  // where the host supports one. An action, not an instruction.
+  // Install Axiom into one agent modality.
   ipcMain.handle('agent:install', (_event, hostId: string, projectRoot?: string) => {
     const host = buildHosts().find(candidate => candidate.id === hostId)
     if (!host) return { ok: false, detail: `Unknown agent "${hostId}".`, paths: [] }
     const mcpPath = app.isPackaged
-      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.js')
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
       : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
     if (!fs.existsSync(mcpPath)) {
       return { ok: false, detail: `This Axiom install has no MCP server at ${mcpPath}.`, paths: [] }
     }
+    const nodeCmd = resolveNodeCommand()
     try {
-      return host.install('node', [mcpPath], NAME_ARCHITECTURE_COMMAND, projectRoot)
+      return host.install(nodeCmd, [mcpPath], NAME_ARCHITECTURE_COMMAND, projectRoot)
     } catch (error) {
       return {
         ok: false,
         detail: error instanceof Error ? error.message : String(error),
         paths: [host.configPath()],
+      }
+    }
+  })
+
+  // Install Axiom into all detected modalities for an agent family in one action.
+  ipcMain.handle('agent:install-family', (_event, familyId: string, projectRoot?: string) => {
+    const mcpPath = app.isPackaged
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
+      : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
+    if (!fs.existsSync(mcpPath)) {
+      return { ok: false, detail: `This Axiom install has no MCP server at ${mcpPath}.`, paths: [] }
+    }
+    const nodeCmd = resolveNodeCommand()
+    try {
+      return installFamily(familyId, nodeCmd, [mcpPath], NAME_ARCHITECTURE_COMMAND, projectRoot)
+    } catch (error) {
+      return {
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+        paths: [],
       }
     }
   })
@@ -443,7 +472,7 @@ function setupIPC(): void {
   // never did, so following the app's own instruction could not work.
   ipcMain.handle('agent:connection', () => {
     const mcpPath = app.isPackaged
-      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.js')
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
       : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
     const args = [mcpPath]
     return {

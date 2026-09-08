@@ -2,10 +2,14 @@
 // an agent proposes over MCP stdio, a human decides over the API, and the live
 // map is checked for what should and should not be in it.
 import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 const API = 'http://127.0.0.1:7743'
-const WS = 'efddf5c5f623397c'
-const ROOT = 'C:\\Users\\maxst\\VSCodeProjects\\axiom-loop-test'
+const WS = process.env.LOOP_WS ?? 'efddf5c5f623397c'
+// The scratch workspace this runs against is machine-specific; override with
+// LOOP_ROOT rather than editing the file.
+const ROOT = process.env.LOOP_ROOT ?? join(homedir(), 'axiom-loop-test')
 
 const pass = []
 const fail = []

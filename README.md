@@ -28,12 +28,14 @@ Humans and agents work against the same model: an agent can propose systems and 
 
 The currently supported installers are:
 
-- Claude Code
+- Claude (Claude Code CLI and Claude Desktop)
+- GitHub Copilot (VS Code extension and Copilot CLI)
 - Codex
 - Cursor
-- GitHub Copilot
 - Windsurf
 - Antigravity
+- JetBrains IDEs (IntelliJ, WebStorm, PyCharm, and siblings)
+- Zed
 
 The mapping command is harness-dependent. For example, Codex uses `$axiom-map`, Claude Code uses `/axiom-map`, and Antigravity uses its installed `axiom-map` skill. The setup screen always shows the correct instruction for the selected harness.
 
@@ -72,43 +74,47 @@ More detailed references are available in [ARCHITECTURE.md](ARCHITECTURE.md), [C
 
 ### Prerequisites
 
-The current repository development scripts are Windows-first and expect:
+Every platform needs:
 
-- Node.js and npm
-- Git
-- MSYS2 installed at `C:\msys64`
-- The MSYS2 MinGW64 Go 1.22 toolchain
-- The MSYS2 MinGW64 GCC toolchain for CGO and SQLite
+- Node.js - the version in [`.nvmrc`](.nvmrc). A version manager (`fnm`, `nvm`) will pick it up automatically.
+- Go 1.22 or newer.
+- Git.
+- A C toolchain. `archd` uses CGO (`mattn/go-sqlite3`, `go-tree-sitter`) and the
+  renderer depends on `better-sqlite3`, so both halves compile native code.
 
-Electron packaging targets also exist for macOS and Linux, but the checked-in archd build script currently assumes the Windows/MSYS2 environment above.
+Then, per platform:
+
+- **macOS** - Xcode Command Line Tools (`xcode-select --install`) supply the
+  clang that CGO and node-gyp need. Go via `brew install go`.
+- **Linux** - `build-essential` (or your distribution's equivalent) and Go.
+- **Windows** - MSYS2 installed at `C:\msys64`, providing the MinGW64 Go 1.22
+  and GCC toolchains. This one is not interchangeable: TDM-GCC produces broken
+  binaries on Win11 26200. If MSYS2 lives elsewhere, point `AXIOM_MSYS2_BASH`
+  at its `usr/bin/bash.exe`.
 
 ### Install and run
 
-```powershell
+```bash
 git clone https://github.com/maxwmeadow/Axiom.git
 cd Axiom
 npm install
 npm run dev
 ```
 
-`npm run dev` runs `predev`, which builds `archd-go/archd.exe` before starting Electron through electron-vite.
+`npm run dev` runs `predev`, which builds the `archd` daemon before starting
+Electron through electron-vite. The daemon is named `archd.exe` on Windows and
+`archd` elsewhere; the build scripts and the Electron main process both follow
+the host, so the same commands work everywhere.
 
 To build the daemon directly:
 
-```powershell
+```bash
 npm run build:archd
-```
-
-To create a production renderer build or packaged application:
-
-```powershell
-npm run build
-npm run package
 ```
 
 ## Tests
 
-```powershell
+```bash
 # Renderer, MCP unit, and Electron unit tests
 npm run test:renderer
 
@@ -122,16 +128,32 @@ npm run test:mcp
 npm run test:e2e
 ```
 
-Go commands can also be run directly from `archd-go` when the required Go and CGO toolchain is already configured:
+Go commands can also be run directly from `archd-go` when the required Go and
+CGO toolchain is already configured:
 
-```powershell
+```bash
 cd archd-go
 go test ./...
 ```
 
+## Packaging
+
+```bash
+npm run package
+```
+
+Artifacts land in `release/`. `prepackage` rebuilds the daemon first, and
+electron-builder copies it into the application bundle through `extraResources`
+so the packaged app can spawn it from `process.resourcesPath`.
+
+A build only ever targets the host it runs on: neither the CGO daemon nor
+`better-sqlite3` cross-compiles cleanly. Builds for every platform are produced
+by [`.github/workflows/release.yml`](.github/workflows/release.yml), which
+packages on Linux, Windows, and both Intel and Apple Silicon macOS runners.
+
 ## Useful development commands
 
-```powershell
+```bash
 npm run dev          # Build archd and launch Electron in development mode
 npm run build        # Build Electron main, preload, and renderer bundles
 npm run build:archd  # Build and smoke-test the Go daemon
@@ -143,3 +165,12 @@ npm run package      # Build distributable application packages
 ```
 
 When changing Go code, rebuild the bundled daemon with `npm run build:archd` before testing the desktop application.
+
+### Troubleshooting
+
+**`Cannot read properties of undefined (reading 'whenReady')` on `npm run dev`.**
+Something in the environment has set `ELECTRON_RUN_AS_NODE=1`, which makes
+Electron start as a plain Node process, leaving the `electron` module without
+its APIs. VS Code's extension host sets it, so terminals and coding agents
+launched from an extension can inherit it. Launch with `env -u
+ELECTRON_RUN_AS_NODE npm run dev`, or use a terminal outside the editor.

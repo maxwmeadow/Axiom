@@ -70,6 +70,12 @@ test('delta readiness closes the indexing boundary for reconcile-only opens', as
 
     handleWsMessage({ type: 'delta:ready', payload: { workspaceId: 'alpha' } })
     assert.equal(useGraphStore.getState().isIndexing, false)
+
+    // delta:ready fires a delta load this test never awaited. The store tracks
+    // that load in module-level state, so leaving it in flight leaks into the
+    // next test - which then silently reuses this request instead of issuing
+    // its own. Awaiting it here lets the store settle first.
+    await useGraphStore.getState().loadDelta()
   } finally {
     useGraphStore.getState().setCurrentProject(null)
     globalThis.fetch = originalFetch

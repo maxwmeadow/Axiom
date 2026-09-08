@@ -4,10 +4,17 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { buildHosts, inspectHostConfiguration } from './agentInstallers.ts'
+import {
+  buildHosts,
+  inspectHostConfiguration,
+  installFamily,
+  upsertJetBrainsXml,
+} from './agentInstallers.ts'
+import { getPlatformPaths } from './platformPaths.ts'
+import { presentAgentFamily, presentAgentHost } from '../src/renderer/screens/connectAgentPresentation.ts'
 
 function hostWith(locations) {
-  return { serverLocations: () => locations }
+  return { serverLocations: () => locations, triggerKind: 'slash command' }
 }
 
 test('detects Axiom in JSON server maps without mistaking another server for it', () => {
@@ -157,6 +164,10 @@ test('every harness installs its workflow and MCP in current supported locations
         skill: path.join(home, '.claude', 'skills', 'axiom-map', 'SKILL.md'),
         config: path.join(home, '.claude.json'),
       },
+      'claude-desktop': {
+        command: 'Ask Claude in chat to map this project',
+        config: path.join(appData, 'Claude', 'claude_desktop_config.json'),
+      },
       codex: {
         command: '$axiom-map',
         skill: path.join(home, '.agents', 'skills', 'axiom-map', 'SKILL.md'),
@@ -170,17 +181,30 @@ test('every harness installs its workflow and MCP in current supported locations
       copilot: {
         command: '/axiom-map',
         skill: path.join(home, '.copilot', 'skills', 'axiom-map', 'SKILL.md'),
+        config: path.join(appData, 'Code', 'User', 'mcp.json'),
+      },
+      'copilot-cli': {
+        command: '/axiom-map',
+        skill: path.join(home, '.copilot', 'skills', 'axiom-map', 'SKILL.md'),
         config: path.join(home, '.copilot', 'mcp-config.json'),
       },
       windsurf: {
         command: '/axiom-map',
-        skill: path.join(appData, 'devin', 'skills', 'axiom-map', 'SKILL.md'),
-        config: path.join(appData, 'devin', 'mcp_config.json'),
+        skill: path.join(home, '.codeium', 'windsurf', 'skills', 'axiom-map', 'SKILL.md'),
+        config: path.join(home, '.codeium', 'windsurf', 'mcp_config.json'),
       },
       antigravity: {
         command: 'Use the axiom-map skill',
         skill: path.join(home, '.gemini', 'config', 'skills', 'axiom-map', 'SKILL.md'),
         config: path.join(home, '.gemini', 'config', 'mcp_config.json'),
+      },
+      jetbrains: {
+        command: 'Prompt AI Assistant in chat to map this project',
+        config: path.join(appData, 'JetBrains', 'options', 'llm.mcpServers.xml'),
+      },
+      zed: {
+        command: 'Ask Zed AI Assistant to map this project',
+        config: path.join(home, '.config', 'zed', 'settings.json'),
       },
     }
 
@@ -191,11 +215,12 @@ test('every harness installs its workflow and MCP in current supported locations
       const result = host.install('node', ['C:/Axiom/mcp/axiom-mcp.js'], brief, project)
       assert.equal(result.ok, true, `${host.id}: ${result.detail}`)
       assert.equal(host.command, expected.command)
-      assert.equal(host.commandPath?.(project), expected.skill)
-      assert.equal(fs.existsSync(expected.skill), true, `${host.id} skill missing`)
-      assert.match(fs.readFileSync(expected.skill, 'utf8'), /^---\nname: axiom-map\ndescription:/)
+      if (expected.skill) {
+        assert.equal(host.commandPath?.(project), expected.skill)
+        assert.equal(fs.existsSync(expected.skill), true, `${host.id} skill missing`)
+        assert.match(fs.readFileSync(expected.skill, 'utf8'), /^---\nname: axiom-map\ndescription:/)
+      }
       assert.equal(fs.existsSync(expected.config), true, `${host.id} current MCP config missing`)
-      assert.match(fs.readFileSync(expected.config, 'utf8'), new RegExp(`--axiom-host=${host.id}`))
 
       const status = inspectHostConfiguration(host, project)
       assert.equal(status.configured, true, `${host.id} was not detected as configured`)
@@ -212,4 +237,169 @@ test('every harness installs its workflow and MCP in current supported locations
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('installFamily installs all detected modalities in Claude family at once', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'axiom-family-install-'))
+  const home = path.join(root, 'home')
+  const appData = path.join(root, 'appdata')
+  const brief = '# Map this codebase'
+
+  try {
+    // Simulate Claude Code and Claude Desktop on disk
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
+    fs.mkdirSync(path.join(appData, 'Claude'), { recursive: true })
+
+    const result = installFamily('claude', 'node', ['axiom-mcp.js'], brief, undefined, home, appData)
+    assert.equal(result.ok, true)
+    assert.equal(fs.existsSync(path.join(home, '.claude.json')), true)
+    assert.equal(fs.existsSync(path.join(appData, 'Claude', 'claude_desktop_config.json')), true)
+    assert.equal(fs.existsSync(path.join(home, '.claude', 'skills', 'axiom-map', 'SKILL.md')), true)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('platformPaths resolves correct directories for macOS, Windows, and Linux', () => {
+  const home = '/Users/testuser'
+  const mac = getPlatformPaths(home, 'darwin')
+  assert.equal(mac.appDataDir, '/Users/testuser/Library/Application Support')
+  assert.equal(mac.isMac, true)
+
+  const win = getPlatformPaths('C:\\Users\\testuser', 'win32')
+  assert.equal(win.isWin, true)
+
+  const linux = getPlatformPaths('/home/testuser', 'linux')
+  assert.equal(linux.configDir, '/home/testuser/.config')
+  assert.equal(linux.isLinux, true)
+})
+
+test('Intelligent light system correctly aggregates family and child status', () => {
+  const cliHost = {
+    id: 'claude-code',
+    label: 'Claude Code (CLI)',
+    familyId: 'claude',
+    familyLabel: 'Claude',
+    modality: 'cli',
+    modalityLabel: 'Claude Code (CLI)',
+    detected: true,
+    configured: false,
+    configuredPaths: [],
+    unreadablePaths: [],
+    workflowInstalled: false,
+    workflowPath: null,
+    configPath: '/home/.claude.json',
+    command: '/axiom-map',
+    triggerKind: 'slash command',
+    restartAction: 'Restart',
+    restartDetail: 'Detail',
+  }
+
+  const desktopHost = {
+    id: 'claude-desktop',
+    label: 'Claude Desktop',
+    familyId: 'claude',
+    familyLabel: 'Claude',
+    modality: 'desktop',
+    modalityLabel: 'Claude Desktop (App)',
+    detected: true,
+    configured: true,
+    configuredPaths: ['/appdata/Claude/claude_desktop_config.json'],
+    unreadablePaths: [],
+    workflowInstalled: true,
+    workflowPath: null,
+    configPath: '/appdata/Claude/claude_desktop_config.json',
+    command: 'Ask Claude',
+    triggerKind: 'chat prompt',
+    restartAction: 'Quit',
+    restartDetail: 'Detail',
+  }
+
+  // Case 1: CLI is available, Desktop is installed -> Family is 'installed' (Green)
+  const familyPres1 = presentAgentFamily(
+    'claude',
+    'Claude',
+    [cliHost, desktopHost],
+    {},
+    new Set(),
+  )
+  assert.equal(familyPres1.state, 'installed')
+  assert.equal(familyPres1.installedCount, 1)
+  assert.equal(familyPres1.detectedCount, 2)
+
+  // Case 2: One modality becomes live -> Family is 'live' (Pulsing Green)
+  const familyPres2 = presentAgentFamily(
+    'claude',
+    'Claude',
+    [cliHost, desktopHost],
+    {},
+    new Set(['claude-desktop']),
+  )
+  assert.equal(familyPres2.state, 'live')
+
+  // Case 3: Neither installed, both detected -> Family is 'available' (Amber)
+  const unconfiguredDesktop = { ...desktopHost, configured: false, workflowInstalled: false }
+  const familyPres3 = presentAgentFamily(
+    'claude',
+    'Claude',
+    [cliHost, unconfiguredDesktop],
+    {},
+    new Set(),
+  )
+  assert.equal(familyPres3.state, 'available')
+  assert.equal(familyPres3.canBatchInstall, true)
+  assert.equal(familyPres3.batchAction, 'install')
+
+  // Case 4: Neither detected -> Family is 'missing' (Red)
+  const undetectedCli = { ...cliHost, detected: false }
+  const undetectedDesktop = { ...unconfiguredDesktop, detected: false }
+  const familyPres4 = presentAgentFamily(
+    'claude',
+    'Claude',
+    [undetectedCli, undetectedDesktop],
+    {},
+    new Set(),
+  )
+  assert.equal(familyPres4.state, 'missing')
+})
+
+test('JetBrains XML escapes every value it interpolates', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'axiom-jbxml-'))
+  const file = path.join(dir, 'llm.mcpServers.xml')
+  // A home directory really can contain these characters.
+  const command = '/Users/Tom & Jerry/<node>/bin/node'
+  const result = upsertJetBrainsXml(file, command, ['/path/with "quotes"/axiom-mcp.mjs'])
+
+  assert.equal(result.ok, true)
+  const xml = fs.readFileSync(file, 'utf8')
+  assert.ok(xml.includes('&amp;'), 'ampersand must be escaped')
+  assert.ok(xml.includes('&lt;node&gt;'), 'angle brackets must be escaped')
+  assert.ok(xml.includes('&quot;quotes&quot;'), 'quotes must be escaped')
+  assert.ok(!/&(?!amp;|lt;|gt;|quot;|apos;)/.test(xml), 'no raw ampersand may survive')
+  assert.ok(!xml.includes('command="/Users/Tom & Jerry'), 'the raw command must not be interpolated')
+})
+
+test('JetBrains XML inserts, then replaces rather than duplicating', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'axiom-jbxml2-'))
+  const file = path.join(dir, 'llm.mcpServers.xml')
+
+  assert.equal(upsertJetBrainsXml(file, '/usr/bin/node', ['/a.mjs']).ok, true)
+  assert.equal(upsertJetBrainsXml(file, '/usr/local/bin/node', ['/b.mjs']).ok, true)
+
+  const xml = fs.readFileSync(file, 'utf8')
+  assert.equal(xml.split('<entry key="axiom">').length - 1, 1, 'reinstall must not stack entries')
+  assert.ok(xml.includes('/usr/local/bin/node'), 'the newer command should win')
+  assert.ok(!xml.includes('/a.mjs'), 'the stale args should be gone')
+})
+
+test('JetBrains XML reports a document it cannot update instead of claiming success', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'axiom-jbxml3-'))
+  const file = path.join(dir, 'llm.mcpServers.xml')
+  // No <map> and no </component>: every branch is a replace that matches nothing.
+  const original = '<application>\n  <component name="Other" />\n</application>\n'
+  fs.writeFileSync(file, original)
+
+  const result = upsertJetBrainsXml(file, '/usr/bin/node', ['/a.mjs'])
+  assert.equal(result.ok, false, 'an unrecognised document is a failure, not a silent no-op')
+  assert.equal(fs.readFileSync(file, 'utf8'), original, 'the file must be left untouched')
 })

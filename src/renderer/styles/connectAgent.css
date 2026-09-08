@@ -220,34 +220,148 @@
   line-height: 1.65;
 }
 
-.axiom-connect__agents {
+.axiom-connect__agents,
+.axiom-connect__families {
   display: grid;
-  gap: 5px;
+  gap: 8px;
   margin: 14px 0 10px;
   padding: 0;
   list-style: none;
 }
 
-.axiom-connect__agents > li {
+.axiom-connect__agents > li,
+.axiom-connect__family-card {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  min-height: 44px;
+  display: flex;
+  flex-direction: column;
   border: 1px solid #d3d5cc;
   background: #faf9f4;
   transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
 }
 
-.axiom-connect__agents > li:hover {
+.axiom-connect__family-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 46px;
+}
+
+.axiom-connect__family-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 8px;
+}
+
+.axiom-connect__agents > li:hover,
+.axiom-connect__family-card:hover {
   border-color: #aab7b0;
   background: #fffef9;
 }
 
-.axiom-connect__agents > li[data-selected='true'] {
+.axiom-connect__agents > li[data-selected='true'],
+.axiom-connect__family-card[data-selected='true'] {
   border-color: #4d806f;
   background: #edf3ee;
   box-shadow: inset 3px 0 #34735f;
+}
+
+.axiom-connect__modality-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 14px 10px 48px;
+}
+
+.axiom-connect__modality-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid #c8cec9;
+  border-radius: 12px;
+  background: #f1f3ed;
+  color: #4b5a53;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  transition: all 120ms ease;
+}
+
+.axiom-connect__modality-tab:hover {
+  border-color: #7b9489;
+  background: #ffffff;
+  color: #172d24;
+}
+
+.axiom-connect__modality-tab[data-selected='true'] {
+  border-color: #34735f;
+  background: #34735f;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.axiom-connect__modality-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #99a69f;
+  flex-shrink: 0;
+}
+
+.axiom-connect__modality-dot[data-state='available'],
+.axiom-connect__modality-dot[data-state='repair'] {
+  background: #c28825;
+}
+
+.axiom-connect__modality-dot[data-state='installed'] {
+  background: #2f745d;
+}
+
+.axiom-connect__modality-tab[data-selected='true'] .axiom-connect__modality-dot[data-state='installed'] {
+  background: #68e0b2;
+}
+
+.axiom-connect__modality-dot[data-state='live'] {
+  background: #35c985;
+  box-shadow: 0 0 0 2px rgba(53, 201, 133, 0.4);
+}
+
+.axiom-connect__modality-dot[data-state='missing'] {
+  background: #cb7a72;
+}
+
+.axiom-connect__step-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 12px 0 16px;
+}
+
+.axiom-connect__step-tab {
+  padding: 5px 12px;
+  border: 1px solid #bcc5bf;
+  background: #e6eae5;
+  color: #51625b;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.axiom-connect__step-tab[data-selected='true'] {
+  border-color: #34735f;
+  background: #34735f;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.axiom-connect__install--batch {
+  border-color: #77998d !important;
+  background: #e2ede7 !important;
+  color: #215444 !important;
+}
+
+.axiom-connect__install--batch:hover:not(:disabled) {
+  background: #d3e5dc !important;
 }
 
 .axiom-connect__agent-choice {

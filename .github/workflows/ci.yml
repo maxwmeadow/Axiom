@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Axiom builds two native artifacts per host - the CGO archd daemon and the
+# better-sqlite3 node addon - and neither cross-compiles cleanly. Every
+# platform therefore has to build and test on its own runner.
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: archd-go/go.mod
+          cache-dependency-path: archd-go/go.sum
+
+      # archd is CGO (mattn/go-sqlite3, go-tree-sitter), so every host needs a
+      # C compiler. Linux and macOS runners ship one; on Windows the runner
+      # image includes MSYS2 at C:\msys64 and only needs mingw64 on PATH.
+      - name: Put mingw64 on PATH
+        if: runner.os == 'Windows'
+        run: echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
+
+      - run: npm ci
+
+      - name: Build archd
+        run: npm run build:archd
+
+      - name: Vet archd
+        run: npm run vet:archd
+
+      - name: Test archd
+        run: npm run test:archd
+
+      - name: Test renderer, MCP, and Electron units
+        run: npm run test:renderer
+
+      - name: Build Electron bundles
+        run: npm run build

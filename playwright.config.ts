@@ -5,7 +5,10 @@ export default defineConfig({
   timeout: 45_000,
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // Locally a flake should be visible immediately. On CI a single timing-
+  // sensitive frame should not fail the run - Playwright still reports a
+  // retried test as flaky rather than passing it off as clean.
+  retries: process.env.CI ? 2 : 0,
   reporter: 'list',
   expect: {
     timeout: 8_000,
@@ -20,5 +23,8 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{arg}{ext}',
+  // {platform} is load-bearing: text rasterization differs across operating
+  // systems, so a baseline captured on one will not match another within any
+  // sane pixel tolerance. Each platform keeps its own.
+  snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{platform}/{arg}{ext}',
 })

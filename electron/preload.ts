@@ -57,6 +57,10 @@ contextBridge.exposeInMainWorld('axiom', {
   installAgent: (hostId: string, projectRoot?: string): Promise<AgentInstallResult> =>
     ipcRenderer.invoke('agent:install', hostId, projectRoot),
 
+  // Install all detected modalities for an agent family in one click
+  installFamily: (familyId: string, projectRoot?: string): Promise<AgentInstallResult> =>
+    ipcRenderer.invoke('agent:install-family', familyId, projectRoot),
+
   // Listen for messages from archd (forwarded by main process)
   onArchdMessage: (callback: (msg: WsMessage) => void) => {
     ipcRenderer.on('archd:message', (_event, msg) => callback(msg))
@@ -70,6 +74,10 @@ contextBridge.exposeInMainWorld('axiom', {
 export interface AgentHostInfo {
   id: string
   label: string
+  familyId: string
+  familyLabel: string
+  modality: 'cli' | 'vscode' | 'desktop' | 'editor'
+  modalityLabel: string
   /** Whether this agent looks installed on this machine. */
   detected: boolean
   /** Whether any user or project configuration contains an Axiom MCP entry. */
@@ -80,6 +88,10 @@ export interface AgentHostInfo {
   workflowPath: string | null
   configPath: string
   command: string | null
+  triggerKind: 'slash command' | 'skill command' | 'instruction' | 'chat prompt'
+  promptText?: string
+  restartAction: string
+  restartDetail: string
 }
 
 export interface AgentInstallResult {
@@ -117,6 +129,7 @@ declare global {
       getAgentConnection: () => Promise<AgentConnection>
       listAgentHosts: (projectRoot?: string) => Promise<AgentHostInfo[]>
       installAgent: (hostId: string, projectRoot?: string) => Promise<AgentInstallResult>
+      installFamily: (familyId: string, projectRoot?: string) => Promise<AgentInstallResult>
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void
     }

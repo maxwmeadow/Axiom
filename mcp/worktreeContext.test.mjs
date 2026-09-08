@@ -37,3 +37,21 @@ test('uses path boundaries and the longest nested root', () => {
   )
   assert.equal(findWorktreeForCwd(roots, '/code/project-copy/src'), undefined)
 })
+
+test('macOS resolves a differently-cased cwd to its worktree', () => {
+  // APFS is case-insensitive by default, so a cwd the shell reports with
+  // different casing than the stored root is still the same worktree. Passing
+  // caseSensitive explicitly keeps this test honest on any host.
+  const context = findWorktreeForCwd([
+    { id: 'primary', path: '/Users/dev/Axiom', branch: 'main' },
+    { id: 'agent', path: '/Users/dev/Axiom-agent', branch: 'feature/agent' },
+  ], '/users/dev/AXIOM-agent/src/payments', false)
+  assert.deepEqual(context, { rootId: 'agent', branch: 'feature/agent' })
+})
+
+test('the default case sensitivity follows the host filesystem', () => {
+  const expected = process.platform !== 'win32' && process.platform !== 'darwin'
+  const roots = [{ id: 'root', path: '/code/Axiom', branch: 'main' }]
+  const matchedDespiteCase = findWorktreeForCwd(roots, '/code/axiom/src') !== undefined
+  assert.equal(matchedDespiteCase, !expected)
+})
