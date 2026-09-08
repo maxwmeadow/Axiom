@@ -29,10 +29,22 @@ function resolveBash() {
   return found
 }
 
+// MSYS2 bash needs its own usr/bin (uname, etc.) on PATH. Invoked from a
+// plain PowerShell/cmd process, the inherited PATH is pure Windows-style and
+// has no MSYS2 entries at all, so bare bash.exe cannot find the core utilities
+// scripts/archd.sh calls to detect the platform.
+const bash = resolveBash()
+const env = { ...process.env }
+if (process.platform === 'win32') {
+  const msysRoot = bash.replace(/[\\/]usr[\\/]bin[\\/]bash\.exe$/i, '')
+  env.PATH = `${msysRoot}\\usr\\bin;${env.PATH ?? ''}`
+}
+
 // Invoked relative to the repo root so the path stays valid inside MSYS2,
 // which does not understand a Windows-style absolute path here.
-const { status } = spawnSync(resolveBash(), ['scripts/archd.sh', ...process.argv.slice(2)], {
+const { status } = spawnSync(bash, ['scripts/archd.sh', ...process.argv.slice(2)], {
   cwd: ROOT,
   stdio: 'inherit',
+  env,
 })
 process.exit(status ?? 1)
