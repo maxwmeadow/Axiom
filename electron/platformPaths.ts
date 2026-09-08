@@ -86,8 +86,12 @@ export function getZedConfigPath(
   if (paths.isMac) {
     return join(homeDir, '.config', 'zed', 'settings.json')
   }
-  // Linux honours $XDG_CONFIG_HOME, which configDir already resolves.
-  return join(explicitAppDataDir ?? paths.configDir, 'zed', 'settings.json')
+  // Linux: Zed reads the XDG config directory, which configDir already
+  // resolves ($XDG_CONFIG_HOME, else ~/.config). Deliberately not
+  // explicitAppDataDir - that parameter describes an application-data root,
+  // which is a different location on macOS and only coincides with the config
+  // directory on Linux. It applies to Windows alone here.
+  return join(paths.configDir, 'zed', 'settings.json')
 }
 
 /**

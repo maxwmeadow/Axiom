@@ -150,6 +150,12 @@ test('every harness installs its workflow and MCP in current supported locations
   const brief = '# Map this codebase'
   fs.mkdirSync(project, { recursive: true })
 
+  // Every expectation below is relative to the injected home. A runner with
+  // XDG_CONFIG_HOME set - GitHub's Ubuntu image does - would otherwise send
+  // the XDG-based paths somewhere else entirely.
+  const previousXdgConfigHome = process.env.XDG_CONFIG_HOME
+  delete process.env.XDG_CONFIG_HOME
+
   try {
     const legacyCopilotPrompt = path.join(project, '.github', 'prompts', 'axiom-map.prompt.md')
     fs.mkdirSync(path.dirname(legacyCopilotPrompt), { recursive: true })
@@ -204,7 +210,11 @@ test('every harness installs its workflow and MCP in current supported locations
       },
       zed: {
         command: 'Ask Zed AI Assistant to map this project',
-        config: path.join(home, '.config', 'zed', 'settings.json'),
+        // Zed reads ~/.config/zed on macOS and Linux alike, and only on
+        // Windows does it sit under the application-data root.
+        config: process.platform === 'win32'
+          ? path.join(appData, 'Zed', 'settings.json')
+          : path.join(home, '.config', 'zed', 'settings.json'),
       },
     }
 
@@ -235,6 +245,8 @@ test('every harness installs its workflow and MCP in current supported locations
     assert.equal(fs.existsSync(legacyCopilotPrompt), false, 'generated Copilot prompt was migrated to a skill')
     assert.match(fs.readFileSync(legacyAntigravityConfig, 'utf8'), /--axiom-host=antigravity/)
   } finally {
+    if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
@@ -261,17 +273,36 @@ test('installFamily installs all detected modalities in Claude family at once', 
 })
 
 test('platformPaths resolves correct directories for macOS, Windows, and Linux', () => {
-  const home = '/Users/testuser'
+  // Expectations are built with path.join, never as literals: this runs on all
+  // three hosts, and join emits backslashes on Windows.
+  const home = path.join(path.sep, 'Users', 'testuser')
   const mac = getPlatformPaths(home, 'darwin')
-  assert.equal(mac.appDataDir, '/Users/testuser/Library/Application Support')
+  assert.equal(mac.appDataDir, path.join(home, 'Library', 'Application Support'))
   assert.equal(mac.isMac, true)
 
   const win = getPlatformPaths('C:\\Users\\testuser', 'win32')
   assert.equal(win.isWin, true)
 
-  const linux = getPlatformPaths('/home/testuser', 'linux')
-  assert.equal(linux.configDir, '/home/testuser/.config')
-  assert.equal(linux.isLinux, true)
+  // configDir reads XDG_CONFIG_HOME when it is set, so clear it to assert the
+  // fallback against the home passed in.
+  const previousXdgConfigHome = process.env.XDG_CONFIG_HOME
+  delete process.env.XDG_CONFIG_HOME
+  try {
+    const linuxHome = path.join(path.sep, 'home', 'testuser')
+    const linux = getPlatformPaths(linuxHome, 'linux')
+    assert.equal(linux.configDir, path.join(linuxHome, '.config'))
+    assert.equal(linux.isLinux, true)
+
+    process.env.XDG_CONFIG_HOME = path.join(path.sep, 'custom', 'xdg')
+    assert.equal(
+      getPlatformPaths(linuxHome, 'linux').configDir,
+      path.join(path.sep, 'custom', 'xdg'),
+      'an explicit XDG_CONFIG_HOME must win over the default',
+    )
+  } finally {
+    if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
+  }
 })
 
 test('Intelligent light system correctly aggregates family and child status', () => {
