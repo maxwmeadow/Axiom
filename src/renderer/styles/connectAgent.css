@@ -239,23 +239,6 @@
   transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
 }
 
-.axiom-connect__family-header {
-  display: grid;
-  /* name | disclosure | actions. The disclosure column collapses to zero for
-     single-surface families, so their action button still meets the right
-     edge; without the third track a third child wrapped onto its own row. */
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  min-height: 46px;
-}
-
-.axiom-connect__family-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-right: 8px;
-}
-
 .axiom-connect__agents > li:hover,
 .axiom-connect__family-card:hover {
   border-color: #aab7b0;
@@ -267,41 +250,6 @@
   border-color: #4d806f;
   background: #edf3ee;
   box-shadow: inset 3px 0 #34735f;
-}
-
-.axiom-connect__modality-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  padding: 0 14px 10px 48px;
-}
-
-.axiom-connect__modality-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  border: 1px solid #c8cec9;
-  border-radius: 12px;
-  background: #f1f3ed;
-  color: #4b5a53;
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  transition: all 120ms ease;
-}
-
-.axiom-connect__modality-tab:hover {
-  border-color: #7b9489;
-  background: #ffffff;
-  color: #172d24;
-}
-
-.axiom-connect__modality-tab[data-selected='true'] {
-  border-color: #34735f;
-  background: #34735f;
-  color: #ffffff;
-  font-weight: 600;
 }
 
 .axiom-connect__modality-dot {
@@ -319,10 +267,6 @@
 
 .axiom-connect__modality-dot[data-state='installed'] {
   background: #2f745d;
-}
-
-.axiom-connect__modality-tab[data-selected='true'] .axiom-connect__modality-dot[data-state='installed'] {
-  background: #68e0b2;
 }
 
 .axiom-connect__modality-dot[data-state='live'] {
@@ -365,39 +309,6 @@
 
 .axiom-connect__install--batch:hover:not(:disabled) {
   background: #d3e5dc !important;
-}
-
-.axiom-connect__agent-choice {
-  display: flex;
-  align-items: center;
-  align-self: stretch;
-  min-width: 0;
-  gap: 13px;
-  padding: 6px 12px 6px 16px;
-  cursor: pointer;
-}
-
-.axiom-connect__agent-choice input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.axiom-connect__agent-choice:focus-within {
-  outline: 2px solid #34735f;
-  outline-offset: -4px;
-}
-
-.axiom-connect__agent-choice strong {
-  min-width: 0;
-  overflow: hidden;
-  color: #17231f;
-  font-size: 14px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .axiom-connect__host-signal {
@@ -749,38 +660,6 @@
   .axiom-connect__footer { align-items: flex-start; flex-direction: column; }
 }
 
-/* Family disclosure: a multi-surface family collapses to one row, and states
-   what is underneath without having to be opened. Matches the modality tab
-   language so the expanded panel reads as a continuation of the row. */
-.axiom-connect__family-disclosure {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: 10px;
-  padding: 3px 8px;
-  border: 1px solid #c8cec9;
-  border-radius: 12px;
-  background: #f1f3ed;
-  color: #5b6a62;
-  cursor: pointer;
-  font: inherit;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  transition: all 120ms ease;
-}
-
-.axiom-connect__family-disclosure:hover {
-  border-color: #7b9489;
-  background: #ffffff;
-  color: #172d24;
-}
-
-.axiom-connect__family-disclosure:focus-visible {
-  outline: 2px solid #7b9489;
-  outline-offset: 2px;
-}
-
 .axiom-connect__family-chevron {
   width: 0;
   height: 0;
@@ -790,6 +669,99 @@
   transition: transform 140ms ease;
 }
 
-.axiom-connect__family-disclosure[aria-expanded='true'] .axiom-connect__family-chevron {
+.axiom-connect__family-row[aria-expanded='true'] .axiom-connect__family-chevron {
   transform: rotate(180deg);
+}
+
+/* One row per family: status, name, a short summary, and a triangle. The row
+   only ever discloses - installing happens on the surface it applies to, so
+   the button never moves around. */
+.axiom-connect__family-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  min-height: 46px;
+  padding: 6px 14px 6px 16px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.axiom-connect__family-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #17231f;
+  font-size: 14px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-connect__family-row:focus-visible {
+  outline: 2px solid #34735f;
+  outline-offset: -4px;
+}
+
+.axiom-connect__family-summary {
+  color: #6b7a72;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+/* Expanded surfaces: one line each, every line ending in its own button. */
+.axiom-connect__surfaces {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #dfe4de;
+  background: #f6f7f2;
+}
+
+.axiom-connect__surface {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 34px;
+}
+
+.axiom-connect__surface + .axiom-connect__surface {
+  border-top: 1px solid #e7eae4;
+}
+
+.axiom-connect__surface-label {
+  min-width: 0;
+  overflow: hidden;
+  color: #2b3a33;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axiom-connect__surface-state {
+  color: #6b7a72;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Keeps a surface with no action aligned with the buttons above and below. */
+.axiom-connect__surface-blank {
+  display: block;
+  width: 1px;
+}
+
+.axiom-connect__surface .axiom-connect__install-result {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+}
+
+.axiom-connect__surfaces-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 14px 10px;
+  border-top: 1px solid #e7eae4;
 }

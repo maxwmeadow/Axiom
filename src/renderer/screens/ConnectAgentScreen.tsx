@@ -3,7 +3,22 @@ import type { ProjectConfig } from '../../shared/types'
 import type { AgentHostInfo, AgentInstallResult } from '../../../electron/preload'
 import { AgentMascot } from '../components/AgentMascot'
 import { WorkbenchTitleBar } from '../components/ui/WorkbenchTitleBar'
-import { commandKind, presentAgentHost, presentAgentFamily } from './connectAgentPresentation'
+import {
+  commandKind,
+  presentAgentHost,
+  presentAgentFamily,
+  type AgentHostState,
+} from './connectAgentPresentation'
+
+// Each surface states its own condition in two or three words. The full
+// sentence stays on the dot's tooltip, where it does not crowd the row.
+const SURFACE_STATE_LABEL: Record<AgentHostState, string> = {
+  live: 'Connected',
+  installed: 'Installed',
+  repair: 'Needs repair',
+  available: 'Ready to install',
+  missing: 'Not found',
+}
 
 const POLL_MS = 2000
 
@@ -320,158 +335,125 @@ export function ConnectAgentScreen({
                       results,
                       liveHostIds,
                     )
-                    const isFamilyActive = selectedFamily?.id === family.id
-                    const activeModalityInFamily = isFamilyActive
-                      ? selectedHost
-                      : family.modalities[0]
-
-                    const modPresentation = activeModalityInFamily
-                      ? presentAgentHost(
-                          activeModalityInFamily,
-                          results[activeModalityInFamily.id],
-                          liveHostIds.has(activeModalityInFamily.id),
-                        )
-                      : null
-
-                    const activeResult = activeModalityInFamily ? results[activeModalityInFamily.id] : undefined
+                    const isExpanded = expandedFamilies.has(family.id)
+                    const showBatch = familyPres.canBatchInstall && familyPres.batchAction !== 'none'
 
                     return (
                       <li
                         key={family.id}
                         className="axiom-connect__family-card"
-                        data-selected={isFamilyActive}
                         data-state={familyPres.state}
+                        data-expanded={isExpanded}
                       >
-                        <div className="axiom-connect__family-header">
-                          <label className="axiom-connect__agent-choice">
-                            <input
-                              type="radio"
-                              name="axiom-agent-family"
-                              value={family.id}
-                              checked={isFamilyActive}
-                              onChange={() => {
-                                const target = family.modalities.find(m => m.detected) ?? family.modalities[0]
-                                chooseHost(target.id)
-                              }}
-                            />
-                            {/* Parent Intelligent Light Signal */}
-                            <span
-                              className="axiom-connect__host-signal"
-                              data-state={familyPres.state}
-                              data-tooltip={familyPres.detail}
-                              tabIndex={0}
-                              aria-label={`${family.label} status: ${familyPres.detail}`}
-                            />
-                            <strong>{family.label}</strong>
-                          </label>
+                        {/* The row discloses; it never installs. Every install
+                            button lives on the surface it belongs to, so the
+                            action is always in the same place. */}
+                        <button
+                          type="button"
+                          className="axiom-connect__family-row"
+                          aria-expanded={isExpanded}
+                          aria-controls={`surfaces-${family.id}`}
+                          onClick={() => setExpandedFamilies(previous => {
+                            const next = new Set(previous)
+                            if (next.has(family.id)) next.delete(family.id)
+                            else next.add(family.id)
+                            return next
+                          })}
+                        >
+                          <span
+                            className="axiom-connect__host-signal"
+                            data-state={familyPres.state}
+                            data-tooltip={familyPres.detail}
+                            aria-label={`${family.label} status: ${familyPres.detail}`}
+                          />
+                          <strong>{family.label}</strong>
+                          <span className="axiom-connect__family-summary">
+                            {familyPres.installedCount > 0
+                              ? `${familyPres.installedCount} of ${familyPres.totalCount} configured`
+                              : familyPres.detectedCount > 0
+                                ? `${familyPres.detectedCount} detected`
+                                : 'Not found'}
+                          </span>
+                          <span className="axiom-connect__family-chevron" aria-hidden="true" />
+                        </button>
 
-                          {family.modalities.length > 1 && (
-                            <button
-                              type="button"
-                              className="axiom-connect__family-disclosure"
-                              aria-expanded={expandedFamilies.has(family.id)}
-                              aria-controls={`modalities-${family.id}`}
-                              onClick={() => setExpandedFamilies(previous => {
-                                const next = new Set(previous)
-                                if (next.has(family.id)) next.delete(family.id)
-                                else next.add(family.id)
-                                return next
-                              })}
-                            >
-                              <span className="axiom-connect__family-disclosure-count">
-                                {familyPres.installedCount > 0
-                                  ? `${familyPres.installedCount}/${family.modalities.length} configured`
-                                  : `${family.modalities.length} surfaces`}
-                              </span>
-                              <span className="axiom-connect__family-chevron" aria-hidden="true" />
-                            </button>
-                          )}
-
-                          <div className="axiom-connect__family-actions">
-                            {familyPres.canBatchInstall && familyPres.batchAction !== 'none' && (
-                              <button
-                                type="button"
-                                className="axiom-connect__install axiom-connect__install--batch"
-                                disabled={installing === family.id}
-                                onClick={() => void installFamily(family)}
-                              >
-                                {installing === family.id
-                                  ? 'Working…'
-                                  : familyPres.batchAction === 'install'
-                                    ? 'Install all detected'
-                                    : 'Reinstall all'}
-                              </button>
-                            )}
-
-                            {/* A collapsed family hides which modality is
-                                selected, so acting on one from here would be a
-                                guess. Only the batch action makes sense until
-                                the surfaces are visible. */}
-                            {modPresentation && modPresentation.action !== 'none'
-                              && (family.modalities.length === 1 || expandedFamilies.has(family.id)) && (
-                              <button
-                                type="button"
-                                className="axiom-connect__install"
-                                disabled={installing === activeModalityInFamily?.id}
-                                onClick={() => {
-                                  if (activeModalityInFamily) void installHost(activeModalityInFamily)
-                                }}
-                              >
-                                {installing === activeModalityInFamily?.id
-                                  ? 'Working…'
-                                  : modPresentation.action === 'install'
-                                    ? `Install`
-                                    : modPresentation.action === 'repair'
-                                      ? 'Repair'
-                                      : 'Reinstall'}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Modality Tabs */}
-                        {family.modalities.length > 1 && expandedFamilies.has(family.id) && (
-                          <div
-                            id={`modalities-${family.id}`}
-                            className="axiom-connect__modality-tabs"
-                            role="tablist"
-                            aria-label={`${family.label} modalities`}
-                          >
+                        {isExpanded && (
+                          <div id={`surfaces-${family.id}`} className="axiom-connect__surfaces">
                             {family.modalities.map(modality => {
-                              const isSelected = selectedHostId === modality.id
-                              const mPres = presentAgentHost(
+                              const pres = presentAgentHost(
                                 modality,
                                 results[modality.id],
                                 liveHostIds.has(modality.id),
                               )
+                              const modalityResult = results[modality.id]
+                              const busy = installing === modality.id
                               return (
-                                <button
+                                <div
                                   key={modality.id}
-                                  type="button"
-                                  role="tab"
-                                  aria-selected={isSelected}
-                                  className="axiom-connect__modality-tab"
-                                  data-selected={isSelected}
-                                  data-state={mPres.state}
-                                  onClick={() => chooseHost(modality.id)}
+                                  className="axiom-connect__surface"
+                                  data-state={pres.state}
                                 >
-                                  {/* Modality child status dot */}
                                   <span
                                     className="axiom-connect__modality-dot"
-                                    data-state={mPres.state}
-                                    title={mPres.detail}
+                                    data-state={pres.state}
+                                    title={pres.detail}
                                   />
-                                  <span>{modality.modalityLabel || modality.label}</span>
-                                </button>
+                                  <span className="axiom-connect__surface-label">
+                                    {modality.modalityLabel || modality.label}
+                                  </span>
+                                  <span className="axiom-connect__surface-state">
+                                    {SURFACE_STATE_LABEL[pres.state]}
+                                  </span>
+                                  {pres.action === 'none' ? (
+                                    <span className="axiom-connect__surface-blank" aria-hidden="true" />
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="axiom-connect__install"
+                                      disabled={busy}
+                                      onClick={() => {
+                                        chooseHost(modality.id)
+                                        void installHost(modality)
+                                      }}
+                                    >
+                                      {busy
+                                        ? 'Working…'
+                                        : pres.action === 'install'
+                                          ? 'Install'
+                                          : pres.action === 'repair'
+                                            ? 'Repair'
+                                            : 'Reinstall'}
+                                    </button>
+                                  )}
+                                  {modalityResult && (
+                                    <p
+                                      className="axiom-connect__install-result"
+                                      data-ok={modalityResult.ok}
+                                    >
+                                      {modalityResult.detail}
+                                    </p>
+                                  )}
+                                </div>
                               )
                             })}
-                          </div>
-                        )}
 
-                        {activeResult && isFamilyActive && (
-                          <p className="axiom-connect__install-result" data-ok={activeResult.ok}>
-                            {activeResult.detail}
-                          </p>
+                            {showBatch && (
+                              <div className="axiom-connect__surfaces-footer">
+                                <button
+                                  type="button"
+                                  className="axiom-connect__install axiom-connect__install--batch"
+                                  disabled={installing === family.id}
+                                  onClick={() => void installFamily(family)}
+                                >
+                                  {installing === family.id
+                                    ? 'Working…'
+                                    : familyPres.batchAction === 'install'
+                                      ? 'Install all detected'
+                                      : 'Reinstall all'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </li>
                     )
