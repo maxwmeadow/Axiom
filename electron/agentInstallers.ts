@@ -551,7 +551,10 @@ export function buildHosts(
       id: 'codex',
       label: 'OpenAI Codex (CLI)',
       familyId: 'codex',
-      familyLabel: 'OpenAI Codex',
+      // Product names, not vendor names: every other family is listed as the
+      // thing itself. GitHub Copilot keeps its prefix only because that is the
+      // product's own name and "Copilot" alone collides with Microsoft's.
+      familyLabel: 'Codex',
       modality: 'cli',
       modalityLabel: 'Codex CLI',
       sharedSurfaces: [
