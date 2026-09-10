@@ -241,7 +241,10 @@
 
 .axiom-connect__family-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* name | disclosure | actions. The disclosure column collapses to zero for
+     single-surface families, so their action button still meets the right
+     edge; without the third track a third child wrapped onto its own row. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   min-height: 46px;
 }
@@ -744,4 +747,49 @@
   .axiom-connect__host-signal:hover::before,
   .axiom-connect__host-signal:focus-visible::before { transform: translateY(0); }
   .axiom-connect__footer { align-items: flex-start; flex-direction: column; }
+}
+
+/* Family disclosure: a multi-surface family collapses to one row, and states
+   what is underneath without having to be opened. Matches the modality tab
+   language so the expanded panel reads as a continuation of the row. */
+.axiom-connect__family-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  padding: 3px 8px;
+  border: 1px solid #c8cec9;
+  border-radius: 12px;
+  background: #f1f3ed;
+  color: #5b6a62;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: all 120ms ease;
+}
+
+.axiom-connect__family-disclosure:hover {
+  border-color: #7b9489;
+  background: #ffffff;
+  color: #172d24;
+}
+
+.axiom-connect__family-disclosure:focus-visible {
+  outline: 2px solid #7b9489;
+  outline-offset: 2px;
+}
+
+.axiom-connect__family-chevron {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform 140ms ease;
+}
+
+.axiom-connect__family-disclosure[aria-expanded='true'] .axiom-connect__family-chevron {
+  transform: rotate(180deg);
 }

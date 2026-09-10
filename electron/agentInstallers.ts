@@ -40,6 +40,12 @@ export interface HostDescriptor {
   configPath: () => string
   /** Every user or workspace MCP configuration this host can read. */
   serverLocations: (projectRoot?: string) => ServerLocation[]
+  /**
+   * Paths whose existence proves this host is installed, for hosts whose
+   * config sits directly in the home directory and therefore has no
+   * distinguishing parent folder of its own.
+   */
+  detectPaths?: () => string[]
   /** Where its reusable workflow lives, if this host supports one. */
   commandPath?: (projectRoot?: string) => string | null
   /** The command a user types once installed. */
@@ -106,6 +112,9 @@ function installJsonServer(
   command: string,
   args: string[],
   label: string,
+  // Some hosts require fields beyond command/args before they will load a
+  // server at all. Zed is the live example: see its descriptor below.
+  extraEntryFields: Record<string, unknown> = {},
 ): InstallResult {
   const existing = readJson(path)
   if (existing === null) {
@@ -116,7 +125,7 @@ function installJsonServer(
     }
   }
   const servers = (existing[key] ?? {}) as Record<string, unknown>
-  existing[key] = { ...servers, axiom: { command, args } }
+  existing[key] = { ...servers, axiom: { ...extraEntryFields, command, args } }
   writeJson(path, existing)
   return { ok: true, detail: `Added Axiom to ${label}.`, paths: [path] }
 }
@@ -355,6 +364,9 @@ export function buildHosts(
       modality: 'cli',
       modalityLabel: 'Claude Code (CLI)',
       configPath: () => join(homeDir, '.claude.json'),
+      // ~/.claude.json sits directly in the home directory, so its parent
+      // proves nothing. The CLI's own ~/.claude directory is the real marker.
+      detectPaths: () => [join(homeDir, '.claude')],
       serverLocations: projectRoot => [
         { format: 'json', path: join(homeDir, '.claude.json'), keyPath: ['mcpServers'] },
         ...(projectRoot ? [
@@ -502,7 +514,9 @@ export function buildHosts(
       familyId: 'codex',
       familyLabel: 'OpenAI Codex',
       modality: 'cli',
-      modalityLabel: 'Codex CLI',
+      // Codex shares ~/.codex/config.toml across the CLI, the IDE extension
+      // and the desktop app, so installing once covers all three.
+      modalityLabel: 'Codex (CLI, IDE & app)',
       configPath: () => join(homeDir, '.codex', 'config.toml'),
       serverLocations: projectRoot => [
         { format: 'toml', path: join(homeDir, '.codex', 'config.toml') },
@@ -547,7 +561,8 @@ export function buildHosts(
       familyId: 'cursor',
       familyLabel: 'Cursor',
       modality: 'desktop',
-      modalityLabel: 'Cursor IDE',
+      // cursor-agent reads the same ~/.cursor/mcp.json as the editor.
+      modalityLabel: 'Cursor (IDE & CLI)',
       configPath: () => join(homeDir, '.cursor', 'mcp.json'),
       serverLocations: projectRoot => [
         { format: 'json', path: join(homeDir, '.cursor', 'mcp.json'), keyPath: ['mcpServers'] },
@@ -639,7 +654,8 @@ export function buildHosts(
       familyId: 'antigravity',
       familyLabel: 'Antigravity',
       modality: 'desktop',
-      modalityLabel: 'Antigravity IDE',
+      // Antigravity 2.0, the IDE and the CLI share ~/.gemini/config/mcp_config.json.
+      modalityLabel: 'Antigravity (IDE & CLI)',
       configPath: () => join(homeDir, '.gemini', 'config', 'mcp_config.json'),
       serverLocations: projectRoot => [
         {
@@ -770,7 +786,13 @@ export function buildHosts(
       install: (command, args) => {
         const hostArgs = identifiedArgs(args, 'zed')
         const target = getZedConfigPath(homeDir, platform, appDataDir)
-        const result = installJsonServer(target, 'context_servers', command, hostArgs, 'Zed Editor')
+        // Zed ignores a manually added context server unless it declares
+        // source: "custom". Without this the write succeeds, the file looks
+        // right, and Zed silently never loads Axiom.
+        const result = installJsonServer(
+          target, 'context_servers', command, hostArgs, 'Zed Editor',
+          { source: 'custom' },
+        )
         return {
           ok: result.ok,
           detail: 'Added Axiom to Zed settings.json context_servers.',
@@ -790,11 +812,18 @@ export function detectHosts(
   platform: NodeJS.Platform = process.platform,
 ): Record<string, boolean> {
   const seen: Record<string, boolean> = {}
+  const homeResolved = resolve(homeDir)
   for (const host of buildHosts(homeDir, explicitAppDataDir, platform)) {
     const configPath = host.configPath()
-    const dir = join(configPath, '..')
-    seen[host.id] = fs.existsSync(dir) ||
+    const parent = resolve(join(configPath, '..'))
+    // A config folder of the host's own (~/.codex, ~/.cursor) is good evidence
+    // the tool is installed. The home directory is not: it exists for
+    // everyone, so counting it marks every such host present on every machine.
+    const parentIsEvidence = parent !== homeResolved && fs.existsSync(parent)
+
+    seen[host.id] = parentIsEvidence ||
       fs.existsSync(configPath) ||
+      (host.detectPaths?.() ?? []).some(path => fs.existsSync(path)) ||
       host.serverLocations().some(location => fs.existsSync(location.path))
   }
   return seen

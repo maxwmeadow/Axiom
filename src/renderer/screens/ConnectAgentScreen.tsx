@@ -55,6 +55,9 @@ export function ConnectAgentScreen({
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, AgentInstallResult>>({})
   const [installing, setInstalling] = useState<string | null>(null)
+  // Families with more than one modality collapse by default: the row states
+  // what it is, and the surfaces underneath are opened deliberately.
+  const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(() => new Set())
   const [hasLivePresence, setHasLivePresence] = useState(false)
   const [liveHostIds, setLiveHostIds] = useState<Set<string>>(() => new Set())
   const [phase, setPhaseState] = useState<Phase>(() => progress.get(project.id) ?? 'waiting')
@@ -362,6 +365,28 @@ export function ConnectAgentScreen({
                             <strong>{family.label}</strong>
                           </label>
 
+                          {family.modalities.length > 1 && (
+                            <button
+                              type="button"
+                              className="axiom-connect__family-disclosure"
+                              aria-expanded={expandedFamilies.has(family.id)}
+                              aria-controls={`modalities-${family.id}`}
+                              onClick={() => setExpandedFamilies(previous => {
+                                const next = new Set(previous)
+                                if (next.has(family.id)) next.delete(family.id)
+                                else next.add(family.id)
+                                return next
+                              })}
+                            >
+                              <span className="axiom-connect__family-disclosure-count">
+                                {familyPres.installedCount > 0
+                                  ? `${familyPres.installedCount}/${family.modalities.length} configured`
+                                  : `${family.modalities.length} surfaces`}
+                              </span>
+                              <span className="axiom-connect__family-chevron" aria-hidden="true" />
+                            </button>
+                          )}
+
                           <div className="axiom-connect__family-actions">
                             {familyPres.canBatchInstall && familyPres.batchAction !== 'none' && (
                               <button
@@ -378,7 +403,12 @@ export function ConnectAgentScreen({
                               </button>
                             )}
 
-                            {modPresentation && modPresentation.action !== 'none' && (
+                            {/* A collapsed family hides which modality is
+                                selected, so acting on one from here would be a
+                                guess. Only the batch action makes sense until
+                                the surfaces are visible. */}
+                            {modPresentation && modPresentation.action !== 'none'
+                              && (family.modalities.length === 1 || expandedFamilies.has(family.id)) && (
                               <button
                                 type="button"
                                 className="axiom-connect__install"
@@ -400,8 +430,13 @@ export function ConnectAgentScreen({
                         </div>
 
                         {/* Modality Tabs */}
-                        {family.modalities.length > 1 && (
-                          <div className="axiom-connect__modality-tabs" role="tablist" aria-label={`${family.label} modalities`}>
+                        {family.modalities.length > 1 && expandedFamilies.has(family.id) && (
+                          <div
+                            id={`modalities-${family.id}`}
+                            className="axiom-connect__modality-tabs"
+                            role="tablist"
+                            aria-label={`${family.label} modalities`}
+                          >
                             {family.modalities.map(modality => {
                               const isSelected = selectedHostId === modality.id
                               const mPres = presentAgentHost(
