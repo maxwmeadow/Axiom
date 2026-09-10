@@ -78,6 +78,8 @@ export interface AgentHostInfo {
   familyLabel: string
   modality: 'cli' | 'vscode' | 'desktop' | 'editor'
   modalityLabel: string
+  /** Other surfaces covered by this same configuration file. */
+  sharedSurfaces: { id: string; label: string }[]
   /** Whether this agent looks installed on this machine. */
   detected: boolean
   /** Whether any user or project configuration contains an Axiom MCP entry. */

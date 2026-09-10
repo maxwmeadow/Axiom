@@ -723,7 +723,7 @@
 
 .axiom-connect__surface {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 8px 14px 8px 34px;
@@ -748,12 +748,6 @@
   white-space: nowrap;
 }
 
-/* Keeps a surface with no action aligned with the buttons above and below. */
-.axiom-connect__surface-blank {
-  display: block;
-  width: 1px;
-}
-
 .axiom-connect__surface .axiom-connect__install-result {
   grid-column: 1 / -1;
   margin: 4px 0 0;
@@ -764,4 +758,50 @@
   justify-content: flex-end;
   padding: 8px 14px 10px;
   border-top: 1px solid #e7eae4;
+}
+
+/* Rescan sits above the list, next to the reason someone would want it. */
+.axiom-connect__list-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+
+.axiom-connect__list-hint {
+  color: #6b7a72;
+  font-size: 11px;
+}
+
+.axiom-connect__rescan {
+  padding: 4px 10px;
+  border: 1px solid #c8cec9;
+  border-radius: 4px;
+  background: #f1f3ed;
+  color: #3c4c44;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.axiom-connect__rescan:hover:not(:disabled) {
+  border-color: #7b9489;
+  background: #ffffff;
+  color: #172d24;
+}
+
+.axiom-connect__rescan:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* A surface that rides on another surface's configuration: same light, no
+   button of its own, indented so the relationship reads at a glance. */
+.axiom-connect__surface--shared {
+  padding-left: 50px;
+}
+
+.axiom-connect__surface--shared .axiom-connect__surface-label {
+  color: #5b6a62;
 }

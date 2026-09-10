@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectConfig } from '../../shared/types'
 import type { AgentHostInfo, AgentInstallResult } from '../../../electron/preload'
 import { AgentMascot } from '../components/AgentMascot'
@@ -12,6 +12,23 @@ import {
 
 // Each surface states its own condition in two or three words. The full
 // sentence stays on the dot's tooltip, where it does not crowd the row.
+function surfaceTooltip(host: AgentHostInfo, state: AgentHostState): string {
+  switch (state) {
+    case 'live':
+    case 'installed':
+      return `Configured in ${host.configPath}`
+    case 'repair':
+      return host.unreadablePaths.length > 0
+        ? `Axiom could not read ${host.unreadablePaths.join(', ')}, so it will not overwrite it.`
+        : `Axiom is configured in ${host.configPath}, but its mapping workflow is missing.`
+    case 'available':
+      return `Found on this machine. Axiom will write to ${host.configPath}`
+    default:
+      return `Not found. Axiom looked for ${host.configPath}. `
+        + 'Already have this installed? It may live somewhere Axiom does not check yet - use Rescan after opening it once.'
+  }
+}
+
 const SURFACE_STATE_LABEL: Record<AgentHostState, string> = {
   live: 'Connected',
   installed: 'Installed',
@@ -73,6 +90,7 @@ export function ConnectAgentScreen({
   // Families with more than one modality collapse by default: the row states
   // what it is, and the surfaces underneath are opened deliberately.
   const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(() => new Set())
+  const [rescanning, setRescanning] = useState(false)
   const [hasLivePresence, setHasLivePresence] = useState(false)
   const [liveHostIds, setLiveHostIds] = useState<Set<string>>(() => new Set())
   const [phase, setPhaseState] = useState<Phase>(() => progress.get(project.id) ?? 'waiting')
@@ -189,6 +207,15 @@ export function ConnectAgentScreen({
     : null
 
   const selectedReady = selectedPresentation?.state === 'installed' || selectedPresentation?.state === 'live'
+
+  const rescan = useCallback(async () => {
+    setRescanning(true)
+    try {
+      showHosts(await window.axiom.listAgentHosts(project.rootPath))
+    } finally {
+      setRescanning(false)
+    }
+  }, [showHosts, project.rootPath])
 
   const chooseHost = (hostId: string) => {
     userSelectedHost.current = true
@@ -326,6 +353,20 @@ export function ConnectAgentScreen({
                     : 'Choose the agent and harness you use. Axiom adds its MCP connection and reusable mapping workflows.'}
                 </p>
 
+                <div className="axiom-connect__list-bar">
+                  <span className="axiom-connect__list-hint">
+                    Just installed one of these? Axiom scanned when this screen opened.
+                  </span>
+                  <button
+                    type="button"
+                    className="axiom-connect__rescan"
+                    onClick={() => void rescan()}
+                    disabled={rescanning}
+                  >
+                    {rescanning ? 'Scanning…' : 'Rescan'}
+                  </button>
+                </div>
+
                 <ul className="axiom-connect__families" aria-label="Supported agents and modalities">
                   {families.map(family => {
                     const familyPres = presentAgentFamily(
@@ -388,24 +429,23 @@ export function ConnectAgentScreen({
                               const modalityResult = results[modality.id]
                               const busy = installing === modality.id
                               return (
+                                <Fragment key={modality.id}>
                                 <div
-                                  key={modality.id}
                                   className="axiom-connect__surface"
                                   data-state={pres.state}
                                 >
                                   <span
                                     className="axiom-connect__modality-dot"
                                     data-state={pres.state}
-                                    title={pres.detail}
+                                    title={surfaceTooltip(modality, pres.state)}
                                   />
                                   <span className="axiom-connect__surface-label">
                                     {modality.modalityLabel || modality.label}
                                   </span>
-                                  <span className="axiom-connect__surface-state">
-                                    {SURFACE_STATE_LABEL[pres.state]}
-                                  </span>
                                   {pres.action === 'none' ? (
-                                    <span className="axiom-connect__surface-blank" aria-hidden="true" />
+                                    <span className="axiom-connect__surface-state">
+                                      {SURFACE_STATE_LABEL[pres.state]}
+                                    </span>
                                   ) : (
                                     <button
                                       type="button"
@@ -434,6 +474,27 @@ export function ConnectAgentScreen({
                                     </p>
                                   )}
                                 </div>
+
+                                {modality.sharedSurfaces.map(surface => (
+                                  <div
+                                    key={surface.id}
+                                    className="axiom-connect__surface axiom-connect__surface--shared"
+                                    data-state={pres.state}
+                                  >
+                                    <span
+                                      className="axiom-connect__modality-dot"
+                                      data-state={pres.state}
+                                      title={surfaceTooltip(modality, pres.state)}
+                                    />
+                                    <span className="axiom-connect__surface-label">
+                                      {surface.label}
+                                    </span>
+                                    <span className="axiom-connect__surface-state">
+                                      Uses the {modality.modalityLabel} configuration
+                                    </span>
+                                  </div>
+                                ))}
+                                </Fragment>
                               )
                             })}
 

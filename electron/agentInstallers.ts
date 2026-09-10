@@ -41,6 +41,12 @@ export interface HostDescriptor {
   /** Every user or workspace MCP configuration this host can read. */
   serverLocations: (projectRoot?: string) => ServerLocation[]
   /**
+   * Other surfaces that read this exact configuration. Installing the host
+   * configures these too - they are listed so a user looking for "Claude Code
+   * in VS Code" can see it is handled, rather than concluding it is missing.
+   */
+  sharedSurfaces?: { id: string; label: string }[]
+  /**
    * Paths whose existence proves this host is installed, for hosts whose
    * config sits directly in the home directory and therefore has no
    * distinguishing parent folder of its own.
@@ -363,6 +369,10 @@ export function buildHosts(
       familyLabel: 'Claude',
       modality: 'cli',
       modalityLabel: 'Claude Code (CLI)',
+      sharedSurfaces: [
+        { id: 'claude-code-vscode', label: 'Claude Code in VS Code' },
+        { id: 'claude-code-jetbrains', label: 'Claude Code in JetBrains' },
+      ],
       configPath: () => join(homeDir, '.claude.json'),
       // ~/.claude.json sits directly in the home directory, so its parent
       // proves nothing. The CLI's own ~/.claude directory is the real marker.
@@ -514,9 +524,11 @@ export function buildHosts(
       familyId: 'codex',
       familyLabel: 'OpenAI Codex',
       modality: 'cli',
-      // Codex shares ~/.codex/config.toml across the CLI, the IDE extension
-      // and the desktop app, so installing once covers all three.
-      modalityLabel: 'Codex (CLI, IDE & app)',
+      modalityLabel: 'Codex CLI',
+      sharedSurfaces: [
+        { id: 'codex-ide', label: 'Codex IDE extension' },
+        { id: 'codex-app', label: 'Codex desktop app' },
+      ],
       configPath: () => join(homeDir, '.codex', 'config.toml'),
       serverLocations: projectRoot => [
         { format: 'toml', path: join(homeDir, '.codex', 'config.toml') },
@@ -561,8 +573,8 @@ export function buildHosts(
       familyId: 'cursor',
       familyLabel: 'Cursor',
       modality: 'desktop',
-      // cursor-agent reads the same ~/.cursor/mcp.json as the editor.
-      modalityLabel: 'Cursor (IDE & CLI)',
+      modalityLabel: 'Cursor IDE',
+      sharedSurfaces: [{ id: 'cursor-cli', label: 'cursor-agent CLI' }],
       configPath: () => join(homeDir, '.cursor', 'mcp.json'),
       serverLocations: projectRoot => [
         { format: 'json', path: join(homeDir, '.cursor', 'mcp.json'), keyPath: ['mcpServers'] },
@@ -654,8 +666,8 @@ export function buildHosts(
       familyId: 'antigravity',
       familyLabel: 'Antigravity',
       modality: 'desktop',
-      // Antigravity 2.0, the IDE and the CLI share ~/.gemini/config/mcp_config.json.
-      modalityLabel: 'Antigravity (IDE & CLI)',
+      modalityLabel: 'Antigravity IDE',
+      sharedSurfaces: [{ id: 'antigravity-cli', label: 'Antigravity CLI (agy)' }],
       configPath: () => join(homeDir, '.gemini', 'config', 'mcp_config.json'),
       serverLocations: projectRoot => [
         {

@@ -417,6 +417,7 @@ function setupIPC(): void {
         familyLabel: host.familyLabel,
         modality: host.modality,
         modalityLabel: host.modalityLabel,
+        sharedSurfaces: host.sharedSurfaces ?? [],
         detected: present[host.id] === true,
         configPath: host.configPath(),
         command: host.command ?? null,
