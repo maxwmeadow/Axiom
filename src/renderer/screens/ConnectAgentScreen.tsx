@@ -391,10 +391,15 @@ export function ConnectAgentScreen({
                     className="axiom-connect__rescan"
                     onClick={() => void rescan()}
                     disabled={rescanning}
+                    aria-label="Rescan"
+                    aria-busy={rescanning}
                   >
-                    {rescanning
-                      ? (<><span className="axiom-connect__rescan-spinner" aria-hidden="true" />Scanning…</>)
-                      : 'Rescan'}
+                    <span className="axiom-connect__rescan-label" data-busy={rescanning}>
+                      Rescan
+                    </span>
+                    {rescanning && (
+                      <span className="axiom-connect__rescan-spinner" aria-hidden="true" />
+                    )}
                   </button>
                 </div>
 
