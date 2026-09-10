@@ -42,16 +42,63 @@ export function getPlatformPaths(
 }
 
 /**
- * Returns the platform-specific path for Claude Desktop's MCP configuration.
+ * Every place Claude Desktop might keep its MCP configuration, best first.
+ *
+ * Windows has two installers that do not agree. The Win32 build reads
+ * %APPDATA%\Claude. The MSIX / Microsoft Store build is a packaged app: its
+ * writes are redirected into a per-package sandbox, so the real file sits under
+ * %LOCALAPPDATA%\Packages\Claude_<identity>\LocalCache\Roaming\Claude and
+ * %APPDATA%\Claude never appears at all. Checking only the roaming path
+ * reports Claude Desktop missing on a Store install, and installing there
+ * writes a file the app will never read.
+ */
+export function getClaudeDesktopConfigCandidates(
+  homeDir = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+  explicitAppDataDir?: string,
+  localAppDataDir?: string,
+): string[] {
+  const paths = getPlatformPaths(homeDir, platform)
+  const roaming = join(explicitAppDataDir ?? paths.appDataDir, 'Claude', 'claude_desktop_config.json')
+  if (!paths.isWin) return [roaming]
+
+  const localAppData = localAppDataDir
+    ?? process.env.LOCALAPPDATA
+    ?? join(homeDir, 'AppData', 'Local')
+  const packagesRoot = join(localAppData, 'Packages')
+
+  const sandboxed: string[] = []
+  try {
+    for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
+      // The identity hash differs per machine, so the family name is matched
+      // by prefix rather than hardcoded.
+      if (!entry.isDirectory() || !entry.name.startsWith('Claude_')) continue
+      sandboxed.push(join(
+        packagesRoot, entry.name, 'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json',
+      ))
+    }
+  } catch {
+    // No Packages directory, or no permission: only the Win32 path applies.
+  }
+
+  return [...sandboxed, roaming]
+}
+
+/**
+ * Where Claude Desktop's MCP configuration should be read and written. An
+ * install that already exists wins over the default, because writing to the
+ * wrong one of the two Windows locations is silently ineffective.
  */
 export function getClaudeDesktopConfigPath(
   homeDir = os.homedir(),
   platform: NodeJS.Platform = process.platform,
   explicitAppDataDir?: string,
+  localAppDataDir?: string,
 ): string {
-  const paths = getPlatformPaths(homeDir, platform)
-  const appData = explicitAppDataDir ?? paths.appDataDir
-  return join(appData, 'Claude', 'claude_desktop_config.json')
+  const candidates = getClaudeDesktopConfigCandidates(homeDir, platform, explicitAppDataDir, localAppDataDir)
+  return candidates.find(candidate => existsSync(candidate))
+    ?? candidates.find(candidate => existsSync(join(candidate, '..')))
+    ?? candidates[candidates.length - 1]
 }
 
 /**

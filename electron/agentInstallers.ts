@@ -3,6 +3,7 @@ import os from 'os'
 import fs from 'fs'
 import {
   getPlatformPaths,
+  getClaudeDesktopConfigCandidates,
   getClaudeDesktopConfigPath,
   getVsCodeUserMcpPath,
   getZedConfigPath,

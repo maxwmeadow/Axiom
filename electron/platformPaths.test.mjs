@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import {
   getPlatformPaths,
+  getClaudeDesktopConfigCandidates,
   getClaudeDesktopConfigPath,
   getVsCodeUserMcpPath,
   getZedConfigPath,
@@ -115,4 +116,65 @@ test('node resolution finds each version manager layout, not just fnm', () => {
   const fnmHome = fs.mkdtempSync(path.join(os.tmpdir(), 'axiom-fnm-'))
   const fnm = makeNode(fnmHome, '.local', 'share', 'fnm', 'aliases', 'default', 'bin', 'node')
   assert.equal(resolveNodeCommand(fnmHome, 'linux'), fnm)
+})
+
+test('Claude Desktop on Windows finds the Store install, not just the Win32 one', () => {
+  // Two installers, two locations. The MSIX/Store build is sandboxed: its
+  // config lives under a per-package LocalCache and %APPDATA%\Claude is never
+  // created, so checking only the roaming path reports it missing and installs
+  // a file the app will not read.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-win-'))
+  const appData = path.join(home, 'AppData', 'Roaming')
+  const localAppData = path.join(home, 'AppData', 'Local')
+
+  const roaming = path.join(appData, 'Claude', 'claude_desktop_config.json')
+  const packaged = path.join(
+    localAppData, 'Packages', 'Claude_pzs8sxrjxfjjc',
+    'LocalCache', 'Roaming', 'Claude', 'claude_desktop_config.json',
+  )
+
+  // Nothing installed: the roaming path is the default to write to.
+  assert.equal(
+    getClaudeDesktopConfigPath(home, 'win32', appData, localAppData),
+    roaming,
+    'with no install, fall back to the Win32 location',
+  )
+
+  // A Store install exists and the Win32 one does not.
+  fs.mkdirSync(path.dirname(packaged), { recursive: true })
+  const candidates = getClaudeDesktopConfigCandidates(home, 'win32', appData, localAppData)
+  assert.ok(candidates.includes(packaged), 'the packaged path must be a candidate')
+  assert.ok(candidates.includes(roaming), 'the Win32 path must remain a candidate')
+  assert.equal(
+    getClaudeDesktopConfigPath(home, 'win32', appData, localAppData),
+    packaged,
+    'an existing Store install must win over the unused roaming default',
+  )
+
+  // With a real config file on the Win32 side and only an empty package
+  // directory on the Store side, the file wins: a written configuration is
+  // stronger evidence of the install in use than a folder that exists.
+  fs.mkdirSync(path.dirname(roaming), { recursive: true })
+  fs.writeFileSync(roaming, '{}')
+  assert.equal(
+    getClaudeDesktopConfigPath(home, 'win32', appData, localAppData),
+    roaming,
+    'an existing config file outranks a bare package directory',
+  )
+
+  // Once the Store install has a config of its own, it leads again.
+  fs.writeFileSync(packaged, '{}')
+  assert.equal(
+    getClaudeDesktopConfigPath(home, 'win32', appData, localAppData),
+    packaged,
+    'a packaged config file is preferred over the roaming one',
+  )
+})
+
+test('Claude Desktop keeps a single location on macOS and Linux', () => {
+  const home = '/Users/dev'
+  assert.deepEqual(
+    getClaudeDesktopConfigCandidates(home, 'darwin', path.join(home, 'Library', 'Application Support')),
+    [path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')],
+  )
 })

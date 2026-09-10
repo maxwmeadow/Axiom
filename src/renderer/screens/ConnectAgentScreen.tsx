@@ -12,6 +12,8 @@ import {
 
 // Each surface states its own condition in two or three words. The full
 // sentence stays on the dot's tooltip, where it does not crowd the row.
+const RESCAN_MINIMUM_MS = 900
+
 function surfaceTooltip(host: AgentHostInfo, state: AgentHostState): string {
   switch (state) {
     case 'live':
@@ -24,7 +26,7 @@ function surfaceTooltip(host: AgentHostInfo, state: AgentHostState): string {
     case 'available':
       return `Found on this machine. Axiom will write to ${host.configPath}`
     default:
-      return `Not found. Axiom looked for ${host.configPath}. `
+      return `Not found on this machine. Axiom looked for ${host.configPath}. `
         + 'Already have this installed? It may live somewhere Axiom does not check yet - use Rescan after opening it once.'
   }
 }
@@ -210,9 +212,15 @@ export function ConnectAgentScreen({
 
   const rescan = useCallback(async () => {
     setRescanning(true)
+    const startedAt = Date.now()
     try {
       showHosts(await window.axiom.listAgentHosts(project.rootPath))
     } finally {
+      // Scanning is a handful of existsSync calls and finishes far too fast to
+      // see. Without a floor the button appears inert, and the user cannot
+      // tell a completed scan from a dead control.
+      const remaining = RESCAN_MINIMUM_MS - (Date.now() - startedAt)
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining))
       setRescanning(false)
     }
   }, [showHosts, project.rootPath])
@@ -355,7 +363,7 @@ export function ConnectAgentScreen({
 
                 <div className="axiom-connect__list-bar">
                   <span className="axiom-connect__list-hint">
-                    Just installed one of these? Axiom scanned when this screen opened.
+                    Axiom scans the machine it is running on. Installed something since this screen opened?
                   </span>
                   <button
                     type="button"
@@ -363,7 +371,9 @@ export function ConnectAgentScreen({
                     onClick={() => void rescan()}
                     disabled={rescanning}
                   >
-                    {rescanning ? 'Scanning…' : 'Rescan'}
+                    {rescanning
+                      ? (<><span className="axiom-connect__rescan-spinner" aria-hidden="true" />Scanning…</>)
+                      : 'Rescan'}
                   </button>
                 </div>
 

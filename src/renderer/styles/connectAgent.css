@@ -805,3 +805,34 @@
 .axiom-connect__surface--shared .axiom-connect__surface-label {
   color: #5b6a62;
 }
+
+/* Rescan spinner. The scan itself is near-instant, so this is the only thing
+   telling the user the button did something. */
+.axiom-connect__rescan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.axiom-connect__rescan-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #c8cec9;
+  border-top-color: #34735f;
+  border-radius: 50%;
+  animation: axiom-rescan-spin 700ms linear infinite;
+}
+
+@keyframes axiom-rescan-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Motion is the signal here, so when it is unwelcome the border still reads as
+   busy without rotating. */
+@media (prefers-reduced-motion: reduce) {
+  .axiom-connect__rescan-spinner {
+    animation: none;
+    border-top-color: #34735f;
+    opacity: 0.7;
+  }
+}
