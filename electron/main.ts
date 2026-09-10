@@ -7,6 +7,7 @@ import type { ProjectConfig, WsMessage } from '../src/shared/types'
 import { completeSourceBoundaries, mergePersistedProjectConfig } from '../src/shared/projectLifecycle'
 import { buildHosts, detectHosts, inspectHostConfiguration, installFamily } from './agentInstallers'
 import { resolveNodeCommand } from './platformPaths'
+import { readOverrides, setOverride, clearOverride } from './agentOverrides'
 import {
   createProjectId,
   findProjectByRoot,
@@ -407,8 +408,9 @@ function setupIPC(): void {
 
   // Which agents are on this machine, and what each install would touch.
   ipcMain.handle('agent:hosts', (_event, projectRoot?: string) => {
-    const present = detectHosts()
-    return buildHosts().map(host => {
+    const overrides = readOverrides(CONFIG_DIR)
+    const present = detectHosts(undefined, undefined, process.platform, overrides)
+    return buildHosts(undefined, undefined, process.platform, overrides).map(host => {
       const configuration = inspectHostConfiguration(host, projectRoot)
       return {
         id: host.id,
@@ -420,6 +422,7 @@ function setupIPC(): void {
         sharedSurfaces: host.sharedSurfaces ?? [],
         detected: present[host.id] === true,
         configPath: host.configPath(),
+        configOverride: overrides[host.id] ?? null,
         command: host.command ?? null,
         triggerKind: host.triggerKind,
         promptText: host.promptText,
@@ -432,7 +435,8 @@ function setupIPC(): void {
 
   // Install Axiom into one agent modality.
   ipcMain.handle('agent:install', (_event, hostId: string, projectRoot?: string) => {
-    const host = buildHosts().find(candidate => candidate.id === hostId)
+    const host = buildHosts(undefined, undefined, process.platform, readOverrides(CONFIG_DIR))
+      .find(candidate => candidate.id === hostId)
     if (!host) return { ok: false, detail: `Unknown agent "${hostId}".`, paths: [] }
     const mcpPath = app.isPackaged
       ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
@@ -476,6 +480,30 @@ function setupIPC(): void {
   // user needs is a server entry naming this install - never a URL. The old
   // invitation copied http://127.0.0.1:7743/mcp, which archd does not serve and
   // never did, so following the app's own instruction could not work.
+  // Point Axiom at a configuration file it could not find on its own.
+  ipcMain.handle('agent:locate', async (_event, hostId: string) => {
+    const host = buildHosts(undefined, undefined, process.platform, readOverrides(CONFIG_DIR))
+      .find(candidate => candidate.id === hostId)
+    if (!host) return { ok: false, detail: `Unknown agent "${hostId}".` }
+
+    const suggested = host.configPath()
+    const extension = suggested.split('.').pop() ?? ''
+    const result = await dialog.showOpenDialog({
+      title: `Locate the configuration file for ${host.modalityLabel || host.label}`,
+      defaultPath: fs.existsSync(join(suggested, '..')) ? join(suggested, '..') : os.homedir(),
+      properties: ['openFile', 'showHiddenFiles'],
+      filters: extension
+        ? [{ name: `${extension.toUpperCase()} files`, extensions: [extension] }, { name: 'All files', extensions: ['*'] }]
+        : [{ name: 'All files', extensions: ['*'] }],
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, detail: 'Cancelled.' }
+    }
+    return setOverride(CONFIG_DIR, hostId, result.filePaths[0])
+  })
+
+  ipcMain.handle('agent:clear-override', (_event, hostId: string) => clearOverride(CONFIG_DIR, hostId))
+
   ipcMain.handle('agent:connection', () => {
     const mcpPath = app.isPackaged
       ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')

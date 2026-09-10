@@ -353,13 +353,41 @@ export function inspectHostConfiguration(
   }
 }
 
+/** A user-supplied config location for a host Axiom could not find itself. */
+export type ConfigOverrides = Record<string, string>
+
 export function buildHosts(
   homeDir = home(),
   explicitAppDataDir?: string,
   platform: NodeJS.Platform = process.platform,
+  overrides: ConfigOverrides = {},
 ): HostDescriptor[] {
   const paths = getPlatformPaths(homeDir, platform)
   const appDataDir = explicitAppDataDir ?? paths.appDataDir
+
+  // One resolver for both halves of a host. Detection, inspection and install
+  // have to agree on the file: an override that moved only the first would
+  // report a tool configured while writing somewhere it never reads.
+  const primary = (hostId: string, fallback: string): string => overrides[hostId] ?? fallback
+
+  const claudeCodeConfig = primary('claude-code', join(homeDir, '.claude.json'))
+  const claudeDesktopConfig = primary(
+    'claude-desktop', getClaudeDesktopConfigPath(homeDir, platform, appDataDir),
+  )
+  const copilotVsCodeConfig = primary('copilot', getVsCodeUserMcpPath(homeDir, platform, false, appDataDir))
+  const copilotCliConfig = primary('copilot-cli', join(homeDir, '.copilot', 'mcp-config.json'))
+  const codexConfig = primary('codex', join(homeDir, '.codex', 'config.toml'))
+  const cursorConfig = primary('cursor', join(homeDir, '.cursor', 'mcp.json'))
+  const windsurfConfig = primary('windsurf', join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'))
+  const antigravityConfig = primary('antigravity', join(homeDir, '.gemini', 'config', 'mcp_config.json'))
+  const zedConfig = primary('zed', getZedConfigPath(homeDir, platform, appDataDir))
+  const jetbrainsDirectories = findJetBrainsDirectories(homeDir, platform, appDataDir)
+  const jetbrainsConfig = primary(
+    'jetbrains',
+    jetbrainsDirectories[0]
+      ? join(jetbrainsDirectories[0], 'options', 'llm.mcpServers.xml')
+      : join(appDataDir, 'JetBrains', 'options', 'llm.mcpServers.xml'),
+  )
 
   return [
     // ── Anthropic Claude Family ──────────────────────────────────────────────
@@ -374,7 +402,7 @@ export function buildHosts(
         { id: 'claude-code-vscode', label: 'Claude Code in VS Code' },
         { id: 'claude-code-jetbrains', label: 'Claude Code in JetBrains' },
       ],
-      configPath: () => join(homeDir, '.claude.json'),
+      configPath: () => claudeCodeConfig,
       // ~/.claude.json sits directly in the home directory, so its parent
       // proves nothing. The CLI's own ~/.claude directory is the real marker.
       detectPaths: () => [join(homeDir, '.claude')],
@@ -400,7 +428,7 @@ export function buildHosts(
       restartDetail: 'Close the existing terminal session and run claude in a new one, or run /skills reload.',
       install: (command, args, brief) => {
         const hostArgs = identifiedArgs(args, 'claude-code')
-        const result = installJsonServer(join(homeDir, '.claude.json'), 'mcpServers', command, hostArgs, 'Claude Code')
+        const result = installJsonServer(claudeCodeConfig, 'mcpServers', command, hostArgs, 'Claude Code')
         if (!result.ok) return result
         const cmd = installAgentSkill(join(homeDir, '.claude', 'skills', 'axiom-map', 'SKILL.md'), brief)
         return {
@@ -417,7 +445,7 @@ export function buildHosts(
       familyLabel: 'Claude',
       modality: 'desktop',
       modalityLabel: 'Claude Desktop (App)',
-      configPath: () => getClaudeDesktopConfigPath(homeDir, platform, appDataDir),
+      configPath: () => claudeDesktopConfig,
       serverLocations: () => [
         { format: 'json', path: getClaudeDesktopConfigPath(homeDir, platform, appDataDir), keyPath: ['mcpServers'] },
       ],
@@ -428,7 +456,7 @@ export function buildHosts(
       restartDetail: 'Fully quit Claude Desktop (Cmd+Q on macOS, Alt+F4 on Windows) and relaunch it.',
       install: (command, args) => {
         const hostArgs = identifiedArgs(args, 'claude-desktop')
-        const target = getClaudeDesktopConfigPath(homeDir, platform, appDataDir)
+        const target = claudeDesktopConfig
         const result = installJsonServer(target, 'mcpServers', command, hostArgs, 'Claude Desktop')
         if (!result.ok) return result
         return {
@@ -447,7 +475,7 @@ export function buildHosts(
       familyLabel: 'GitHub Copilot',
       modality: 'vscode',
       modalityLabel: 'VS Code Extension',
-      configPath: () => getVsCodeUserMcpPath(homeDir, platform, false, appDataDir),
+      configPath: () => copilotVsCodeConfig,
       serverLocations: projectRoot => [
         { format: 'json', path: getVsCodeUserMcpPath(homeDir, platform, false, appDataDir), keyPath: ['servers'] },
         { format: 'json', path: getVsCodeUserMcpPath(homeDir, platform, true, appDataDir), keyPath: ['servers'] },
@@ -467,7 +495,7 @@ export function buildHosts(
       restartDetail: 'Press Cmd+Shift+P (or Ctrl+Shift+P) and run "Developer: Reload Window".',
       install: (command, args, brief, projectRoot) => {
         const hostArgs = identifiedArgs(args, 'copilot')
-        const userMcp = getVsCodeUserMcpPath(homeDir, platform, false, appDataDir)
+        const userMcp = copilotVsCodeConfig
         const user = installJsonServer(userMcp, 'servers', command, hostArgs, 'VS Code User MCP')
         const paths = [...user.paths]
         let configured = user.ok
@@ -496,7 +524,7 @@ export function buildHosts(
       familyLabel: 'GitHub Copilot',
       modality: 'cli',
       modalityLabel: 'Copilot CLI',
-      configPath: () => join(homeDir, '.copilot', 'mcp-config.json'),
+      configPath: () => copilotCliConfig,
       serverLocations: () => [
         { format: 'json', path: join(homeDir, '.copilot', 'mcp-config.json'), keyPath: ['mcpServers'] },
       ],
@@ -507,7 +535,7 @@ export function buildHosts(
       restartDetail: 'Run /skills reload in Copilot CLI, or exit and start a new terminal session.',
       install: (command, args, brief) => {
         const hostArgs = identifiedArgs(args, 'copilot-cli')
-        const user = installJsonServer(join(homeDir, '.copilot', 'mcp-config.json'), 'mcpServers', command, hostArgs, 'Copilot CLI')
+        const user = installJsonServer(copilotCliConfig, 'mcpServers', command, hostArgs, 'Copilot CLI')
         const paths = [...user.paths]
         paths.push(installAgentSkill(join(homeDir, '.copilot', 'skills', 'axiom-map', 'SKILL.md'), brief))
         return {
@@ -530,9 +558,9 @@ export function buildHosts(
         { id: 'codex-ide', label: 'Codex IDE extension' },
         { id: 'codex-app', label: 'Codex desktop app' },
       ],
-      configPath: () => join(homeDir, '.codex', 'config.toml'),
+      configPath: () => codexConfig,
       serverLocations: projectRoot => [
-        { format: 'toml', path: join(homeDir, '.codex', 'config.toml') },
+        { format: 'toml', path: codexConfig },
         ...(projectRoot
           ? [{ format: 'toml' as const, path: join(projectRoot, '.codex', 'config.toml') }]
           : []),
@@ -543,7 +571,7 @@ export function buildHosts(
       restartAction: 'Start fresh Codex session',
       restartDetail: 'Exit the current terminal session and launch codex in your project.',
       install: (command, args, brief) => {
-        const path = join(homeDir, '.codex', 'config.toml')
+        const path = codexConfig
         fs.mkdirSync(join(homeDir, '.codex'), { recursive: true })
         const existing = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : ''
         const hostArgs = identifiedArgs(args, 'codex')
@@ -576,7 +604,7 @@ export function buildHosts(
       modality: 'desktop',
       modalityLabel: 'Cursor IDE',
       sharedSurfaces: [{ id: 'cursor-cli', label: 'cursor-agent CLI' }],
-      configPath: () => join(homeDir, '.cursor', 'mcp.json'),
+      configPath: () => cursorConfig,
       serverLocations: projectRoot => [
         { format: 'json', path: join(homeDir, '.cursor', 'mcp.json'), keyPath: ['mcpServers'] },
         ...(projectRoot
@@ -590,7 +618,7 @@ export function buildHosts(
       restartDetail: 'Press Cmd+Shift+P (or Ctrl+Shift+P) and run "Developer: Reload Window" or restart Cursor.',
       install: (command, args, brief, projectRoot) => {
         const hostArgs = identifiedArgs(args, 'cursor')
-        const global = installJsonServer(join(homeDir, '.cursor', 'mcp.json'), 'mcpServers', command, hostArgs, 'Cursor')
+        const global = installJsonServer(cursorConfig, 'mcpServers', command, hostArgs, 'Cursor')
         const paths = [...global.paths]
         let configured = global.ok
         if (projectRoot) {
@@ -616,7 +644,7 @@ export function buildHosts(
       familyLabel: 'Windsurf',
       modality: 'desktop',
       modalityLabel: 'Windsurf IDE',
-      configPath: () => join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'),
+      configPath: () => windsurfConfig,
       serverLocations: projectRoot => [
         {
           format: 'json',
@@ -642,7 +670,7 @@ export function buildHosts(
       install: (command, args, brief) => {
         const hostArgs = identifiedArgs(args, 'windsurf')
         const cascade = installJsonServer(
-          join(homeDir, '.codeium', 'windsurf', 'mcp_config.json'),
+          windsurfConfig,
           'mcpServers', command, hostArgs, 'Windsurf Cascade',
         )
         const devin = installJsonServer(
@@ -669,7 +697,7 @@ export function buildHosts(
       modality: 'desktop',
       modalityLabel: 'Antigravity IDE',
       sharedSurfaces: [{ id: 'antigravity-cli', label: 'Antigravity CLI (agy)' }],
-      configPath: () => join(homeDir, '.gemini', 'config', 'mcp_config.json'),
+      configPath: () => antigravityConfig,
       serverLocations: projectRoot => [
         {
           format: 'json',
@@ -695,7 +723,7 @@ export function buildHosts(
       install: (command, args, brief, projectRoot) => {
         const hostArgs = identifiedArgs(args, 'antigravity')
         const global = installJsonServer(
-          join(homeDir, '.gemini', 'config', 'mcp_config.json'),
+          antigravityConfig,
           'mcpServers', command, hostArgs, 'Antigravity',
         )
         const paths = [...global.paths]
@@ -733,10 +761,7 @@ export function buildHosts(
       familyLabel: 'JetBrains',
       modality: 'editor',
       modalityLabel: 'JetBrains AI Assistant',
-      configPath: () => {
-        const dirs = findJetBrainsDirectories(homeDir, platform, appDataDir)
-        return dirs[0] ? join(dirs[0], 'options', 'llm.mcpServers.xml') : join(appDataDir, 'JetBrains', 'options', 'llm.mcpServers.xml')
-      },
+      configPath: () => jetbrainsConfig,
       serverLocations: () => {
         const dirs = findJetBrainsDirectories(homeDir, platform, appDataDir)
         const fallback = join(appDataDir, 'JetBrains', 'options', 'llm.mcpServers.xml')
@@ -753,7 +778,19 @@ export function buildHosts(
       restartDetail: 'Restart your JetBrains IDE (IntelliJ, WebStorm, PyCharm) or open Settings > Tools > AI Assistant > MCP Servers.',
       install: (command, args) => {
         const hostArgs = identifiedArgs(args, 'jetbrains')
-        const dirs = findJetBrainsDirectories(homeDir, platform, appDataDir)
+        // A user who pointed Axiom at a specific IDE profile means that one,
+        // not every profile discovery happens to turn up.
+        if (overrides.jetbrains) {
+          const res = upsertJetBrainsXml(jetbrainsConfig, command, hostArgs)
+          return {
+            ok: res.ok,
+            detail: res.ok
+              ? `Configured Axiom for JetBrains AI Assistant at ${jetbrainsConfig}.`
+              : res.detail,
+            paths: res.paths,
+          }
+        }
+        const dirs = jetbrainsDirectories
         const paths: string[] = []
         let ok = false
 
@@ -787,7 +824,7 @@ export function buildHosts(
       familyLabel: 'Zed',
       modality: 'editor',
       modalityLabel: 'Zed Editor',
-      configPath: () => getZedConfigPath(homeDir, platform, appDataDir),
+      configPath: () => zedConfig,
       serverLocations: () => [
         { format: 'json', path: getZedConfigPath(homeDir, platform, appDataDir), keyPath: ['context_servers'] },
       ],
@@ -798,7 +835,7 @@ export function buildHosts(
       restartDetail: 'Restart Zed or open Settings -> AI -> MCP Servers to verify the active connection.',
       install: (command, args) => {
         const hostArgs = identifiedArgs(args, 'zed')
-        const target = getZedConfigPath(homeDir, platform, appDataDir)
+        const target = zedConfig
         // Zed ignores a manually added context server unless it declares
         // source: "custom". Without this the write succeeds, the file looks
         // right, and Zed silently never loads Axiom.
@@ -823,10 +860,11 @@ export function detectHosts(
   homeDir = home(),
   explicitAppDataDir?: string,
   platform: NodeJS.Platform = process.platform,
+  overrides: ConfigOverrides = {},
 ): Record<string, boolean> {
   const seen: Record<string, boolean> = {}
   const homeResolved = resolve(homeDir)
-  for (const host of buildHosts(homeDir, explicitAppDataDir, platform)) {
+  for (const host of buildHosts(homeDir, explicitAppDataDir, platform, overrides)) {
     const configPath = host.configPath()
     const parent = resolve(join(configPath, '..'))
     // A config folder of the host's own (~/.codex, ~/.cursor) is good evidence

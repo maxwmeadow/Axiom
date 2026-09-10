@@ -60,6 +60,10 @@ contextBridge.exposeInMainWorld('axiom', {
   // Install all detected modalities for an agent family in one click
   installFamily: (familyId: string, projectRoot?: string): Promise<AgentInstallResult> =>
     ipcRenderer.invoke('agent:install-family', familyId, projectRoot),
+  locateAgentHost: (hostId: string): Promise<AgentOverrideResult> =>
+    ipcRenderer.invoke('agent:locate', hostId),
+  clearAgentHostOverride: (hostId: string): Promise<AgentOverrideResult> =>
+    ipcRenderer.invoke('agent:clear-override', hostId),
 
   // Listen for messages from archd (forwarded by main process)
   onArchdMessage: (callback: (msg: WsMessage) => void) => {
@@ -89,11 +93,19 @@ export interface AgentHostInfo {
   workflowInstalled: boolean
   workflowPath: string | null
   configPath: string
+  /** Set when the user pointed Axiom at this file themselves. */
+  configOverride: string | null
   command: string | null
   triggerKind: 'slash command' | 'skill command' | 'instruction' | 'chat prompt'
   promptText?: string
   restartAction: string
   restartDetail: string
+}
+
+export interface AgentOverrideResult {
+  ok: boolean
+  detail: string
+  path?: string
 }
 
 export interface AgentInstallResult {
@@ -132,6 +144,8 @@ declare global {
       listAgentHosts: (projectRoot?: string) => Promise<AgentHostInfo[]>
       installAgent: (hostId: string, projectRoot?: string) => Promise<AgentInstallResult>
       installFamily: (familyId: string, projectRoot?: string) => Promise<AgentInstallResult>
+      locateAgentHost: (hostId: string) => Promise<AgentOverrideResult>
+      clearAgentHostOverride: (hostId: string) => Promise<AgentOverrideResult>
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void
     }

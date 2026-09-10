@@ -93,6 +93,7 @@ export function ConnectAgentScreen({
   // what it is, and the surfaces underneath are opened deliberately.
   const [expandedFamilies, setExpandedFamilies] = useState<Set<string>>(() => new Set())
   const [rescanning, setRescanning] = useState(false)
+  const [locateNotices, setLocateNotices] = useState<Record<string, string>>({})
   const [hasLivePresence, setHasLivePresence] = useState(false)
   const [liveHostIds, setLiveHostIds] = useState<Set<string>>(() => new Set())
   const [phase, setPhaseState] = useState<Phase>(() => progress.get(project.id) ?? 'waiting')
@@ -223,6 +224,26 @@ export function ConnectAgentScreen({
       if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining))
       setRescanning(false)
     }
+  }, [showHosts, project.rootPath])
+
+  // Detection is guesswork about paths; this is how a user corrects it.
+  const locateHost = useCallback(async (host: AgentHostInfo) => {
+    const outcome = await window.axiom.locateAgentHost(host.id)
+    if (outcome.ok) {
+      setLocateNotices(previous => ({ ...previous, [host.id]: outcome.detail }))
+      showHosts(await window.axiom.listAgentHosts(project.rootPath))
+      return
+    }
+    // A cancelled dialog is not an error worth reporting back.
+    if (outcome.detail !== 'Cancelled.') {
+      setLocateNotices(previous => ({ ...previous, [host.id]: outcome.detail }))
+    }
+  }, [showHosts, project.rootPath])
+
+  const clearHostOverride = useCallback(async (host: AgentHostInfo) => {
+    const outcome = await window.axiom.clearAgentHostOverride(host.id)
+    setLocateNotices(previous => ({ ...previous, [host.id]: outcome.detail }))
+    showHosts(await window.axiom.listAgentHosts(project.rootPath))
   }, [showHosts, project.rootPath])
 
   const chooseHost = (hostId: string) => {
@@ -452,28 +473,63 @@ export function ConnectAgentScreen({
                                   <span className="axiom-connect__surface-label">
                                     {modality.modalityLabel || modality.label}
                                   </span>
-                                  {pres.action === 'none' ? (
-                                    <span className="axiom-connect__surface-state">
-                                      {SURFACE_STATE_LABEL[pres.state]}
+                                  <span className="axiom-connect__surface-actions">
+                                    {pres.action === 'none' ? (
+                                      <span className="axiom-connect__surface-state">
+                                        {SURFACE_STATE_LABEL[pres.state]}
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        className="axiom-connect__install"
+                                        disabled={busy}
+                                        onClick={() => {
+                                          chooseHost(modality.id)
+                                          void installHost(modality)
+                                        }}
+                                      >
+                                        {busy
+                                          ? 'Working…'
+                                          : pres.action === 'install'
+                                            ? 'Install'
+                                            : pres.action === 'repair'
+                                              ? 'Repair'
+                                              : 'Reinstall'}
+                                      </button>
+                                    )}
+
+                                    {/* "Not found" should never be the end of
+                                        the conversation - the tool may simply
+                                        live somewhere Axiom does not know. */}
+                                    {modality.configOverride ? (
+                                      <button
+                                        type="button"
+                                        className="axiom-connect__surface-locate"
+                                        onClick={() => void clearHostOverride(modality)}
+                                      >
+                                        Clear
+                                      </button>
+                                    ) : pres.state === 'missing' ? (
+                                      <button
+                                        type="button"
+                                        className="axiom-connect__surface-locate"
+                                        onClick={() => void locateHost(modality)}
+                                      >
+                                        Locate…
+                                      </button>
+                                    ) : null}
+                                  </span>
+
+                                  {modality.configOverride && (
+                                    <span className="axiom-connect__surface-override">
+                                      Using {modality.configOverride}
                                     </span>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      className="axiom-connect__install"
-                                      disabled={busy}
-                                      onClick={() => {
-                                        chooseHost(modality.id)
-                                        void installHost(modality)
-                                      }}
-                                    >
-                                      {busy
-                                        ? 'Working…'
-                                        : pres.action === 'install'
-                                          ? 'Install'
-                                          : pres.action === 'repair'
-                                            ? 'Repair'
-                                            : 'Reinstall'}
-                                    </button>
+                                  )}
+
+                                  {locateNotices[modality.id] && (
+                                    <span className="axiom-connect__surface-override">
+                                      {locateNotices[modality.id]}
+                                    </span>
                                   )}
                                   {modalityResult && (
                                     <p

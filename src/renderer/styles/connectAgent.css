@@ -836,3 +836,38 @@
     opacity: 0.7;
   }
 }
+
+/* Actions sit together at the end of a surface row: the primary install, plus
+   the escape hatch when Axiom guessed the location wrong. */
+.axiom-connect__surface-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.axiom-connect__surface-locate {
+  padding: 3px 8px;
+  border: 1px solid #c8cec9;
+  border-radius: 4px;
+  background: transparent;
+  color: #5b6a62;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.axiom-connect__surface-locate:hover {
+  border-color: #7b9489;
+  background: #ffffff;
+  color: #172d24;
+}
+
+/* The chosen path, and any message from choosing it, run under the row rather
+   than squeezing the columns. */
+.axiom-connect__surface-override {
+  grid-column: 1 / -1;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: #6b7a72;
+  font-size: 10.5px;
+}

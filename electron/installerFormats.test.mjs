@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { buildHosts, detectHosts } from './agentInstallers.ts'
+import { readOverrides, setOverride, clearOverride } from './agentOverrides.ts'
 
 /**
  * These expectations are written from each tool's own documentation, never
@@ -94,3 +95,62 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     assert.equal(detected.cursor, false, 'Cursor was not installed and must stay undetected')
   })
 }
+
+test('a located config moves detection and the install together', () => {
+  // The failure this guards: an override that reroutes only configPath would
+  // report a host configured while the installer wrote somewhere else. Every
+  // host resolves through one path, so both halves have to follow it.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ovr-home-'))
+  const appData = fs.mkdtempSync(path.join(os.tmpdir(), 'ovr-appdata-'))
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'ovr-elsewhere-'))
+
+  const located = path.join(elsewhere, 'claude_desktop_config.json')
+  fs.writeFileSync(located, JSON.stringify({ mcpServers: { existing: { command: 'keep-me' } } }))
+
+  const overrides = { 'claude-desktop': located }
+  const host = buildHosts(home, appData, 'win32', overrides).find(h => h.id === 'claude-desktop')
+
+  assert.equal(host.configPath(), located, 'configPath must follow the override')
+
+  const result = host.install(NODE, [MCP], '# brief', undefined)
+  assert.equal(result.ok, true, result.detail)
+
+  const written = JSON.parse(fs.readFileSync(located, 'utf8'))
+  assert.ok(written.mcpServers.axiom, 'the install must land in the located file')
+  assert.ok(written.mcpServers.existing, 'and must not discard what was already there')
+
+  const defaultPath = path.join(appData, 'Claude', 'claude_desktop_config.json')
+  assert.equal(fs.existsSync(defaultPath), false, 'nothing may be written to the guessed path')
+
+  assert.equal(
+    detectHosts(home, appData, 'win32', overrides)['claude-desktop'],
+    true,
+    'a located host must read as present',
+  )
+})
+
+test('an override survives only while the file it names does', () => {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ovr-store-'))
+  const target = path.join(configDir, 'somewhere.json')
+  fs.writeFileSync(target, '{}')
+
+  assert.equal(setOverride(configDir, 'zed', target).ok, true)
+  assert.deepEqual(readOverrides(configDir), { zed: target })
+
+  // Pointing at something that is not there must be refused outright.
+  const missing = setOverride(configDir, 'cursor', path.join(configDir, 'nope.json'))
+  assert.equal(missing.ok, false)
+
+  // A folder is not a configuration file.
+  assert.equal(setOverride(configDir, 'cursor', configDir).ok, false)
+
+  // A file deleted after the fact is dropped rather than pinning the host to
+  // a path that can no longer be read or written.
+  fs.rmSync(target)
+  assert.deepEqual(readOverrides(configDir), {})
+
+  fs.writeFileSync(target, '{}')
+  setOverride(configDir, 'zed', target)
+  clearOverride(configDir, 'zed')
+  assert.deepEqual(readOverrides(configDir), {})
+})
