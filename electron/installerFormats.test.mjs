@@ -19,6 +19,24 @@ const MCP = '/opt/axiom/mcp/axiom-mcp.mjs'
 
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'))
 
+/**
+ * Every path here is meant to sit under an injected temp home. Zed's Linux
+ * location resolves through XDG_CONFIG_HOME, which GitHub's Ubuntu image sets,
+ * so leaving it in place lets these tests read - and write - the real machine:
+ * detection reports whatever is actually installed, and the install test
+ * rewrites a developer's own Zed settings.
+ */
+function withoutXdgConfigHome(run) {
+  const previous = process.env.XDG_CONFIG_HOME
+  delete process.env.XDG_CONFIG_HOME
+  try {
+    run()
+  } finally {
+    if (previous === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = previous
+  }
+}
+
 function installAll(platform) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fmt-home-'))
   const appData = fs.mkdtempSync(path.join(os.tmpdir(), 'fmt-appdata-'))
@@ -34,6 +52,7 @@ function installAll(platform) {
 
 for (const platform of ['darwin', 'win32', 'linux']) {
   test(`every installer writes the shape its tool documents (${platform})`, () => {
+    withoutXdgConfigHome(() => {
     const { byId } = installAll(platform)
 
     for (const [id, entry] of Object.entries(byId)) {
@@ -68,6 +87,7 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     const jetbrains = fs.readFileSync(byId.jetbrains.configPath, 'utf8')
     assert.match(jetbrains, /<entry key="axiom">/, 'JetBrains must declare an axiom entry')
     assert.ok(!/&(?!amp;|lt;|gt;|quot;|apos;)/.test(jetbrains), 'JetBrains XML must stay escaped')
+    })
   })
 
   test(`nothing is reported present on a machine with nothing installed (${platform})`, () => {
@@ -77,9 +97,11 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-home-'))
     const emptyAppData = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-appdata-'))
 
-    const detected = detectHosts(emptyHome, emptyAppData, platform)
-    const present = Object.entries(detected).filter(([, value]) => value).map(([id]) => id)
-    assert.deepEqual(present, [], `nothing should be detected, got: ${present.join(', ')}`)
+    withoutXdgConfigHome(() => {
+      const detected = detectHosts(emptyHome, emptyAppData, platform)
+      const present = Object.entries(detected).filter(([, value]) => value).map(([id]) => id)
+      assert.deepEqual(present, [], `nothing should be detected, got: ${present.join(', ')}`)
+    })
   })
 
   test(`a host is detected once its own marker exists (${platform})`, () => {
@@ -89,10 +111,12 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true })
     fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
 
-    const detected = detectHosts(home, appData, platform)
-    assert.equal(detected['claude-code'], true, 'the ~/.claude directory should prove Claude Code')
-    assert.equal(detected.codex, true, 'the ~/.codex directory should prove Codex')
-    assert.equal(detected.cursor, false, 'Cursor was not installed and must stay undetected')
+    withoutXdgConfigHome(() => {
+      const detected = detectHosts(home, appData, platform)
+      assert.equal(detected['claude-code'], true, 'the ~/.claude directory should prove Claude Code')
+      assert.equal(detected.codex, true, 'the ~/.codex directory should prove Codex')
+      assert.equal(detected.cursor, false, 'Cursor was not installed and must stay undetected')
+    })
   })
 }
 
