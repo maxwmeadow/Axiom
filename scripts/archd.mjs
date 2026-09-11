@@ -37,7 +37,12 @@ const bash = resolveBash()
 const env = { ...process.env }
 if (process.platform === 'win32') {
   const msysRoot = bash.replace(/[\\/]usr[\\/]bin[\\/]bash\.exe$/i, '')
-  env.PATH = `${msysRoot}\\usr\\bin;${env.PATH ?? ''}`
+  // Windows spells it "Path". process.env lookups are case-insensitive there,
+  // but a plain spread is not - assigning env.PATH would leave the real "Path"
+  // untouched and hand the child two variables, with the original winning. The
+  // Go that setup-go puts on Path would then be invisible to archd.sh.
+  const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') ?? 'PATH'
+  env[pathKey] = `${msysRoot}\\usr\\bin;${env[pathKey] ?? ''}`
 }
 
 // Invoked relative to the repo root so the path stays valid inside MSYS2,
