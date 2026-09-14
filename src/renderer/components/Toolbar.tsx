@@ -6,6 +6,7 @@ import { SendToAgentDialog } from './SendToAgentDialog'
 import { useSheetStore } from '../store/sheetStore'
 import { ChromeButton } from './ui/ChromeButton'
 import { InvestigationsMenu } from './InvestigationsMenu'
+import { RecordingControl } from './RecordingControl'
 
 interface ToolbarProps {
   onSearch: () => void
@@ -89,6 +90,7 @@ export function Toolbar({
               <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>
             </svg>
           </ChromeButton>
+          <RecordingControl workspaceId={workspaceId} />
           <InvestigationsMenu workspaceId={workspaceId} />
           <ChromeButton
             onClick={onToggleAgentLog}

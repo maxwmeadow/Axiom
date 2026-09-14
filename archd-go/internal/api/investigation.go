@@ -43,12 +43,19 @@ func (s *Server) handleInvestigationStart(w http.ResponseWriter, r *http.Request
 	}
 	commit, branch := s.gitInfo(body.WorkspaceID)
 	inv := s.runtime.StartInvestigation(body.WorkspaceID, body.Name, commit, branch)
+	note := "Recording started. All traces, watches, values, perturbations, and notes are now captured. " +
+		"Add a note at each finding, and call stop when you have the answer - stop saves a shareable capture."
+	if commit == "" {
+		// Replay renders code from the pinned commit. Without one it still
+		// replays, but cannot guarantee the reader sees the same source.
+		note += " This workspace has no resolvable git commit, so the capture will not be pinned to a code version."
+	}
 	jsonOK(w, map[string]any{
 		"id":     inv.ID,
 		"name":   inv.Name,
 		"commit": inv.Commit,
 		"branch": inv.Branch,
-		"note":   "Recording started. All traces, watches, values, perturbations, and notes are now captured. Call stop_investigation to save a shareable capture.",
+		"note":   note,
 	})
 }
 
@@ -69,7 +76,7 @@ func (s *Server) handleInvestigationNote(w http.ResponseWriter, r *http.Request)
 		jsonError(w, "text is required", 400)
 		return
 	}
-	if !s.runtime.AnnotateInvestigation(body.WorkspaceID, body.Text) {
+	if _, ok := s.runtime.AnnotateInvestigation(body.WorkspaceID, body.Text); !ok {
 		jsonError(w, "no investigation is recording - call start_investigation first", 409)
 		return
 	}
@@ -115,7 +122,7 @@ func (s *Server) handleInvestigationStop(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := db.SaveInvestigation(sqlDB, inv.ID, inv.WorkspaceID, inv.Name, inv.Commit, inv.Branch,
-		inv.CreatedAt, inv.DurationMs, len(inv.Events), data); err != nil {
+		"saved", inv.CreatedAt, inv.DurationMs, len(inv.Events), data); err != nil {
 		jsonError(w, err.Error(), 500)
 		return
 	}
@@ -148,6 +155,15 @@ func (s *Server) handleInvestigationList(w http.ResponseWriter, r *http.Request)
 	}
 	// Surface the currently-recording investigation, if any.
 	active := s.runtime.ActiveInvestigation(workspaceID)
+	activeID := ""
+	if active != nil {
+		activeID = active.ID
+	}
+	for i := range list {
+		if list[i].Status == "recording" && list[i].ID != activeID {
+			list[i].Status = "interrupted"
+		}
+	}
 	jsonOK(w, map[string]any{"investigations": list, "recording": active})
 }
 
@@ -213,4 +229,40 @@ func gitCmd(dir string, args ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// runInvestigationFlusher periodically persists in-progress recordings.
+//
+// Events live in memory until stop, so before this existed a crash, a quit, or
+// an agent that simply never called stop discarded the entire session with no
+// trace. Flushed rows are written with status 'recording'; the list handler
+// reports any that outlived their recorder as 'interrupted'.
+func (s *Server) runInvestigationFlusher(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.flushActiveInvestigations()
+	}
+}
+
+// flushActiveInvestigations writes every in-progress recording to disk once.
+func (s *Server) flushActiveInvestigations() {
+	{
+		for _, workspaceID := range s.runtime.ActiveInvestigationWorkspaces() {
+			inv := s.runtime.ActiveInvestigationSnapshot(workspaceID)
+			if inv == nil || len(inv.Events) == 0 {
+				continue
+			}
+			sqlDB, err := s.dbFor(workspaceID)
+			if err != nil {
+				continue
+			}
+			data, err := json.Marshal(inv)
+			if err != nil {
+				continue
+			}
+			_ = db.SaveInvestigation(sqlDB, inv.ID, inv.WorkspaceID, inv.Name, inv.Commit, inv.Branch,
+				"recording", inv.CreatedAt, inv.DurationMs, len(inv.Events), data)
+		}
+	}
 }

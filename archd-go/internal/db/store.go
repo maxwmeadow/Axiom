@@ -912,23 +912,26 @@ type InvestigationMeta struct {
 	CreatedAt  int64  `json:"createdAt"`
 	DurationMs int64  `json:"durationMs"`
 	EventCount int    `json:"eventCount"`
+	// 'saved' once finalized, 'recording' for a periodic flush, and
+	// 'interrupted' when a flushed recording outlived its recorder.
+	Status string `json:"status"`
 }
 
 // SaveInvestigation persists a captured investigation. `data` is the full
 // AxiomTrace JSON document.
-func SaveInvestigation(db *sql.DB, id, workspaceID, name, commit, branch string, createdAt, durationMs int64, eventCount int, data []byte) error {
+func SaveInvestigation(db *sql.DB, id, workspaceID, name, commit, branch, status string, createdAt, durationMs int64, eventCount int, data []byte) error {
 	_, err := db.Exec(`
 		INSERT OR REPLACE INTO investigations
-		  (id, workspace_id, name, commit_sha, branch, created_at, duration_ms, event_count, data)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		id, workspaceID, name, commit, branch, createdAt, durationMs, eventCount, string(data))
+		  (id, workspace_id, name, commit_sha, branch, created_at, duration_ms, event_count, status, data)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		id, workspaceID, name, commit, branch, createdAt, durationMs, eventCount, status, string(data))
 	return err
 }
 
 // ListInvestigations returns saved investigations for a workspace, newest first.
 func ListInvestigations(db *sql.DB, workspaceID string) ([]InvestigationMeta, error) {
 	rows, err := db.Query(`
-		SELECT id, name, commit_sha, branch, created_at, duration_ms, event_count
+		SELECT id, name, commit_sha, branch, created_at, duration_ms, event_count, status
 		FROM investigations WHERE workspace_id=? ORDER BY created_at DESC`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -937,7 +940,7 @@ func ListInvestigations(db *sql.DB, workspaceID string) ([]InvestigationMeta, er
 	out := make([]InvestigationMeta, 0)
 	for rows.Next() {
 		var m InvestigationMeta
-		if err := rows.Scan(&m.ID, &m.Name, &m.Commit, &m.Branch, &m.CreatedAt, &m.DurationMs, &m.EventCount); err != nil {
+		if err := rows.Scan(&m.ID, &m.Name, &m.Commit, &m.Branch, &m.CreatedAt, &m.DurationMs, &m.EventCount, &m.Status); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

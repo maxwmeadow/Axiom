@@ -248,4 +248,4 @@ export const STANDALONE_TOOLS = [
 ] as const
 
 /** Consolidated tools that only appear when the debug profile is enabled. */
-export const DEBUG_TOOLS = ['debug_runtime', 'investigation'] as const
+export const DEBUG_TOOLS = ['debug_runtime'] as const

@@ -33,7 +33,9 @@ function toolNames(block) {
 test('the advertised surface stays small', () => {
   const core = toolNames(coreBlock)
   assert.ok(core.length <= 15, `core surface grew to ${core.length}: ${core.join(', ')}`)
-  assert.equal(toolNames(debugBlock).length, 2)
+  // Only value injection stays opt-in. Recording an investigation is core:
+  // gating it meant no agent could ever see it.
+  assert.equal(toolNames(debugBlock).length, 1)
 })
 
 test('the schema cost stays within budget', () => {

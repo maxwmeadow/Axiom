@@ -137,6 +137,9 @@ export function ReplayBar() {
             Step
           </button>
           {lastNote && <aside className="axiom-replay__note" title={lastNote}>{lastNote}</aside>}
+          <span className="axiom-replay__live-notice">
+            Live activity is paused while you replay
+          </span>
         </div>
       </div>
     </section>

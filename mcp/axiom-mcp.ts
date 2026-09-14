@@ -480,7 +480,7 @@ const CORE_TOOLS = [
   },
   {
     name: 'start_work',
-    description: "Declare what you are about to build, BEFORE editing files. Every structural change you then make is recorded under this goal, so the human's Morning Delta shows your intent next to its architectural effect instead of bare topology. Call this at the start of any multi-file task.",
+    description: "Declare what you are about to build, BEFORE editing files. Every structural change you then make is recorded under this goal, so the human's Morning Delta shows your intent next to its architectural effect instead of bare topology. Call this at the start of any multi-file task. Debugging rather than building? Use `investigation` instead - it records what you find so the human can replay it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -503,6 +503,20 @@ const CORE_TOOLS = [
       },
     },
   },
+  {
+    name: 'investigation',
+    description: "Record a debugging session as a replayable timeline the human watches on their canvas. ops: start | note | stop | list | get. Call start before you dig, note each finding as you reach it, and stop once you have the answer - stop saves a shareable capture. Traces and data-flow queries you run in between are captured automatically, so the human replays how you got there instead of reading a summary.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string' },
+        name: { type: 'string', description: 'With start - what you are investigating, in a few words' },
+        text: { type: 'string', description: 'With note - the finding, in one plain sentence' },
+        id: { type: 'string', description: 'With get - the capture id' },
+      },
+      required: ['op'],
+    },
+  },
 ]
 
 const DEBUG_PROFILE_TOOLS = [
@@ -523,20 +537,6 @@ const DEBUG_PROFILE_TOOLS = [
         cwd: { type: 'string' },
         language: { type: 'string' },
         targetId: { type: 'string' },
-      },
-      required: ['op'],
-    },
-  },
-  {
-    name: 'investigation',
-    description: 'Record a debugging session as a replayable timeline. ops: start | note | stop | list | get.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        op: { type: 'string' },
-        name: { type: 'string' },
-        text: { type: 'string' },
-        id: { type: 'string' },
       },
       required: ['op'],
     },

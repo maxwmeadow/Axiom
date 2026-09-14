@@ -1,17 +1,13 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useGraphStore, type InvestigationDoc } from '../store/graphStore'
+import {
+  apiDeleteInvestigation,
+  apiGetInvestigation,
+  apiListInvestigations,
+  type InvestigationMeta,
+} from '../canvas/arcdApi'
 import { ChromeButton } from './ui/ChromeButton'
-
-interface InvestigationMeta {
-  id: string
-  name: string
-  commit: string
-  branch: string
-  createdAt: number
-  durationMs: number
-  eventCount: number
-}
 
 const MENU_WIDTH = 360
 const VIEWPORT_GUTTER = 8
@@ -50,12 +46,8 @@ export function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch(
-        `http://127.0.0.1:7743/api/investigation/list?workspace=${encodeURIComponent(workspaceId)}`,
-      )
-      if (!response.ok) throw new Error(`Unable to load captures (${response.status})`)
-      const payload = await response.json() as { investigations?: InvestigationMeta[] }
-      setItems(payload.investigations ?? [])
+      const payload = await apiListInvestigations(workspaceId)
+      setItems(payload.investigations)
     } catch (cause: unknown) {
       setItems([])
       setError(cause instanceof Error ? cause.message : 'Unable to load investigation captures')
@@ -74,15 +66,21 @@ export function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
     void load()
   }
 
+  const remove = async (id: string) => {
+    setError(null)
+    try {
+      await apiDeleteInvestigation(workspaceId, id)
+      setItems(current => current.filter(item => item.id !== id))
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : 'Unable to delete capture')
+    }
+  }
+
   const openReplay = async (id: string) => {
     setOpeningId(id)
     setError(null)
     try {
-      const response = await fetch(
-        `http://127.0.0.1:7743/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceId)}`,
-      )
-      if (!response.ok) throw new Error(`Unable to open capture (${response.status})`)
-      startReplay(await response.json() as InvestigationDoc)
+      startReplay(await apiGetInvestigation(workspaceId, id) as InvestigationDoc)
       setOpen(false)
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : 'Unable to open investigation capture')
@@ -167,8 +165,8 @@ export function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
                 </div>
               )}
               {!loading && items.map(investigation => (
+                <div className="axiom-investigations-menu__row" key={investigation.id}>
                 <button
-                  key={investigation.id}
                   type="button"
                   className="axiom-investigations-menu__item"
                   role="menuitem"
@@ -184,10 +182,30 @@ export function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
                   <span className="axiom-investigations-menu__item-meta">
                     <span>{investigation.eventCount} events</span>
                     <span>{(investigation.durationMs / 1000).toFixed(1)}s</span>
-                    <code>{investigation.branch}@{investigation.commit ? investigation.commit.slice(0, 7) : '-'}</code>
+                    {investigation.commit
+                      ? <code>{investigation.branch}@{investigation.commit.slice(0, 7)}</code>
+                      : <code title="Axiom could not resolve a git commit, so this capture is not pinned to a code version.">no commit</code>}
+                    {investigation.status === 'interrupted' && (
+                      <span
+                        className="axiom-investigations-menu__flag"
+                        title="Recording never stopped - Axiom saved what it had captured up to that point."
+                      >
+                        interrupted
+                      </span>
+                    )}
                   </span>
                   {openingId === investigation.id && <span className="axiom-investigations-menu__opening">Opening…</span>}
                 </button>
+                <button
+                  type="button"
+                  className="axiom-investigations-menu__delete"
+                  aria-label={`Delete ${investigation.name}`}
+                  title="Delete this capture"
+                  onClick={event => { event.stopPropagation(); void remove(investigation.id) }}
+                >
+                  ×
+                </button>
+                </div>
               ))}
             </div>
           </section>

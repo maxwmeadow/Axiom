@@ -345,7 +345,7 @@ what the filesystem did.
 
 ### MCP surface - ✅ (claude/mcp)
 
-- [x] 59 advertised tools → 14 core (+2 behind `AXIOM_MCP_PROFILE=debug`)
+- [x] 59 advertised tools → 15 core (+1 behind `AXIOM_MCP_PROFILE=debug`)
 - [x] ~9,600 → ~2,460 tokens per request (74% off)
 - [x] All 58 legacy handlers retained as unlisted adapters; nothing removed
 - [x] Guard tests fail the build if the surface, schema budget, or description
