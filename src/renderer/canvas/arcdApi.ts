@@ -186,3 +186,69 @@ export async function apiGetAgentActions(workspaceId: string, limit = 200): Prom
   if (!res.ok) throw new Error(await res.text() || `Unable to load agent log (${res.status})`)
   return res.json() as Promise<AgentAction[]>
 }
+
+// ─── Investigation Capture ──────────────────────────────────────────────────
+
+export interface InvestigationMeta {
+  id: string
+  name: string
+  commit: string
+  branch: string
+  createdAt: number
+  durationMs: number
+  eventCount: number
+  /** 'saved' | 'recording' | 'interrupted' */
+  status: string
+}
+
+export interface ActiveInvestigation {
+  id: string
+  name: string
+  commit: string
+  branch: string
+  createdAt: number
+  /** How much is already captured, so a window joining late shows the truth. */
+  eventCount: number
+  status: string
+}
+
+export async function apiListInvestigations(workspaceId: string): Promise<{
+  investigations: InvestigationMeta[]
+  recording: ActiveInvestigation | null
+}> {
+  const res = await fetch(`${BASE}/api/investigation/list?workspace=${encodeURIComponent(workspaceId)}`)
+  if (!res.ok) throw new Error(await res.text() || `Unable to load captures (${res.status})`)
+  const body = await res.json() as { investigations?: InvestigationMeta[]; recording?: ActiveInvestigation | null }
+  return { investigations: body.investigations ?? [], recording: body.recording ?? null }
+}
+
+export async function apiGetInvestigation(workspaceId: string, id: string): Promise<unknown> {
+  const res = await fetch(`${BASE}/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceId)}`)
+  if (!res.ok) throw new Error(await res.text() || `Unable to open capture (${res.status})`)
+  return res.json()
+}
+
+export async function apiStartInvestigation(workspaceId: string, name: string): Promise<{ id: string; name: string; commit: string; note?: string }> {
+  const res = await fetch(`${BASE}/api/investigation/start`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspaceId, name }),
+  })
+  if (!res.ok) throw new Error(await res.text() || 'Unable to start recording')
+  return res.json()
+}
+
+export async function apiStopInvestigation(workspaceId: string): Promise<{ id: string; eventCount: number }> {
+  const res = await fetch(`${BASE}/api/investigation/stop`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ workspaceId }),
+  })
+  if (!res.ok) throw new Error(await res.text() || 'Unable to stop recording')
+  return res.json()
+}
+
+export async function apiDeleteInvestigation(workspaceId: string, id: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/investigation/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspaceId)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error(await res.text() || 'Unable to delete capture')
+}

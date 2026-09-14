@@ -47,15 +47,19 @@ type CapturedEvent struct {
 
 // Investigation is a recorded (or recording) agent session.
 type Investigation struct {
-	ID          string          `json:"id"`
-	WorkspaceID string          `json:"workspaceId"`
-	Name        string          `json:"name"`
-	Commit      string          `json:"commit"` // git SHA at capture time
-	Branch      string          `json:"branch"`
-	CreatedAt   int64           `json:"createdAt"`
-	DurationMs  int64           `json:"durationMs"`
-	Status      string          `json:"status"` // 'recording' | 'saved'
-	Events      []CapturedEvent `json:"events"`
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspaceId"`
+	Name        string `json:"name"`
+	Commit      string `json:"commit"` // git SHA at capture time
+	Branch      string `json:"branch"`
+	CreatedAt   int64  `json:"createdAt"`
+	DurationMs  int64  `json:"durationMs"`
+	Status      string `json:"status"` // 'recording' | 'saved'
+	// EventCount lets a caller report how much has been captured without
+	// shipping the timeline. ActiveInvestigation omits Events, so without this
+	// a window joining a recording already in progress could only show zero.
+	EventCount int             `json:"eventCount"`
+	Events     []CapturedEvent `json:"events"`
 
 	// CanvasSnapshot is attached at save time so a fresh viewer can position
 	// nodes even if the live graph has since changed. Opaque to the recorder.
@@ -125,19 +129,24 @@ func (m *Manager) StartInvestigation(workspaceID, name, commit, branch string) *
 
 // AnnotateInvestigation adds an agent note to the active timeline. The note is
 // broadcast (so a live viewer sees it) and captured via the tap.
-func (m *Manager) AnnotateInvestigation(workspaceID, text string) bool {
+func (m *Manager) AnnotateInvestigation(workspaceID, text string) (int, bool) {
 	m.captureMu.Lock()
-	active := m.activeInvestigations[workspaceID] != nil
+	inv := m.activeInvestigations[workspaceID]
+	count := 0
+	if inv != nil {
+		count = len(inv.Events)
+	}
 	m.captureMu.Unlock()
-	if !active {
-		return false
+	if inv == nil {
+		return 0, false
 	}
 	m.hub.Broadcast("investigation:note", map[string]any{
 		"workspaceId": workspaceID,
 		"text":        text,
 		"ts":          time.Now().UnixMilli(),
+		"eventCount":  count,
 	})
-	return true
+	return count, true
 }
 
 // StopInvestigation finalizes and returns the recording (status=saved). The
@@ -170,6 +179,8 @@ func (m *Manager) ActiveInvestigation(workspaceID string) *Investigation {
 		return nil
 	}
 	cp := *inv
+	cp.EventCount = len(inv.Events)
+	cp.DurationMs = time.Since(inv.start).Milliseconds()
 	cp.Events = nil // callers that want events use the returned recording from Stop
 	return &cp
 }
@@ -190,4 +201,31 @@ func shortID() string {
 		b[i] = alphabet[int(b[i])%len(alphabet)]
 	}
 	return string(b)
+}
+
+// ActiveInvestigationSnapshot returns a copy of the in-progress recording
+// INCLUDING its events. ActiveInvestigation deliberately omits them for cheap
+// status reads; the periodic flusher needs the whole document.
+func (m *Manager) ActiveInvestigationSnapshot(workspaceID string) *Investigation {
+	m.captureMu.Lock()
+	defer m.captureMu.Unlock()
+	inv := m.activeInvestigations[workspaceID]
+	if inv == nil {
+		return nil
+	}
+	cp := *inv
+	cp.Events = append([]CapturedEvent(nil), inv.Events...)
+	cp.DurationMs = time.Since(inv.start).Milliseconds()
+	return &cp
+}
+
+// ActiveInvestigationWorkspaces lists the workspaces currently recording.
+func (m *Manager) ActiveInvestigationWorkspaces() []string {
+	m.captureMu.Lock()
+	defer m.captureMu.Unlock()
+	out := make([]string, 0, len(m.activeInvestigations))
+	for workspaceID := range m.activeInvestigations {
+		out = append(out, workspaceID)
+	}
+	return out
 }

@@ -199,7 +199,7 @@ test('agent actions are logged with targets the canvas can light up', async () =
   await new Promise(resolve => setTimeout(resolve, 600))
 
   const res = await fetch(
-    `http://127.0.0.1:7853/api/agent/actions?workspace=${harness.workspaceId}&limit=50`,
+    `${harness.apiBase}/api/agent/actions?workspace=${harness.workspaceId}&limit=50`,
   )
   assert.ok(res.ok, `agent log fetch failed: ${res.status}`)
   const actions = await res.json()
@@ -225,7 +225,7 @@ test('the running MCP process renews a harness-tagged presence lease', async () 
   let presence
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const res = await fetch(
-      `http://127.0.0.1:7853/api/agent/presence?workspace=${harness.workspaceId}`,
+      `${harness.apiBase}/api/agent/presence?workspace=${harness.workspaceId}`,
     )
     assert.ok(res.ok, `agent presence fetch failed: ${res.status}`)
     presence = await res.json()

@@ -264,7 +264,16 @@ interface GraphState {
 
   // Investigation replay (Phase 8) - re-feeds captured events through the live
   // render path so a saved investigation plays back on the canvas.
+  /**
+   * The recording happening right now, agent-started or human-started. The
+   * canvas showed nothing while an agent recorded, so a watcher could not tell
+   * a live investigation from an idle one.
+   */
+  activeInvestigation: { id: string; name: string; startedAt: number; eventCount: number } | null
   replay: ReplayState | null
+  beginInvestigation: (id: string, name: string, startedAt?: number, eventCount?: number) => void
+  endInvestigation: () => void
+  countInvestigationEvent: () => void
   startReplay: (doc: InvestigationDoc) => void
   stopReplay: () => void
   replaySeek: (index: number) => void      // reset visuals + apply events[0..index]
@@ -489,11 +498,31 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     dataFlow: flow ? { variable: flow.variable, fileIds: new Set(flow.fileIds) } : null,
   }),
 
+  activeInvestigation: null,
   replay: null,
   resetRuntimeVisuals: () => set({
     runtimeSessions: [], runtimeWatches: {}, runtimeNodes: {}, runtimeInjections: {},
     activeTrace: null, dataFlow: null,
   }),
+  beginInvestigation: (id, name, startedAt, eventCount) => set({
+    activeInvestigation: {
+      id,
+      name,
+      // Defaults are for a recording that starts now, via the live broadcast.
+      // Reconciling with archd passes the real values instead.
+      startedAt: startedAt ?? Date.now(),
+      eventCount: eventCount ?? 0,
+    },
+  }),
+  endInvestigation: () => set({ activeInvestigation: null }),
+  countInvestigationEvent: () => set(state => (state.activeInvestigation
+    ? {
+        activeInvestigation: {
+          ...state.activeInvestigation,
+          eventCount: state.activeInvestigation.eventCount + 1,
+        },
+      }
+    : {})),
   startReplay: (doc) => {
     get().resetRuntimeVisuals()
     set({
@@ -1372,6 +1401,11 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
   if (store.replay && !replayDispatching && LIVE_GATED_TYPES.has(msg.type)) {
     return
   }
+  // These are precisely the types archd records, so the live count matches
+  // what the capture will contain.
+  if (store.activeInvestigation && !replayDispatching && LIVE_GATED_TYPES.has(msg.type)) {
+    store.countInvestigationEvent()
+  }
   switch (msg.type) {
     case 'graph:snapshot':
       store.applySnapshot(msg.payload as CanvasSnapshot)
@@ -1396,6 +1430,14 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
       // event for both paths and closes the explicit beginIndexing boundary.
       store.setIndexingComplete()
       void store.loadDelta()
+      break
+    case 'investigation:started': {
+      const started = msg.payload as { id?: string; name?: string }
+      store.beginInvestigation(started?.id ?? '', started?.name ?? 'Investigation')
+      break
+    }
+    case 'investigation:stopped':
+      store.endInvestigation()
       break
     case 'agent:action':
       store.applyAgentAction(msg.payload as AgentAction)

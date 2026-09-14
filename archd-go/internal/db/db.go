@@ -666,6 +666,10 @@ func migrate(db *sql.DB) error {
 		`ALTER TABLE work_sessions ADD COLUMN owner_key TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE work_sessions ADD COLUMN focus_system_ids TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE work_sessions ADD COLUMN focus_file_ids TEXT NOT NULL DEFAULT '[]'`,
+		// An investigation is flushed periodically while recording, so a crash
+		// cannot silently discard it. Rows still marked 'recording' when no
+		// recorder is live were interrupted, and are reported as such.
+		`ALTER TABLE investigations ADD COLUMN status TEXT NOT NULL DEFAULT 'saved'`,
 		// Live activity tracking (edit bursts, decayed scores)
 		`ALTER TABLE files ADD COLUMN activity_score REAL    NOT NULL DEFAULT 0`,
 		`ALTER TABLE files ADD COLUMN activity_at    INTEGER NOT NULL DEFAULT 0`,

@@ -109,6 +109,9 @@ func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
 	// Adapters started outside the launcher (PYTHONPATH opt-in) have no
 	// AXIOM_WORKSPACE_ID; map them to a workspace by their working directory.
 	rt.SetWorkspaceResolver(s.workspaceForCwd)
+	// Recordings are only in memory until stop; flush them so a crash cannot
+	// discard an investigation silently.
+	go s.runInvestigationFlusher(5 * time.Second)
 	return s
 }
 

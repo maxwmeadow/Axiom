@@ -7221,3 +7221,116 @@ select.axiom-inspector-input {
 @media (prefers-reduced-motion: reduce) {
   .axiom-shape-texture { transition-duration: 1ms; }
 }
+
+/* ─── Investigation recording ──────────────────────────────────────────────
+   A recording in progress has to be visible from across the room: the whole
+   point is that someone is watching their agent work. */
+.axiom-recording {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.axiom-recording__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid #a2453c;
+  border-radius: 2px;
+  background: linear-gradient(#fdeceb, #f6d9d6);
+  color: #7d2f28;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.axiom-recording__stop:hover:not(:disabled) { background: #fff4f3; }
+.axiom-recording__stop:disabled { cursor: default; opacity: 0.7; }
+
+.axiom-recording__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #c0392b;
+  animation: axiom-recording-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes axiom-recording-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axiom-recording__dot { animation: none; }
+}
+
+.axiom-recording__count {
+  padding-left: 8px;
+  border-left: 1px solid #e0b6b1;
+  color: #93443b;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.axiom-recording__saved,
+.axiom-recording__error {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.axiom-recording__saved { color: #2f6f52; }
+.axiom-recording__error { color: #a2453c; }
+
+/* Each capture keeps its delete affordance out of the click target that
+   opens it, so removing one can never be a misfired replay. */
+.axiom-investigations-menu__row {
+  display: flex;
+  align-items: stretch;
+}
+
+.axiom-investigations-menu__row .axiom-investigations-menu__item { flex: 1; }
+
+.axiom-investigations-menu__delete {
+  width: 30px;
+  border: 0;
+  border-left: 1px solid #3f4d48;
+  background: transparent;
+  color: #8c9a94;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.axiom-investigations-menu__delete:hover { background: #48302e; color: #f2c9c4; }
+
+.axiom-investigations-menu__flag {
+  padding: 1px 5px;
+  border: 1px solid #8a6d3b;
+  border-radius: 2px;
+  color: #d4b483;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.axiom-replay__live-notice {
+  margin-left: auto;
+  color: #8c9a94;
+  font-size: 10.5px;
+}
+
+/* The post-recording offer is a real control, not a label. */
+.axiom-recording__saved {
+  border: 1px solid #7fae97;
+  border-radius: 2px;
+  background: #edf6f1;
+  color: #2f6f52;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.axiom-recording__saved:hover { background: #ffffff; }

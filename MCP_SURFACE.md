@@ -1,6 +1,6 @@
 # Axiom MCP tool surface
 
-Status: consolidated 2026-07-30. 59 advertised tools → 14 core (+2 debug).
+Status: consolidated 2026-07-30. 59 advertised tools → 15 core (+1 debug).
 
 ## Why this is a budget, not a detail
 
@@ -42,7 +42,7 @@ boundaries after a build, or during first-run review, is the bidirectional
 thesis, not a risk to be gated. `edit_systems` carries the longest description
 in the surface for exactly that reason.
 
-## Core profile - 14 tools
+## Core profile - 15 tools
 
 | Tool | Absorbs |
 |---|---|
@@ -61,17 +61,21 @@ in the surface for exactly that reason.
 | `start_work` | - |
 | `update_work` | `note_work`, `finish_work` (via `done`) |
 
-## Debug profile - 2 tools, off by default
+## Debug profile - 1 tool, off by default
 
 Set `AXIOM_MCP_PROFILE=debug` to advertise:
 
 | Tool | Absorbs |
 |---|---|
 | `debug_runtime` | watch, unwatch, inject, cancel_inject, snapshot, launch, stop, log |
-| `investigation` | start, note, stop, list, get |
 
 Real capability, wrong default. A coding agent does not need value injection in
 its context to write a class.
+
+`investigation` (start, note, stop, list, get) used to sit here too. That was a
+mistake: gating it meant no agent ever saw the recorder, so the debugging
+experience could not be reached from either side - the human had no way to start
+a recording either. Recording is not value injection, and it is now core.
 
 ## Adding a tool
 
