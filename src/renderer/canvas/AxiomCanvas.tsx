@@ -1406,7 +1406,10 @@ export function AxiomCanvas({ readOnly = false, reviewScene, binScene }: AxiomCa
     nodeFx: {} as typeof liveNodeFx,
     relationshipFx: [] as typeof liveRelationshipFx,
     activeWorkSessions: [] as typeof liveActiveWorkSessions,
-    agentAttention: new Map() as typeof liveAgentAttention,
+    // A Record, like the store's own empty value. It was a Map cast to one,
+    // which survived only because an empty Map has no enumerable keys and the
+    // consumers all early-return on Object.keys(...).length === 0.
+    agentAttention: {} as typeof liveAgentAttention,
   }), [])
 
   // Review and the unsorted bin are data/persistence modes of this component,

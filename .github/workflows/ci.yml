@@ -52,5 +52,10 @@ jobs:
       - name: Test renderer, MCP, and Electron units
         run: npm run test:renderer
 
+      # Vite strips types rather than checking them, so nothing in the build
+      # would have caught a type error. One sat in main unnoticed until now.
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
       - name: Build Electron bundles
         run: npm run build
