@@ -57,6 +57,14 @@ contextBridge.exposeInMainWorld('axiom', {
   installAgent: (hostId: string, projectRoot?: string): Promise<AgentInstallResult> =>
     ipcRenderer.invoke('agent:install', hostId, projectRoot),
 
+  // Install all detected modalities for an agent family in one click
+  installFamily: (familyId: string, projectRoot?: string): Promise<AgentInstallResult> =>
+    ipcRenderer.invoke('agent:install-family', familyId, projectRoot),
+  locateAgentHost: (hostId: string): Promise<AgentOverrideResult> =>
+    ipcRenderer.invoke('agent:locate', hostId),
+  clearAgentHostOverride: (hostId: string): Promise<AgentOverrideResult> =>
+    ipcRenderer.invoke('agent:clear-override', hostId),
+
   // Listen for messages from archd (forwarded by main process)
   onArchdMessage: (callback: (msg: WsMessage) => void) => {
     ipcRenderer.on('archd:message', (_event, msg) => callback(msg))
@@ -70,6 +78,12 @@ contextBridge.exposeInMainWorld('axiom', {
 export interface AgentHostInfo {
   id: string
   label: string
+  familyId: string
+  familyLabel: string
+  modality: 'cli' | 'vscode' | 'desktop' | 'editor'
+  modalityLabel: string
+  /** Other surfaces covered by this same configuration file. */
+  sharedSurfaces: { id: string; label: string }[]
   /** Whether this agent looks installed on this machine. */
   detected: boolean
   /** Whether any user or project configuration contains an Axiom MCP entry. */
@@ -79,7 +93,19 @@ export interface AgentHostInfo {
   workflowInstalled: boolean
   workflowPath: string | null
   configPath: string
+  /** Set when the user pointed Axiom at this file themselves. */
+  configOverride: string | null
   command: string | null
+  triggerKind: 'slash command' | 'skill command' | 'instruction' | 'chat prompt'
+  promptText?: string
+  restartAction: string
+  restartDetail: string
+}
+
+export interface AgentOverrideResult {
+  ok: boolean
+  detail: string
+  path?: string
 }
 
 export interface AgentInstallResult {
@@ -117,6 +143,9 @@ declare global {
       getAgentConnection: () => Promise<AgentConnection>
       listAgentHosts: (projectRoot?: string) => Promise<AgentHostInfo[]>
       installAgent: (hostId: string, projectRoot?: string) => Promise<AgentInstallResult>
+      installFamily: (familyId: string, projectRoot?: string) => Promise<AgentInstallResult>
+      locateAgentHost: (hostId: string) => Promise<AgentOverrideResult>
+      clearAgentHostOverride: (hostId: string) => Promise<AgentOverrideResult>
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void
     }

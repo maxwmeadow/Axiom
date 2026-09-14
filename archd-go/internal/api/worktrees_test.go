@@ -265,3 +265,45 @@ func TestOpenWorkspaceIndexesOnlyCanonicalRootAndStillTracksGitMetadata(t *testi
 		t.Fatalf("watchers = %d, want one canonical watcher", watcherCount)
 	}
 }
+
+func TestRootPathNormalizationTreatsMacOSAsCaseInsensitive(t *testing.T) {
+	// APFS and HFS+ are case-insensitive unless deliberately formatted
+	// otherwise, so two spellings of one path must not become two roots.
+	upper := normalizedRootPathForOS("/Users/dev/Axiom-Agent", "darwin")
+	lower := normalizedRootPathForOS("/users/dev/axiom-agent", "darwin")
+	if upper != lower {
+		t.Fatalf("macOS paths should compare case-insensitively: %q != %q", upper, lower)
+	}
+}
+
+func TestNormalizedRootPathResolvesSymlinks(t *testing.T) {
+	// Git reports a fully resolved path. On macOS the caller's path routinely
+	// is not one, because /tmp and /var are symlinks into /private - so an
+	// unresolved path and Git's answer have to normalize to the same root.
+	target := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link-to-project")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable on this host: %v", err)
+	}
+
+	if normalizedRootPath(link) != normalizedRootPath(target) {
+		t.Fatalf("symlinked path should normalize to its target: %q != %q",
+			normalizedRootPath(link), normalizedRootPath(target))
+	}
+	if !sameRootPath(link, target) {
+		t.Fatal("sameRootPath should see a symlink and its target as one root")
+	}
+	if stableRootID("ws", link) != stableRootID("ws", target) {
+		t.Fatal("a symlinked root must not get a second, distinct root ID")
+	}
+}
+
+func TestResolvedRootPathKeepsPathsThatDoNotExist(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "not-created-yet")
+	if got := resolvedRootPath(missing); got != missing {
+		t.Fatalf("unresolvable path should survive unchanged: %q != %q", got, missing)
+	}
+	if got := resolvedRootPath(""); got != "" {
+		t.Fatalf("empty path should stay empty, got %q", got)
+	}
+}

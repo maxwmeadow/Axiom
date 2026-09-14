@@ -6,21 +6,22 @@
   "scripts": {
     "predev": "npm run build:archd",
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "npm run build:mcp && electron-vite build",
     "test:renderer": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.mjs\" \"mcp/**/*.test.mjs\" \"electron/**/*.test.mjs\"",
     "test:mcp": "npm run build:archd && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"mcp/e2e/*.e2e.mjs\"",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:update": "npm run build && playwright test --update-snapshots",
     "preview": "electron-vite preview",
-    "prepackage": "npm run build:archd",
+    "prepackage": "npm run build:archd && npm run build:mcp",
     "package": "electron-vite build && electron-builder",
     "postinstall": "electron-rebuild",
     "archd": "node out/main/archd.js",
-    "build:archd": "C:\\msys64\\usr\\bin\\bash.exe scripts/archd.sh build",
-    "dbquery": "C:\\msys64\\usr\\bin\\bash.exe scripts/archd.sh dbquery",
+    "build:archd": "node scripts/archd.mjs build",
+    "dbquery": "node scripts/archd.mjs dbquery",
     "seed-arch": "npx tsx scripts/seed-architecture.ts",
-    "test:archd": "C:\\msys64\\usr\\bin\\bash.exe scripts/archd.sh test",
-    "vet:archd": "C:\\msys64\\usr\\bin\\bash.exe scripts/archd.sh vet"
+    "test:archd": "node scripts/archd.mjs test",
+    "vet:archd": "node scripts/archd.mjs vet",
+    "build:mcp": "node scripts/build-mcp.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.5",
@@ -69,18 +70,51 @@
       "target": [
         "dmg",
         "zip"
+      ],
+      "extraResources": [
+        {
+          "from": "archd-go/archd",
+          "to": "archd"
+        },
+        {
+          "from": "out/mcp",
+          "to": "mcp"
+        }
       ]
     },
     "win": {
       "target": [
         "nsis",
         "zip"
+      ],
+      "extraResources": [
+        {
+          "from": "archd-go/archd.exe",
+          "to": "archd.exe"
+        },
+        {
+          "from": "out/mcp",
+          "to": "mcp"
+        }
       ]
     },
     "linux": {
       "target": [
         "AppImage"
+      ],
+      "extraResources": [
+        {
+          "from": "archd-go/archd",
+          "to": "archd"
+        },
+        {
+          "from": "out/mcp",
+          "to": "mcp"
+        }
       ]
     }
+  },
+  "engines": {
+    "node": ">=20.19.0"
   }
 }

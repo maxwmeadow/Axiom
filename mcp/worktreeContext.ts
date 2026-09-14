@@ -17,7 +17,10 @@ function normalizePath(value: string, caseSensitive: boolean): string {
 export function findWorktreeForCwd(
   roots: WorktreeRow[],
   cwd: string,
-  caseSensitive = process.platform !== 'win32',
+  // Windows and macOS are both case-insensitive by default - NTFS always, and
+  // APFS/HFS+ unless deliberately formatted otherwise. Only Linux is case-
+  // sensitive, so only Linux may treat two spellings as two worktrees.
+  caseSensitive = process.platform !== 'win32' && process.platform !== 'darwin',
 ): WorktreeContext | undefined {
   const target = normalizePath(cwd, caseSensitive)
   let best: WorktreeRow | undefined

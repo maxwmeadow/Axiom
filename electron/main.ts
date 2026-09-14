@@ -5,7 +5,9 @@ import os from 'os'
 import fs from 'fs'
 import type { ProjectConfig, WsMessage } from '../src/shared/types'
 import { completeSourceBoundaries, mergePersistedProjectConfig } from '../src/shared/projectLifecycle'
-import { buildHosts, detectHosts, inspectHostConfiguration } from './agentInstallers'
+import { buildHosts, detectHosts, inspectHostConfiguration, installFamily } from './agentInstallers'
+import { resolveNodeCommand } from './platformPaths'
+import { readOverrides, setOverride, clearOverride } from './agentOverrides'
 import {
   createProjectId,
   findProjectByRoot,
@@ -13,9 +15,14 @@ import {
   removeProjectData,
 } from './projectRegistry'
 
-// electron-vite sets VITE_DEV_SERVER_URL in dev/preview mode only
-const IS_DEV = !!process.env.VITE_DEV_SERVER_URL
-const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
+// electron-vite injects ELECTRON_RENDERER_URL in dev. The name matters: this
+// used to read VITE_DEV_SERVER_URL, which is vite-plugin-electron's variable
+// and one electron-vite never sets - so IS_DEV was always false and `npm run
+// dev` silently served the last `npm run build` output from disk instead of
+// the dev server. A stale out/renderer therefore rendered an arbitrarily old
+// UI, and hot reload never worked at all.
+const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL
+const IS_DEV = !!DEV_SERVER_URL
 const IS_E2E = process.env.AXIOM_E2E === '1'
 const IS_E2E_HOME = process.env.AXIOM_E2E_HOME === '1'  // route straight to the launcher for capture
 const CONFIG_DIR = join(os.homedir(), '.axiom')
@@ -386,7 +393,7 @@ function setupIPC(): void {
   ipcMain.handle('app:info', () => {
     const isPackaged = app.isPackaged
     const mcpPath = isPackaged
-      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.js')
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
       : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
     return {
       version: app.getVersion(),
@@ -401,33 +408,45 @@ function setupIPC(): void {
 
   // Which agents are on this machine, and what each install would touch.
   ipcMain.handle('agent:hosts', (_event, projectRoot?: string) => {
-    const present = detectHosts()
-    return buildHosts().map(host => {
+    const overrides = readOverrides(CONFIG_DIR)
+    const present = detectHosts(undefined, undefined, process.platform, overrides)
+    return buildHosts(undefined, undefined, process.platform, overrides).map(host => {
       const configuration = inspectHostConfiguration(host, projectRoot)
       return {
         id: host.id,
         label: host.label,
+        familyId: host.familyId,
+        familyLabel: host.familyLabel,
+        modality: host.modality,
+        modalityLabel: host.modalityLabel,
+        sharedSurfaces: host.sharedSurfaces ?? [],
         detected: present[host.id] === true,
         configPath: host.configPath(),
+        configOverride: overrides[host.id] ?? null,
         command: host.command ?? null,
+        triggerKind: host.triggerKind,
+        promptText: host.promptText,
+        restartAction: host.restartAction,
+        restartDetail: host.restartDetail,
         ...configuration,
       }
     })
   })
 
-  // Install Axiom into one agent: its MCP server entry and reusable workflow
-  // where the host supports one. An action, not an instruction.
+  // Install Axiom into one agent modality.
   ipcMain.handle('agent:install', (_event, hostId: string, projectRoot?: string) => {
-    const host = buildHosts().find(candidate => candidate.id === hostId)
+    const host = buildHosts(undefined, undefined, process.platform, readOverrides(CONFIG_DIR))
+      .find(candidate => candidate.id === hostId)
     if (!host) return { ok: false, detail: `Unknown agent "${hostId}".`, paths: [] }
     const mcpPath = app.isPackaged
-      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.js')
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
       : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
     if (!fs.existsSync(mcpPath)) {
       return { ok: false, detail: `This Axiom install has no MCP server at ${mcpPath}.`, paths: [] }
     }
+    const nodeCmd = resolveNodeCommand()
     try {
-      return host.install('node', [mcpPath], NAME_ARCHITECTURE_COMMAND, projectRoot)
+      return host.install(nodeCmd, [mcpPath], NAME_ARCHITECTURE_COMMAND, projectRoot)
     } catch (error) {
       return {
         ok: false,
@@ -437,13 +456,57 @@ function setupIPC(): void {
     }
   })
 
+  // Install Axiom into all detected modalities for an agent family in one action.
+  ipcMain.handle('agent:install-family', (_event, familyId: string, projectRoot?: string) => {
+    const mcpPath = app.isPackaged
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
+      : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
+    if (!fs.existsSync(mcpPath)) {
+      return { ok: false, detail: `This Axiom install has no MCP server at ${mcpPath}.`, paths: [] }
+    }
+    const nodeCmd = resolveNodeCommand()
+    try {
+      return installFamily(familyId, nodeCmd, [mcpPath], NAME_ARCHITECTURE_COMMAND, projectRoot)
+    } catch (error) {
+      return {
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+        paths: [],
+      }
+    }
+  })
+
   // How an agent actually connects. Axiom speaks MCP over stdio, so the thing a
   // user needs is a server entry naming this install - never a URL. The old
   // invitation copied http://127.0.0.1:7743/mcp, which archd does not serve and
   // never did, so following the app's own instruction could not work.
+  // Point Axiom at a configuration file it could not find on its own.
+  ipcMain.handle('agent:locate', async (_event, hostId: string) => {
+    const host = buildHosts(undefined, undefined, process.platform, readOverrides(CONFIG_DIR))
+      .find(candidate => candidate.id === hostId)
+    if (!host) return { ok: false, detail: `Unknown agent "${hostId}".` }
+
+    const suggested = host.configPath()
+    const extension = suggested.split('.').pop() ?? ''
+    const result = await dialog.showOpenDialog({
+      title: `Locate the configuration file for ${host.modalityLabel || host.label}`,
+      defaultPath: fs.existsSync(join(suggested, '..')) ? join(suggested, '..') : os.homedir(),
+      properties: ['openFile', 'showHiddenFiles'],
+      filters: extension
+        ? [{ name: `${extension.toUpperCase()} files`, extensions: [extension] }, { name: 'All files', extensions: ['*'] }]
+        : [{ name: 'All files', extensions: ['*'] }],
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, detail: 'Cancelled.' }
+    }
+    return setOverride(CONFIG_DIR, hostId, result.filePaths[0])
+  })
+
+  ipcMain.handle('agent:clear-override', (_event, hostId: string) => clearOverride(CONFIG_DIR, hostId))
+
   ipcMain.handle('agent:connection', () => {
     const mcpPath = app.isPackaged
-      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.js')
+      ? join(process.resourcesPath, 'mcp', 'axiom-mcp.mjs')
       : join(__dirname, '..', '..', 'mcp', 'axiom-mcp.ts')
     const args = [mcpPath]
     return {

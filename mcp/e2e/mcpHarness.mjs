@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
  */
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const ARCHD_EXE = join(ROOT, 'archd-go', 'archd.exe')
+const ARCHD_EXE = join(ROOT, 'archd-go', `archd${process.platform === 'win32' ? '.exe' : ''}`)
 const MCP_ENTRY = join(ROOT, 'mcp', 'axiom-mcp.ts')
 
 // Deliberately not archd's defaults: a running Axiom must not be disturbed,

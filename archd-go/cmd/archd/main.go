@@ -62,7 +62,10 @@ func main() {
 	srv.RegisterRoutes(mux)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", *apiPort)
-	httpServer := &http.Server{Addr: addr, Handler: mux}
+	// Loopback-origin CORS: the dev renderer is served from localhost:5173,
+	// a different origin from this port. See api.AllowLoopbackOrigins.
+	handler := api.AllowLoopbackOrigins(mux)
+	httpServer := &http.Server{Addr: addr, Handler: handler}
 	go func() {
 		log.Printf("archd: HTTP API listening on %s", addr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -74,7 +77,7 @@ func main() {
 	// if it differs from apiPort. Electron may connect either port.
 	if *wsPort != *apiPort {
 		wsAddr := fmt.Sprintf("127.0.0.1:%d", *wsPort)
-		wsServer := &http.Server{Addr: wsAddr, Handler: mux}
+		wsServer := &http.Server{Addr: wsAddr, Handler: handler}
 		go func() {
 			log.Printf("archd: WebSocket listening on %s", wsAddr)
 			if err := wsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {

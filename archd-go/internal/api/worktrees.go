@@ -35,15 +35,36 @@ type pendingRootSync struct {
 }
 
 func normalizedRootPath(path string) string {
-	return normalizedRootPathForOS(path, runtime.GOOS)
+	return normalizedRootPathForOS(resolvedRootPath(path), runtime.GOOS)
+}
+
+// resolvedRootPath canonicalizes a path through any symlinks along the way.
+//
+// macOS is why this exists: /tmp and /var are themselves symlinks into
+// /private, so Git reports "/private/var/..." for a worktree the caller opened
+// as "/var/...". Compared literally those look like two different roots, and
+// the worktree's watcher is never registered. A path that does not exist yet
+// cannot be resolved and keeps its literal form.
+func resolvedRootPath(path string) string {
+	if path == "" {
+		return path
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return path
+	}
+	return resolved
 }
 
 func normalizedRootPathForOS(path, goos string) string {
 	normalized := filepath.ToSlash(filepath.Clean(path))
-	if goos == "windows" {
+	if goos == "windows" || goos == "darwin" {
 		// filepath follows the running host, while tests and persisted metadata
 		// can contain Windows separators on another host.
 		normalized = strings.ReplaceAll(normalized, `\`, "/")
+		// Both hosts are case-insensitive by default - Windows always, macOS
+		// because APFS and HFS+ are unless deliberately formatted otherwise.
+		// Linux is case-sensitive and must keep distinct roots distinct.
 		return strings.ToLower(normalized)
 	}
 	return normalized

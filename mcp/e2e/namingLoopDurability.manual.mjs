@@ -7,9 +7,12 @@
 //
 // Run against a scratch workspace with archd on 7743. Not part of the unit
 // suite: it needs a live daemon and a real indexed project.
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
 const API = 'http://127.0.0.1:7743'
 const WS = process.env.LOOP_WS ?? 'efddf5c5f623397c'
-const ROOT = process.env.LOOP_ROOT ?? 'C:\\Users\\maxst\\VSCodeProjects\\axiom-loop-test'
+const ROOT = process.env.LOOP_ROOT ?? join(homedir(), 'axiom-loop-test')
 
 const pass = []
 const fail = []

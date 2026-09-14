@@ -13,6 +13,7 @@ playwright-report/
 .env.local
 .claude/
 *.exe
+archd-go/archd
 *.exe~
 *~
 *.log
