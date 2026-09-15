@@ -240,3 +240,45 @@ func TestAnExplicitStartDoesNotAdoptAnotherExplicitRecording(t *testing.T) {
 		t.Fatalf("the original recording should be untouched, got %#v", active)
 	}
 }
+
+// The canvas animates call:trace, and the recorder captures it. A trace the
+// MCP assembled had no way to reach either.
+func TestAnAssembledTraceAnimatesAndIsCaptured(t *testing.T) {
+	server, _ := investigationServer(t)
+	server.runtime.StartInvestigation("ws", "Assembled trace", "sha", "main", "agent")
+
+	steps := []map[string]any{{
+		"callerFile": "file-a", "callerSymbol": "charge",
+		"calleeFile": "file-b", "calleeSymbol": "settle", "callCount": 1,
+	}}
+	body, _ := json.Marshal(map[string]any{"workspaceId": "ws", "steps": steps})
+	response := httptest.NewRecorder()
+	server.handleCallTrace(response, httptest.NewRequest(http.MethodPost, "/api/call-trace", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("call-trace = %d: %s", response.Code, response.Body.String())
+	}
+
+	inv := server.runtime.StopInvestigation("ws")
+	if inv == nil {
+		t.Fatal("expected the recording to still be active")
+	}
+	found := false
+	for _, event := range inv.Events {
+		if event.Type == "call:trace" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("an assembled trace must land on the timeline, got %d events", len(inv.Events))
+	}
+}
+
+func TestAnEmptyAssembledTraceIsRejected(t *testing.T) {
+	server, _ := investigationServer(t)
+	body, _ := json.Marshal(map[string]any{"workspaceId": "ws", "steps": []any{}})
+	response := httptest.NewRecorder()
+	server.handleCallTrace(response, httptest.NewRequest(http.MethodPost, "/api/call-trace", bytes.NewReader(body)))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an empty trace", response.Code)
+	}
+}

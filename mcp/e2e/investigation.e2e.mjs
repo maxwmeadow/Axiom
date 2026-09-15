@@ -72,6 +72,13 @@ test('a session records the work done inside it and replays as a document', asyn
     events.some(event => event.type === 'investigation:note'),
     `the agent's note should be on the timeline: ${events.map(e => e.type).join(', ')}`,
   )
+  // The claim is that work done inside a session is captured without being
+  // asked for. A note alone satisfies a count, so assert the trace itself
+  // landed - this is what makes replay show the path rather than a summary.
+  assert.ok(
+    events.some(event => event.type === 'call:trace'),
+    `the trace the agent ran should be on the timeline: ${events.map(e => e.type).join(', ')}`,
+  )
   assert.ok(
     events.every(event => typeof event.offsetMs === 'number'),
     'every event needs an offset for the replay transport to seek',
