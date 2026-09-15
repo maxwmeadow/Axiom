@@ -76,3 +76,15 @@ test('summaries read like a sentence, not a tool name', () => {
 test('an unmapped tool degrades to a readable name rather than nothing', () => {
   assert.equal(actionSummary('get_systems_overview', {}), 'get systems overview')
 })
+
+test('every advertised tool is classified as the thing it actually does', () => {
+  // The log records the name the agent called, not the legacy name it routes
+  // to, so the consolidated surface has to appear in these sets. trace_calls
+  // did not, and was filed as a read.
+  assert.equal(actionKind('trace_calls'), 'trace')
+  assert.equal(actionKind('get_data_flow'), 'trace')
+  assert.equal(actionKind('edit_systems'), 'write')
+  assert.equal(actionKind('investigation'), 'debug')
+  assert.equal(actionKind('update_work'), 'narrate')
+  assert.equal(actionKind('get_architecture'), 'read')
+})

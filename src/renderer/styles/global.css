@@ -7334,3 +7334,10 @@ select.axiom-inspector-input {
 }
 
 .axiom-recording__saved:hover { background: #ffffff; }
+
+/* An auto-started capture reads as informational, not as a warning the way an
+   interrupted one does. */
+.axiom-investigations-menu__flag--auto {
+  border-color: #4f7a68;
+  color: #9fd0ba;
+}

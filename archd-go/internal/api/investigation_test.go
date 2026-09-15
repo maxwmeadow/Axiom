@@ -53,7 +53,7 @@ func listInvestigations(t *testing.T, server *Server) []map[string]any {
 func TestAnInterruptedRecordingSurvivesAndIsReportedInterrupted(t *testing.T) {
 	server, _ := investigationServer(t)
 
-	server.runtime.StartInvestigation("ws", "Checkout timeout", "abc1234", "main")
+	server.runtime.StartInvestigation("ws", "Checkout timeout", "abc1234", "main", "agent")
 	if _, ok := server.runtime.AnnotateInvestigation("ws", "settle() returns unrounded cents"); !ok {
 		t.Fatal("expected the note to be accepted while recording")
 	}
@@ -86,7 +86,7 @@ func TestAnInterruptedRecordingSurvivesAndIsReportedInterrupted(t *testing.T) {
 // A finished investigation is saved, not interrupted.
 func TestAStoppedRecordingIsSaved(t *testing.T) {
 	server, _ := investigationServer(t)
-	server.runtime.StartInvestigation("ws", "Done properly", "abc1234", "main")
+	server.runtime.StartInvestigation("ws", "Done properly", "abc1234", "main", "agent")
 	_, _ = server.runtime.AnnotateInvestigation("ws", "found it")
 
 	response := httptest.NewRecorder()
@@ -99,5 +99,144 @@ func TestAStoppedRecordingIsSaved(t *testing.T) {
 	found := listInvestigations(t, server)
 	if len(found) != 1 || found[0]["status"] != "saved" {
 		t.Fatalf("a stopped recording should be saved, got %#v", found)
+	}
+}
+
+// postAction drives the same handler every MCP tool call lands in.
+func postAction(t *testing.T, server *Server, tool, kind, sessionID string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{
+		"workspaceId": "ws", "tool": tool, "kind": kind,
+		"sessionId": sessionID, "agent": "test-agent", "status": "ok",
+	})
+	response := httptest.NewRecorder()
+	server.handleAgentAction(response, httptest.NewRequest(http.MethodPost, "/api/agent/action", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("agent action = %d: %s", response.Code, response.Body.String())
+	}
+}
+
+// An agent should not have to remember to press record.
+func TestSustainedTracingStartsARecordingOnItsOwn(t *testing.T) {
+	server, _ := investigationServer(t)
+
+	postAction(t, server, "trace_calls", "trace", "")
+	if server.runtime.ActiveInvestigation("ws") != nil {
+		t.Fatal("one incidental trace must not start an investigation")
+	}
+
+	postAction(t, server, "get_data_flow", "trace", "")
+	active := server.runtime.ActiveInvestigation("ws")
+	if active == nil {
+		t.Fatal("sustained tracing should have started a recording")
+	}
+	if active.Origin != "auto" {
+		t.Fatalf("origin = %q, want auto", active.Origin)
+	}
+}
+
+// Listing captures is 'debug' too; counting it would let reading about
+// investigations create one.
+func TestTheRecordersOwnToolsDoNotStartARecording(t *testing.T) {
+	server, _ := investigationServer(t)
+	postAction(t, server, "investigation", "debug", "")
+	postAction(t, server, "investigation", "debug", "")
+	if server.runtime.ActiveInvestigation("ws") != nil {
+		t.Fatal("the recorder's own tools must not trigger auto-capture")
+	}
+}
+
+func TestAutoCaptureDoesNotDisturbARecordingAlreadyRunning(t *testing.T) {
+	server, _ := investigationServer(t)
+	started := server.runtime.StartInvestigation("ws", "Asked for", "sha", "main", "agent")
+
+	postAction(t, server, "trace_calls", "trace", "")
+	postAction(t, server, "get_data_flow", "trace", "")
+
+	active := server.runtime.ActiveInvestigation("ws")
+	if active == nil || active.ID != started.ID {
+		t.Fatalf("the explicit recording should still be the active one, got %#v", active)
+	}
+	if active.Origin != "agent" {
+		t.Fatalf("origin = %q, want agent", active.Origin)
+	}
+}
+
+// A recording Axiom started ends when the agent moves on. One that was asked
+// for does not - ending it is the caller's decision.
+func TestAnIdleSelfStartedRecordingClosesItselfButAnAskedForOneDoesNot(t *testing.T) {
+	server, _ := investigationServer(t)
+	server.autoCaptureIdleStop = 0 // anything idle at all is idle enough
+
+	postAction(t, server, "trace_calls", "trace", "")
+	postAction(t, server, "get_data_flow", "trace", "")
+	if server.runtime.ActiveInvestigation("ws") == nil {
+		t.Fatal("expected a self-started recording")
+	}
+
+	server.flushActiveInvestigations()
+	if server.runtime.ActiveInvestigation("ws") != nil {
+		t.Fatal("an idle self-started recording should have closed itself")
+	}
+	found := listInvestigations(t, server)
+	if len(found) != 1 || found[0]["status"] != "saved" || found[0]["origin"] != "auto" {
+		t.Fatalf("expected one saved auto capture, got %#v", found)
+	}
+
+	// An explicitly requested recording is left alone.
+	server.runtime.StartInvestigation("ws", "Asked for", "sha", "main", "agent")
+	_, _ = server.runtime.AnnotateInvestigation("ws", "still working")
+	server.flushActiveInvestigations()
+	if server.runtime.ActiveInvestigation("ws") == nil {
+		t.Fatal("an asked-for recording must not be closed by a timeout")
+	}
+}
+
+// The ordinary sequence: Axiom notices the agent tracing and starts recording,
+// then the agent calls start itself. Replacing would throw away the traces that
+// prompted the investigation in the first place.
+func TestAnExplicitStartAdoptsTheRecordingAxiomAlreadyBegan(t *testing.T) {
+	server, _ := investigationServer(t)
+
+	postAction(t, server, "trace_calls", "trace", "")
+	postAction(t, server, "get_data_flow", "trace", "")
+	auto := server.runtime.ActiveInvestigation("ws")
+	if auto == nil || auto.Origin != "auto" {
+		t.Fatalf("expected a self-started recording, got %#v", auto)
+	}
+	_, _ = server.runtime.AnnotateInvestigation("ws", "captured before the agent asked")
+
+	body, _ := json.Marshal(map[string]string{"workspaceId": "ws", "name": "Checkout timeout"})
+	response := httptest.NewRecorder()
+	server.handleInvestigationStart(response, httptest.NewRequest(http.MethodPost, "/api/investigation/start", bytes.NewReader(body)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("start = %d: %s", response.Code, response.Body.String())
+	}
+
+	active := server.runtime.ActiveInvestigation("ws")
+	if active == nil || active.ID != auto.ID {
+		t.Fatalf("the explicit start should continue the same recording, got %#v", active)
+	}
+	if active.Origin != "agent" {
+		t.Fatalf("origin = %q, want agent after adoption", active.Origin)
+	}
+	if active.Name != "Checkout timeout" {
+		t.Fatalf("name = %q, want the agent's name", active.Name)
+	}
+	if active.EventCount == 0 {
+		t.Fatal("adoption must keep what was already captured")
+	}
+}
+
+// Adoption must never rename a recording its owner is already running.
+func TestAnExplicitStartDoesNotAdoptAnotherExplicitRecording(t *testing.T) {
+	server, _ := investigationServer(t)
+	first := server.runtime.StartInvestigation("ws", "Mine", "sha", "main", "human")
+	if adopted := server.runtime.AdoptAutoInvestigation("ws", "Theirs", "agent"); adopted != nil {
+		t.Fatalf("an explicit recording must not be adopted, got %#v", adopted)
+	}
+	active := server.runtime.ActiveInvestigation("ws")
+	if active.ID != first.ID || active.Name != "Mine" || active.Origin != "human" {
+		t.Fatalf("the original recording should be untouched, got %#v", active)
 	}
 }

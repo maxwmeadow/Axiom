@@ -670,6 +670,7 @@ func migrate(db *sql.DB) error {
 		// cannot silently discard it. Rows still marked 'recording' when no
 		// recorder is live were interrupted, and are reported as such.
 		`ALTER TABLE investigations ADD COLUMN status TEXT NOT NULL DEFAULT 'saved'`,
+		`ALTER TABLE investigations ADD COLUMN origin TEXT NOT NULL DEFAULT 'agent'`,
 		// Live activity tracking (edit bursts, decayed scores)
 		`ALTER TABLE files ADD COLUMN activity_score REAL    NOT NULL DEFAULT 0`,
 		`ALTER TABLE files ADD COLUMN activity_at    INTEGER NOT NULL DEFAULT 0`,
