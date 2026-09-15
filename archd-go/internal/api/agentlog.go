@@ -103,3 +103,36 @@ func (s *Server) handleAgentActions(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, actions)
 }
+
+// handleCallTrace animates and records a trace the caller assembled itself.
+//
+// POST /api/call-trace {workspaceId, steps}
+//
+// /api/call-path walks the graph here and broadcasts what it finds, but the
+// call-graph shape - the one agents are told to use for "the graph around
+// these files" - is assembled in the MCP from SQL and had no way to reach the
+// canvas. So it drew nothing, and an investigation recorded a prose line
+// instead of the trace itself.
+func (s *Server) handleCallTrace(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	var body struct {
+		WorkspaceID string        `json:"workspaceId"`
+		Steps       []db.CallEdge `json:"steps"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, "invalid body", 400)
+		return
+	}
+	if body.WorkspaceID == "" || len(body.Steps) == 0 {
+		jsonError(w, "workspaceId and a non-empty steps array are required", 400)
+		return
+	}
+	s.hub.Broadcast("call:trace", map[string]any{
+		"workspaceId": body.WorkspaceID,
+		"steps":       body.Steps,
+	})
+	jsonOK(w, map[string]any{"steps": len(body.Steps)})
+}

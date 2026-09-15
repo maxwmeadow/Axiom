@@ -85,6 +85,23 @@ async function queryDb(workspaceId: string, sql: string, params: any[] = []): Pr
   return res.json() as Promise<any[]>
 }
 
+// Helper: send a trace this server assembled to the canvas, so the map animates
+// it and any running investigation records it. /api/call-path broadcasts what it
+// walks; a graph built here from SQL has no other way to reach either.
+async function postCallTrace(workspaceId: string, steps: Array<Record<string, unknown>>) {
+  if (steps.length === 0) return
+  try {
+    await fetch(`${API_BASE}/api/call-trace`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId, steps }),
+    })
+  } catch (err) {
+    // Showing the trace is an aid, never a dependency of answering the agent.
+    console.error('[axiom-mcp] failed to post call trace:', err)
+  }
+}
+
 // Helper: Post agent activity log to Go backend which broadcasts to WS client UI
 async function postAgentActivity(workspaceId: string, message: string, level: 'info' | 'warn' | 'success' | 'error') {
   try {
@@ -1408,6 +1425,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           currentFrontier = nextFrontier
         }
         
+        // The canvas animates call:trace and the recorder captures it. Without
+        // this the fileIds shape - the one the tool description sends agents to
+        // - drew nothing and recorded only a prose line.
+        await postCallTrace(project.workspaceId, dependencies.map(dep => ({
+          callerFile: dep.callerFileId,
+          callerSymbol: dep.callerSymbol,
+          calleeFile: dep.calleeFileId,
+          calleeSymbol: dep.calleeSymbol,
+          callCount: dep.callCount ?? 1,
+        })))
+
         result = dependencies
         break
       }
