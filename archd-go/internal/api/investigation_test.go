@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"axiom.local/archd/internal/hub"
 	"axiom.local/archd/internal/runtime"
@@ -166,7 +167,14 @@ func TestAutoCaptureDoesNotDisturbARecordingAlreadyRunning(t *testing.T) {
 // for does not - ending it is the caller's decision.
 func TestAnIdleSelfStartedRecordingClosesItselfButAnAskedForOneDoesNot(t *testing.T) {
 	server, _ := investigationServer(t)
-	server.autoCaptureIdleStop = 0 // anything idle at all is idle enough
+	// Negative, not zero. Idle time is elapsed minus the last event's offset,
+	// and that offset is truncated to whole milliseconds - so on a platform
+	// whose clock does not advance between capturing the event and flushing
+	// (Windows' timer granularity is coarse enough to do this), idle computes
+	// as exactly zero and "idle > 0" is false. A negative threshold is
+	// unambiguous everywhere. The real default is three minutes, where this
+	// cannot arise.
+	server.autoCaptureIdleStop = -time.Second
 
 	postAction(t, server, "trace_calls", "trace", "")
 	postAction(t, server, "get_data_flow", "trace", "")
