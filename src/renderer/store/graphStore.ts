@@ -269,9 +269,21 @@ interface GraphState {
    * canvas showed nothing while an agent recorded, so a watcher could not tell
    * a live investigation from an idle one.
    */
-  activeInvestigation: { id: string; name: string; startedAt: number; eventCount: number } | null
+  activeInvestigation: {
+    id: string
+    name: string
+    startedAt: number
+    eventCount: number
+    origin: string
+  } | null
   replay: ReplayState | null
-  beginInvestigation: (id: string, name: string, startedAt?: number, eventCount?: number) => void
+  beginInvestigation: (
+    id: string,
+    name: string,
+    startedAt?: number,
+    eventCount?: number,
+    origin?: string,
+  ) => void
   endInvestigation: () => void
   countInvestigationEvent: () => void
   startReplay: (doc: InvestigationDoc) => void
@@ -504,10 +516,11 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     runtimeSessions: [], runtimeWatches: {}, runtimeNodes: {}, runtimeInjections: {},
     activeTrace: null, dataFlow: null,
   }),
-  beginInvestigation: (id, name, startedAt, eventCount) => set({
+  beginInvestigation: (id, name, startedAt, eventCount, origin) => set({
     activeInvestigation: {
       id,
       name,
+      origin: origin ?? 'agent',
       // Defaults are for a recording that starts now, via the live broadcast.
       // Reconciling with archd passes the real values instead.
       startedAt: startedAt ?? Date.now(),
@@ -1432,8 +1445,14 @@ export function handleWsMessage(msg: { type: string; payload: unknown }): void {
       void store.loadDelta()
       break
     case 'investigation:started': {
-      const started = msg.payload as { id?: string; name?: string }
-      store.beginInvestigation(started?.id ?? '', started?.name ?? 'Investigation')
+      const started = msg.payload as { id?: string; name?: string; origin?: string }
+      store.beginInvestigation(
+        started?.id ?? '',
+        started?.name ?? 'Investigation',
+        undefined,
+        undefined,
+        started?.origin,
+      )
       break
     }
     case 'investigation:stopped':

@@ -185,6 +185,14 @@ export function InvestigationsMenu({ workspaceId }: { workspaceId: string }) {
                     {investigation.commit
                       ? <code>{investigation.branch}@{investigation.commit.slice(0, 7)}</code>
                       : <code title="Axiom could not resolve a git commit, so this capture is not pinned to a code version.">no commit</code>}
+                    {investigation.origin === 'auto' && (
+                      <span
+                        className="axiom-investigations-menu__flag axiom-investigations-menu__flag--auto"
+                        title="Axiom started this recording when it saw the agent begin investigating."
+                      >
+                        auto
+                      </span>
+                    )}
                     {investigation.status === 'interrupted' && (
                       <span
                         className="axiom-investigations-menu__flag"

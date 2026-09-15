@@ -16,6 +16,11 @@
 export type ActionKind = 'read' | 'trace' | 'write' | 'plan' | 'debug' | 'narrate'
 
 const TRACE_TOOLS = new Set([
+  // trace_calls is the name agents actually call - the consolidated surface
+  // advertises it, and the log records what the agent called rather than the
+  // legacy name it routes to. Without it here, the most common tracing tool
+  // in the product was filed as a plain read and lit the canvas as one.
+  'trace_calls',
   'get_call_path', 'get_call_graph', 'get_call_graph_for_files', 'get_data_flow',
 ])
 

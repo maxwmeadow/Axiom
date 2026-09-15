@@ -50,7 +50,9 @@ export function RecordingControl({ workspaceId }: { workspaceId: string }) {
       try {
         const { recording } = await apiListInvestigations(workspaceId)
         if (cancelled || !recording) return
-        beginInvestigation(recording.id, recording.name, recording.createdAt, recording.eventCount)
+        beginInvestigation(
+          recording.id, recording.name, recording.createdAt, recording.eventCount, recording.origin,
+        )
       } catch {
         // A failed reconcile is not worth a visible error; the WS broadcast
         // will still switch the control on when the next event arrives.
@@ -122,7 +124,11 @@ export function RecordingControl({ workspaceId }: { workspaceId: string }) {
         >
           <span className="axiom-recording__dot" aria-hidden="true" />
           <span className="axiom-recording__text">
-            {busy ? 'Saving…' : `Recording ${elapsedLabel(now - active.startedAt)}`}
+            {busy
+              ? 'Saving…'
+              : active.origin === 'auto'
+                ? `Auto-recording ${elapsedLabel(now - active.startedAt)}`
+                : `Recording ${elapsedLabel(now - active.startedAt)}`}
           </span>
           <span className="axiom-recording__count">
             {active.eventCount} {active.eventCount === 1 ? 'event' : 'events'}

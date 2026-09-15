@@ -199,6 +199,8 @@ export interface InvestigationMeta {
   eventCount: number
   /** 'saved' | 'recording' | 'interrupted' */
   status: string
+  /** 'agent' | 'human' | 'auto' - who began the recording. */
+  origin: string
 }
 
 export interface ActiveInvestigation {
@@ -210,6 +212,7 @@ export interface ActiveInvestigation {
   /** How much is already captured, so a window joining late shows the truth. */
   eventCount: number
   status: string
+  origin: string
 }
 
 export async function apiListInvestigations(workspaceId: string): Promise<{
@@ -231,7 +234,9 @@ export async function apiGetInvestigation(workspaceId: string, id: string): Prom
 export async function apiStartInvestigation(workspaceId: string, name: string): Promise<{ id: string; name: string; commit: string; note?: string }> {
   const res = await fetch(`${BASE}/api/investigation/start`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspaceId, name }),
+    // Pressing record is the human path; an agent asking gets 'agent', and a
+    // recording Axiom starts by noticing gets 'auto'.
+    body: JSON.stringify({ workspaceId, name, origin: 'human' }),
   })
   if (!res.ok) throw new Error(await res.text() || 'Unable to start recording')
   return res.json()

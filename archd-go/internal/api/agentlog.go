@@ -66,6 +66,11 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	// The renderer animates from this: targets tell the canvas which nodes to
 	// light up, kind tells it how.
 	s.hub.Broadcast("agent:action", action)
+
+	// An agent should not have to remember to press record. If it starts
+	// investigating and nothing is recording, Axiom starts one itself.
+	s.maybeAutoStartInvestigation(sqlDB, action)
+
 	jsonOK(w, action)
 }
 

@@ -73,6 +73,14 @@ type Server struct {
 	rootSyncPending   map[string]pendingRootSync
 	collisionCache    map[string]collisionCacheEntry
 	collisionCacheTTL time.Duration
+	// Auto-capture: a burst of tracing with no recording running is the signal
+	// that an agent began investigating. Timestamps of recent qualifying
+	// actions per workspace, so one incidental trace during feature work does
+	// not spawn an investigation of its own.
+	autoCaptureMu     sync.Mutex
+	autoCaptureRecent map[string][]int64
+	// How long a self-started recording may sit idle before closing itself.
+	autoCaptureIdleStop time.Duration
 	// A deleted workspace cannot be lazily reopened by a late poll or an old
 	// MCP process. Only POST /api/workspace explicitly starts a new lifetime.
 	deletedWorkspaces map[string]struct{}
@@ -87,24 +95,26 @@ type Server struct {
 
 func NewServer(dataDir string, h *hub.Hub, rt *runtime.Manager) *Server {
 	s := &Server{
-		dataDir:           dataDir,
-		dbs:               make(map[string]*sql.DB),
-		hub:               h,
-		roots:             make(map[string]db.Root),
-		runtime:           rt,
-		registry:          registry.Load(nil),
-		watchers:          make(map[string]*watcher.Watcher),
-		discoverWorktrees: gitworktree.Discover,
-		worktreeRefresh:   5 * time.Minute,
-		worktreeMonitors:  make(map[string]worktreeMonitor),
-		rootSyncing:       make(map[string]bool),
-		rootSyncPending:   make(map[string]pendingRootSync),
-		collisionCache:    make(map[string]collisionCacheEntry),
-		collisionCacheTTL: 2 * time.Second,
-		deletedWorkspaces: make(map[string]struct{}),
-		agentPresence:     make(map[string]map[string]AgentPresence),
-		presenceNow:       time.Now,
-		agentPresenceTTL:  15 * time.Second,
+		dataDir:             dataDir,
+		dbs:                 make(map[string]*sql.DB),
+		hub:                 h,
+		roots:               make(map[string]db.Root),
+		runtime:             rt,
+		registry:            registry.Load(nil),
+		watchers:            make(map[string]*watcher.Watcher),
+		discoverWorktrees:   gitworktree.Discover,
+		worktreeRefresh:     5 * time.Minute,
+		worktreeMonitors:    make(map[string]worktreeMonitor),
+		rootSyncing:         make(map[string]bool),
+		rootSyncPending:     make(map[string]pendingRootSync),
+		collisionCache:      make(map[string]collisionCacheEntry),
+		collisionCacheTTL:   2 * time.Second,
+		autoCaptureRecent:   make(map[string][]int64),
+		autoCaptureIdleStop: autoCaptureIdleStopDefault,
+		deletedWorkspaces:   make(map[string]struct{}),
+		agentPresence:       make(map[string]map[string]AgentPresence),
+		presenceNow:         time.Now,
+		agentPresenceTTL:    15 * time.Second,
 	}
 	// Adapters started outside the launcher (PYTHONPATH opt-in) have no
 	// AXIOM_WORKSPACE_ID; map them to a workspace by their working directory.
