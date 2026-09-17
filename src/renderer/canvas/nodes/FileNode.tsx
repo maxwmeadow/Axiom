@@ -739,64 +739,97 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
             '--living-signal-close': `${LIVING_FILE_SIGNAL_CLOSE_MS}ms`,
           } as React.CSSProperties}
         >
+          {/* Luminous perimeter energy border around the active file node */}
+          <div
+            className="axiom-living-file-telemetry__border"
+            style={{
+              position: 'absolute',
+              inset: -2,
+              borderRadius: 2,
+              border: `2px solid ${livingRevealColor}`,
+              boxShadow: `0 0 14px color-mix(in srgb, ${livingRevealColor} 55%, transparent), inset 0 0 8px color-mix(in srgb, ${livingRevealColor} 20%, transparent)`,
+              pointerEvents: 'none',
+            }}
+          />
+          {/* Corner accents */}
           <div style={{
             position: 'absolute',
-            inset: 0,
-            width: `${100 / s}%`,
-            height: `${100 / s}%`,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '14px 16px',
-            border: `2px solid ${livingRevealColor}`,
-            background:
-              `linear-gradient(110deg, color-mix(in srgb, ${livingRevealColor} 16%, var(--bg-raised)), ` +
-              'var(--bg-raised) 68%)',
-            boxShadow:
-              `4px 4px 0 color-mix(in srgb, ${livingRevealColor} 24%, transparent), ` +
-              `0 0 24px color-mix(in srgb, ${livingRevealColor} 48%, transparent)`,
-            transform: `scale(${s})`,
-            transformOrigin: 'top left',
-          }}>
-            <div style={{
-              width: 38,
-              height: 38,
-              display: 'grid',
-              flex: '0 0 38px',
-              placeItems: 'center',
-              border: `1px solid color-mix(in srgb, ${livingRevealColor} 65%, var(--border))`,
-              background: 'var(--bg-surface)',
-            }}>
-              <LanguageIcon language={d.language ?? ''} size={25} />
-            </div>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{
-                color: livingRevealColor,
-                fontFamily: 'var(--font-mono)',
-                fontSize: 8,
-                fontWeight: 900,
-                letterSpacing: '0.13em',
-                lineHeight: 1,
-              }}>
-                {livingSignalLabel}
-              </div>
-              <div style={{
-                marginTop: 7,
-                overflow: 'hidden',
-                color: 'var(--text-primary)',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 14,
-                fontWeight: 750,
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {d.label}
-              </div>
-            </div>
+            top: -2,
+            left: -2,
+            width: 8,
+            height: 8,
+            borderTop: `2px solid ${livingRevealColor}`,
+            borderLeft: `2px solid ${livingRevealColor}`,
+            pointerEvents: 'none',
+          }} />
+          <div style={{
+            position: 'absolute',
+            bottom: -2,
+            right: -2,
+            width: 8,
+            height: 8,
+            borderBottom: `2px solid ${livingRevealColor}`,
+            borderRight: `2px solid ${livingRevealColor}`,
+            pointerEvents: 'none',
+          }} />
+          {/* Sleek floating agent activity badge hovering above the node */}
+          <div
+            className="axiom-living-file-telemetry__badge"
+            style={{
+              position: 'absolute',
+              top: -26,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '3px 9px',
+              borderRadius: 4,
+              border: `1px solid color-mix(in srgb, ${livingRevealColor} 60%, var(--border))`,
+              borderTop: `2px solid ${livingRevealColor}`,
+              background: 'var(--bg-raised)',
+              boxShadow: `0 4px 12px rgba(0,0,0,0.28), 0 0 10px color-mix(in srgb, ${livingRevealColor} 30%, transparent)`,
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+            }}
+          >
             <div
               className="axiom-living-file-signal__beacon"
-              style={{ background: livingRevealColor, boxShadow: `0 0 12px ${livingRevealColor}` }}
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: livingRevealColor,
+                boxShadow: `0 0 8px ${livingRevealColor}`,
+              }}
             />
+            <span
+              style={{
+                color: livingRevealColor,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 8.5,
+                fontWeight: 900,
+                letterSpacing: '0.12em',
+                lineHeight: 1,
+              }}
+            >
+              {livingSignalLabel}
+            </span>
+            <span style={{ color: 'var(--border)', fontSize: 9 }}>•</span>
+            <span
+              style={{
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 9,
+                fontWeight: 700,
+                lineHeight: 1,
+                maxWidth: 140,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {d.label}
+            </span>
           </div>
         </div>
       )}

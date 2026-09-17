@@ -535,13 +535,13 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
             height: Math.max(1, Math.min(shellSize.h - y - 2, window.height + pad * 2)),
           }
         })
-        const maskPath = [
-          `M 0 0 H ${shellSize.w} V ${shellSize.h} H 0 Z`,
-          ...windows.map(window =>
-            `M ${window.x} ${window.y} H ${window.x + window.width} ` +
-            `V ${window.y + window.height} H ${window.x} Z`
-          ),
-        ].join(' ')
+        const primaryColor = windows[0]
+          ? (windows[0].kind === 'enter' || windows[0].kind === 'flow-add'
+              ? '#2fa35d'
+              : windows[0].kind === 'exit' || windows[0].kind === 'flow-remove'
+                ? '#b6534b'
+                : '#3c8f92')
+          : color
         return (
           <svg
             className={
@@ -560,10 +560,13 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
               '--living-window-close': `${LIVING_WINDOW_CLOSE_MS}ms`,
             } as React.CSSProperties}
           >
+            {/* Architectural contour aura along the system silhouette */}
             <path
-              d={maskPath}
-              fill="rgba(42, 50, 47, 0.16)"
-              fillRule="evenodd"
+              d={shellPath}
+              fill="none"
+              stroke={primaryColor}
+              strokeWidth={Math.max(1.5, 2 * presentationScale)}
+              className="axiom-system-telemetry-glow"
             />
             {windows.map(window => {
               const windowColor = window.kind === 'enter' || window.kind === 'flow-add'
@@ -571,18 +574,33 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
                 : window.kind === 'exit' || window.kind === 'flow-remove'
                   ? '#b6534b'
                   : '#3c8f92'
+              const tick = Math.min(8, Math.min(window.width, window.height) * 0.25)
               return (
                 <g key={`${window.originId}-${window.key}`}>
+                  {/* Subtle luminous blueprint wash */}
                   <rect
                     x={window.x}
                     y={window.y}
                     width={window.width}
                     height={window.height}
-                    fill="rgba(242, 240, 229, 0.44)"
+                    fill={windowColor}
+                    fillOpacity={0.06}
+                    stroke={windowColor}
+                    strokeOpacity={0.25}
+                    strokeWidth={1}
+                    className="axiom-living-inspection-window"
+                  />
+                  {/* Precision corner registration ticks */}
+                  <path
+                    d={`M ${window.x} ${window.y + tick} L ${window.x} ${window.y} L ${window.x + tick} ${window.y} ` +
+                      `M ${window.x + window.width - tick} ${window.y} L ${window.x + window.width} ${window.y} L ${window.x + window.width} ${window.y + tick} ` +
+                      `M ${window.x + window.width} ${window.y + window.height - tick} L ${window.x + window.width} ${window.y + window.height} L ${window.x + window.width - tick} ${window.y + window.height} ` +
+                      `M ${window.x + tick} ${window.y + window.height} L ${window.x} ${window.y + window.height} L ${window.x} ${window.y + window.height - tick}`}
+                    fill="none"
                     stroke={windowColor}
                     strokeWidth={Math.max(1.5, 2 * presentationScale)}
-                    strokeDasharray={`${Math.max(5, 8 * presentationScale)} ${Math.max(2, 4 * presentationScale)}`}
-                    className="axiom-living-inspection-window"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                   />
                 </g>
               )
@@ -593,51 +611,67 @@ export function SystemNode({ data, selected, width, height, isConnectable }: Nod
       {surfacedFx && (
         <div
           key={`surface-fx-${surfacedFx.key}`}
-          className="axiom-surface-activity-peek"
+          className="axiom-surface-activity-peek axiom-surface-activity-pill"
           style={{
             position: 'absolute',
-            right: 0,
-            bottom: Math.max(10, titleFont * 0.8),
+            right: Math.max(10, 12 * presentationScale),
+            bottom: Math.max(8, 10 * presentationScale),
             zIndex: 35,
             pointerEvents: 'none',
-            maxWidth: '58%',
-            minWidth: Math.min(shellSize.w * 0.34, 180 * presentationScale),
-            border: `1px solid ${surfacedColor}`,
-            borderLeftWidth: Math.max(3, 3 * presentationScale),
+            maxWidth: '65%',
+            minWidth: Math.min(shellSize.w * 0.32, 160 * presentationScale),
+            border: `1px solid ${surfacedColor}55`,
+            borderLeft: `3px solid ${surfacedColor}`,
             background: 'var(--bg-raised)',
-            boxShadow: `3px 3px 0 rgba(52, 61, 57, 0.28), 0 0 9px ${surfacedColor}55`,
+            borderRadius: 4,
+            boxShadow: `0 4px 14px rgba(0, 0, 0, 0.22), 0 0 10px ${surfacedColor}33`,
             color: 'var(--text-primary)',
-            padding: `${Math.max(4, titleFont * 0.24)}px ${Math.max(6, titleFont * 0.42)}px`,
+            padding: `${Math.max(4, titleFont * 0.24)}px ${Math.max(8, titleFont * 0.42)}px`,
             fontFamily: 'var(--font-mono)',
-            transformOrigin: 'right center',
-            animation: 'axiomSurfaceActivityPeek 1.35s cubic-bezier(0.22,1,0.36,1) both',
+            animation: 'axiomSurfaceActivityPill 1.4s cubic-bezier(0.16, 1, 0.3, 1) both',
           }}
         >
           <div style={{
-            color: surfacedColor,
-            fontSize: Math.max(7, titleFont * 0.52),
-            fontWeight: 800,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-          }}>{surfacedVerb}</div>
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}>
+            <span style={{
+              display: 'inline-block',
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: surfacedColor,
+              boxShadow: `0 0 6px ${surfacedColor}`,
+            }} />
+            <span style={{
+              color: surfacedColor,
+              fontSize: Math.max(7.5, titleFont * 0.52),
+              fontWeight: 800,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+            }}>{surfacedVerb}</span>
+          </div>
           <div style={{
             overflow: 'hidden',
-            marginTop: Math.max(2, titleFont * 0.12),
-            fontSize: Math.max(8, titleFont * 0.68),
+            marginTop: 2,
+            fontSize: Math.max(8.5, titleFont * 0.65),
             fontWeight: 700,
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
           }}>{surfacedIdentity}{surfacedOverflow}</div>
         </div>
       )}
-      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
-        isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
-        minWidth={d.minResizeWidth ?? 1}
-        minHeight={d.minResizeHeight ?? 1}
-        minWidthWest={d.minResizeWidthWest}
-        minHeightNorth={d.minResizeHeightNorth} color={color}
-        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
+      {selected && (
+        <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
+          isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
+          minWidth={d.minResizeWidth ?? 1}
+          minHeight={d.minResizeHeight ?? 1}
+          minWidthWest={d.minResizeWidthWest}
+          minHeightNorth={d.minResizeHeightNorth} color={color}
+          onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
+      )}
       {handles}
     </div>
   )
-}
+})
