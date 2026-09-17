@@ -179,10 +179,13 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+    ...(isMac ? {
+      trafficLightPosition: { x: 14, y: 10 },
+    } : {}),
     // On Windows: overlay native window controls on top of the custom toolbar
     ...(isWin ? {
       titleBarOverlay: {
-        color: '#202b29',
+        color: '#26332f',
         symbolColor: '#f2f1eb',
         height: 34,
       },
@@ -199,6 +202,13 @@ function createWindow(): void {
     // with showInactive() below because Chromium will not consider screenshots
     // geometrically stable while a BrowserWindow remains fully hidden.
     skipTaskbar: IS_E2E,
+  })
+
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send('window:maximized-change', true)
+  })
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send('window:maximized-change', false)
   })
 
   if (IS_DEV && DEV_SERVER_URL) {
@@ -522,6 +532,42 @@ function setupIPC(): void {
         null,
         2,
       ),
+    }
+  })
+
+  // Window controls
+  ipcMain.handle('window:minimize', () => {
+    mainWindow?.minimize()
+  })
+
+  ipcMain.handle('window:maximize', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize()
+    } else {
+      mainWindow.maximize()
+    }
+  })
+
+  ipcMain.handle('window:close', () => {
+    mainWindow?.close()
+  })
+
+  ipcMain.handle('window:is-maximized', () => {
+    return mainWindow?.isMaximized() ?? false
+  })
+
+  ipcMain.handle('window:set-title-bar-height', (_event, height: number) => {
+    if (mainWindow && !mainWindow.isDestroyed() && process.platform === 'win32') {
+      try {
+        mainWindow.setTitleBarOverlay({
+          color: '#26332f',
+          symbolColor: '#f2f1eb',
+          height,
+        })
+      } catch {
+        // Ignore if unsupported
+      }
     }
   })
 }

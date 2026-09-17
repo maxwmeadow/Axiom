@@ -51,12 +51,19 @@ function tokenStyle(token: SyntaxToken): React.CSSProperties {
   }
 }
 
+const LINE_HEIGHT = 18.6
+const OVERSCAN = 30
+const VIRTUALIZE_THRESHOLD = 100
+
 export function SourcePreviewDialog({ fileId, workspaceId, symbol, onClose }: SourcePreviewDialogProps) {
   const [source, setSource] = React.useState<FileSource | null>(null)
   const [highlightedSource, setHighlightedSource] = React.useState<HighlightedSource | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
   const highlightedLineRef = React.useRef<HTMLDivElement | null>(null)
   const range = React.useMemo(() => highlightedRange(symbol), [symbol])
+  const [scrollTop, setScrollTop] = React.useState(0)
+  const [viewportHeight, setViewportHeight] = React.useState(600)
 
   React.useEffect(() => {
     const controller = new AbortController()
@@ -101,11 +108,32 @@ export function SourcePreviewDialog({ fileId, workspaceId, symbol, onClose }: So
 
   React.useEffect(() => {
     if (!source) return
+    const container = containerRef.current
+    if (!container) return
+    const vHeight = container.clientHeight || 600
+    setViewportHeight(vHeight)
+    const target = Math.max(0, (range.start - 1) * LINE_HEIGHT - vHeight / 2)
+    container.scrollTop = target
+    setScrollTop(target)
     requestAnimationFrame(() => highlightedLineRef.current?.scrollIntoView({ block: 'center' }))
   }, [source, range.start])
 
+  const onCodeScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(event.currentTarget.scrollTop)
+    if (event.currentTarget.clientHeight && event.currentTarget.clientHeight !== viewportHeight) {
+      setViewportHeight(event.currentTarget.clientHeight)
+    }
+  }
+
   const lines = React.useMemo(() => source ? sourceLines(source.content) : [], [source])
   const title = source?.relPath ?? fileId
+
+  const isVirtualized = lines.length > VIRTUALIZE_THRESHOLD
+  const startIndex = isVirtualized ? Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - OVERSCAN) : 0
+  const endIndex = isVirtualized ? Math.min(lines.length, Math.ceil((scrollTop + viewportHeight) / LINE_HEIGHT) + OVERSCAN) : lines.length
+  const topSpacerHeight = isVirtualized ? startIndex * LINE_HEIGHT : 0
+  const bottomSpacerHeight = isVirtualized ? (lines.length - endIndex) * LINE_HEIGHT : 0
+  const visibleLines = isVirtualized ? lines.slice(startIndex, endIndex) : lines
 
   return createPortal(
     <div
@@ -127,26 +155,41 @@ export function SourcePreviewDialog({ fileId, workspaceId, symbol, onClose }: So
           </div>
           <button autoFocus className="source-preview-close" onClick={onClose} aria-label="Close source preview">×</button>
         </header>
-        <div className="source-preview-code" aria-busy={!source && !error} style={{ backgroundColor: highlightedSource?.background }}>
+        <div
+          ref={containerRef}
+          onScroll={isVirtualized ? onCodeScroll : undefined}
+          className="source-preview-code"
+          aria-busy={!source && !error}
+          style={{ backgroundColor: highlightedSource?.background }}
+        >
           {!source && !error && <div className="source-preview-message">Loading source…</div>}
           {error && <div className="source-preview-message source-preview-error">{error}</div>}
-          {source && lines.map((line, index) => {
-            const lineNumber = index + 1
-            const highlighted = lineNumber >= range.start && lineNumber <= range.end
-            const tokens = highlightedSource?.tokens[index]
-            return <div
-              key={lineNumber}
-              ref={lineNumber === range.start ? highlightedLineRef : undefined}
-              className={`source-preview-line${highlighted ? ' source-preview-line-highlighted' : ''}`}
-            >
-              <span className="source-preview-line-number">{lineNumber}</span>
-              <span className="source-preview-line-content" style={{ color: highlightedSource?.foreground }}>
-                {tokens?.length
-                  ? tokens.map((token, tokenIndex) => <span key={tokenIndex} style={tokenStyle(token)}>{token.content}</span>)
-                  : line || ' '}
-              </span>
-            </div>
-          })}
+          {source && (
+            <>
+              {topSpacerHeight > 0 && <div style={{ height: topSpacerHeight, flexShrink: 0 }} aria-hidden="true" />}
+              {visibleLines.map((line, offset) => {
+                const index = startIndex + offset
+                const lineNumber = index + 1
+                const highlighted = lineNumber >= range.start && lineNumber <= range.end
+                const tokens = highlightedSource?.tokens[index]
+                return (
+                  <div
+                    key={lineNumber}
+                    ref={lineNumber === range.start ? highlightedLineRef : undefined}
+                    className={`source-preview-line${highlighted ? ' source-preview-line-highlighted' : ''}`}
+                  >
+                    <span className="source-preview-line-number">{lineNumber}</span>
+                    <span className="source-preview-line-content" style={{ color: highlightedSource?.foreground }}>
+                      {tokens?.length
+                        ? tokens.map((token, tokenIndex) => <span key={tokenIndex} style={tokenStyle(token)}>{token.content}</span>)
+                        : line || ' '}
+                    </span>
+                  </div>
+                )
+              })}
+              {bottomSpacerHeight > 0 && <div style={{ height: bottomSpacerHeight, flexShrink: 0 }} aria-hidden="true" />}
+            </>
+          )}
         </div>
       </section>
     </div>,

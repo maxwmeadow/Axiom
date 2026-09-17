@@ -65,6 +65,22 @@ contextBridge.exposeInMainWorld('axiom', {
   clearAgentHostOverride: (hostId: string): Promise<AgentOverrideResult> =>
     ipcRenderer.invoke('agent:clear-override', hostId),
 
+  // Platform & window controls
+  platform: process.platform as 'darwin' | 'win32' | 'linux',
+  minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
+  maximize: (): Promise<void> => ipcRenderer.invoke('window:maximize'),
+  close: (): Promise<void> => ipcRenderer.invoke('window:close'),
+  isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:is-maximized'),
+  setTitleBarHeight: (height: number): Promise<void> =>
+    ipcRenderer.invoke('window:set-title-bar-height', height),
+  onMaximizedChange: (callback: (maximized: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, max: boolean) => callback(max)
+    ipcRenderer.on('window:maximized-change', handler)
+    return () => {
+      ipcRenderer.removeListener('window:maximized-change', handler)
+    }
+  },
+
   // Listen for messages from archd (forwarded by main process)
   onArchdMessage: (callback: (msg: WsMessage) => void) => {
     ipcRenderer.on('archd:message', (_event, msg) => callback(msg))
@@ -146,6 +162,13 @@ declare global {
       installFamily: (familyId: string, projectRoot?: string) => Promise<AgentInstallResult>
       locateAgentHost: (hostId: string) => Promise<AgentOverrideResult>
       clearAgentHostOverride: (hostId: string) => Promise<AgentOverrideResult>
+      platform: 'darwin' | 'win32' | 'linux'
+      minimize: () => Promise<void>
+      maximize: () => Promise<void>
+      close: () => Promise<void>
+      isMaximized: () => Promise<boolean>
+      setTitleBarHeight: (height: number) => Promise<void>
+      onMaximizedChange: (callback: (maximized: boolean) => void) => () => void
       onArchdMessage: (callback: (msg: WsMessage) => void) => void
       removeArchdListener: (callback: (msg: WsMessage) => void) => void
     }

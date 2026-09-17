@@ -1434,17 +1434,18 @@ a { color: var(--accent); text-decoration: none; }
   stroke: var(--living-flow-color);
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.5;
+  stroke-width: 3.5;
   stroke-dasharray: var(--living-flow-head) var(--living-flow-tail);
   animation: axiomLivingFlowTravel var(--living-flow-travel) linear both;
   animation-delay: var(--living-flow-delay);
   filter:
-    drop-shadow(0 0 2px var(--living-flow-color))
-    drop-shadow(0 0 5px var(--living-flow-color));
+    drop-shadow(0 0 2px #fff)
+    drop-shadow(0 0 6px var(--living-flow-color))
+    drop-shadow(0 0 14px color-mix(in srgb, var(--living-flow-color) 75%, transparent));
 }
 
 /* Hidden descendant activity surfaces on the lower-right structural chrome of
-   the nearest visible semantic container. The rail avoids every title layout. */
+   the nearest visible semantic container. */
 @keyframes axiomSurfaceActivityRail {
   0%   { opacity: 0; stroke-dashoffset: 0.95; }
   18%  { opacity: 1; }
@@ -1459,21 +1460,46 @@ a { color: var(--accent); text-decoration: none; }
   100% { opacity: 0; transform: scale(1.8); }
 }
 
+@keyframes axiomSurfaceActivityPill {
+  0%   { opacity: 0; transform: translateY(8px) scale(0.95); }
+  18%  { opacity: 1; transform: translateY(0) scale(1); }
+  72%  { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-4px) scale(0.97); }
+}
+
 @keyframes axiomSurfaceActivityPeek {
-  0%   { opacity: 0; transform: translateX(12%) scale(0.92); }
-  18%  { opacity: 1; transform: translateX(38%) scale(1.04); }
-  64%  { opacity: 1; transform: translateX(34%) scale(1); }
-  100% { opacity: 0; transform: translateX(28%) scale(0.98); }
+  0%   { opacity: 0; transform: translateY(8px) scale(0.95); }
+  18%  { opacity: 1; transform: translateY(0) scale(1); }
+  72%  { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-4px) scale(0.97); }
+}
+
+.axiom-surface-activity-pill {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+@keyframes axiomSystemTelemetryGlow {
+  0%   { opacity: 0; }
+  30%  { opacity: 1; }
+  80%  { opacity: 1; }
+  100% { opacity: 0.85; }
+}
+
+.axiom-system-telemetry-glow {
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 6px currentColor);
+  animation: axiomSystemTelemetryGlow 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @keyframes axiomLivingFileSignalOpen {
-  from { opacity: 0; transform: scale(0.985); }
-  to { opacity: 1; transform: scale(1); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes axiomLivingFileSignalClose {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(0.99); }
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 .axiom-living-file-signal {
@@ -1486,37 +1512,45 @@ a { color: var(--accent); text-decoration: none; }
   animation: axiomLivingFileSignalClose var(--living-signal-close, 340ms) cubic-bezier(0.4,0,0.2,1) both;
 }
 
+@keyframes axiomFileTelemetryBorderPulse {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
+.axiom-living-file-telemetry__border {
+  animation: axiomFileTelemetryBorderPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes axiomLivingFileBadgeIn {
+  0% { opacity: 0; transform: translateX(-50%) translateY(4px) scale(0.94); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+
+.axiom-living-file-telemetry__badge {
+  animation: axiomLivingFileBadgeIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @keyframes axiomLivingFileBeacon {
-  0%, 100% { opacity: 0.35; transform: scale(0.7); }
-  40% { opacity: 1; transform: scale(1.45); }
-  70% { opacity: 0.8; transform: scale(1); }
+  0%, 100% { opacity: 0.45; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.25); }
 }
 
 .axiom-living-file-signal__beacon {
-  position: absolute;
-  top: 15px;
-  right: 16px;
-  width: 7px;
-  height: 7px;
-  animation: axiomLivingFileBeacon 620ms ease-in-out infinite;
+  border-radius: 50%;
+  animation: axiomLivingFileBeacon 700ms ease-in-out infinite;
 }
 
 @keyframes axiomLivingInspectionOpen {
   0% {
     opacity: 0;
-    stroke-dashoffset: 30;
-  }
-  35% {
-    opacity: 1;
   }
   100% {
     opacity: 1;
-    stroke-dashoffset: 0;
   }
 }
 
 .axiom-living-inspection-layer {
-  animation: axiomLivingInspectionOpen 520ms cubic-bezier(0.22,1,0.36,1) both;
+  animation: axiomLivingInspectionOpen 400ms cubic-bezier(0.22,1,0.36,1) both;
 }
 
 @keyframes axiomLivingInspectionClose {
@@ -1692,8 +1726,8 @@ a { color: var(--accent); text-decoration: none; }
 .axiom-toolbar {
   --workbench-accent: #4f8279;
   --workbench-accent-strong: #346a62;
-  --workbench-title: #2c3937;
-  --workbench-title-dark: #202b29;
+  --workbench-title: #26332f;
+  --workbench-title-dark: #26332f;
   --workbench-chrome: #deddd6;
   --workbench-chrome-light: #f0eee7;
   --workbench-chrome-dark: #b7bbb7;
@@ -1714,9 +1748,9 @@ a { color: var(--accent); text-decoration: none; }
   width: 100%;
   height: 34px;
   flex: 0 0 34px;
-  padding: 0 150px 0 10px;
+  padding: 0 16px;
   color: #f2f1eb;
-  background: linear-gradient(90deg, var(--workbench-title), #35433f 58%, var(--workbench-title-dark));
+  background: linear-gradient(90deg, #26332f, #2d3b37 45%, #26332f 80%);
   border-bottom: 1px solid #151e1c;
   box-shadow: inset 0 -1px #46534f;
 }
@@ -3938,12 +3972,78 @@ select.axiom-inspector-input {
   height: 44px;
   flex: 0 0 44px;
   align-items: center;
-  padding: 0 156px 0 16px;
+  padding: 0 16px;
   border-bottom: 1px solid #101816;
   color: #f2f1eb;
-  background: linear-gradient(90deg, #26332f, #35433f 62%, #192320);
+  background: linear-gradient(90deg, #26332f, #2d3b37 45%, #26332f 80%);
   box-shadow: inset 0 -1px #46534f;
   -webkit-app-region: drag;
+}
+
+/* ── Platform-Aware Window Clearance ─────────────────────────────────────── */
+
+/* macOS: Reserve clearance on the top-left for traffic lights */
+[data-platform="darwin"] .axiom-title-strip,
+[data-platform="darwin"] .axiom-workbench-titlebar {
+  padding-left: 78px;
+  padding-right: 16px;
+}
+
+/* Windows: Reserve clearance on the top-right for native titleBarOverlay */
+[data-platform="win32"] .axiom-title-strip,
+[data-platform="win32"] .axiom-workbench-titlebar {
+  padding-left: 14px;
+  padding-right: 146px;
+}
+
+/* Linux: Custom window controls dock cleanly at the far right */
+[data-platform="linux"] .axiom-title-strip,
+[data-platform="linux"] .axiom-workbench-titlebar {
+  padding-left: 14px;
+  padding-right: 0;
+}
+
+/* ── Custom Window Controls (Linux) ──────────────────────────────────────── */
+
+.axiom-window-controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  margin-left: 8px;
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+
+.axiom-window-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #c7d2ce;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.axiom-window-control:hover {
+  background: #384943;
+  color: #ffffff;
+}
+
+.axiom-window-control:active {
+  background: #2f3e39;
+}
+
+.axiom-window-control--close:hover {
+  background: #c43c35;
+  color: #ffffff;
+}
+
+.axiom-window-control--close:active {
+  background: #a82e28;
 }
 
 .axiom-launcher__titlebar {

@@ -15,6 +15,11 @@ import { SourcePreviewDialog } from '../../components/SourcePreviewDialog'
 import { fitPresentationScale } from '../resizeGeometry'
 import { connectionHandleProps } from './connectionChrome'
 import { AxiomNodeResizer } from './AxiomNodeResizer'
+import {
+  fetchFileSymbols,
+  getCachedSymbols,
+  setCachedSymbols,
+} from '../symbolCache'
 
 type SymbolTab = 'functions' | 'variables' | 'classes'
 
@@ -161,7 +166,7 @@ function RuntimeTooltip({ runtime, color }: { runtime: RuntimeNodeState; color: 
   )
 }
 
-export function FileNode({ data, selected, width, height, isConnectable }: NodeProps) {
+export const FileNode = React.memo(function FileNode({ data, selected, width, height, isConnectable }: NodeProps) {
   const d = data as unknown as FileNodeData
   const livingSignal = useRetainedLivingFileSignal(d.fx)
   const { onResizeStart, onResizeEnd } = d as any
@@ -268,7 +273,8 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
   const currentProject = useGraphStore(s => s.currentProject)
   const workspaceId = currentProject?.id ?? 'demo'
   const suppliedSymbols = d.symbols
-  const [symbols, setSymbols] = React.useState<any[] | null>(suppliedSymbols ?? null)
+  const cachedSymbols = suppliedSymbols ?? getCachedSymbols(workspaceId, d.id)
+  const [symbols, setSymbols] = React.useState<any[] | null>(cachedSymbols ?? null)
   const [symbolsLoading, setSymbolsLoading] = React.useState(false)
   const [activeTab, setActiveTab] = React.useState<SymbolTab>('functions')
   const [previewSymbol, setPreviewSymbol] = React.useState<any | null>(null)
@@ -279,12 +285,14 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
     const request = ++symbolRequestRef.current
     if (symbolNodeIdRef.current !== d.id) {
       symbolNodeIdRef.current = d.id
-      setSymbols(suppliedSymbols ?? null)
+      const initial = suppliedSymbols ?? getCachedSymbols(workspaceId, d.id)
+      setSymbols(initial ?? null)
       setSymbolsLoading(false)
       return
     }
     if (suppliedSymbols) {
       setSymbols(suppliedSymbols)
+      setCachedSymbols(workspaceId, d.id, suppliedSymbols)
       setSymbolsLoading(false)
       const first = (['functions', 'variables', 'classes'] as const).find(
         tab => suppliedSymbols.some(sym => tabForKind(sym.kind) === tab)
@@ -295,16 +303,24 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       return
     }
     if ((detailRevealed || d.onSymbolsChange) && !symbols) {
+      const cached = getCachedSymbols(workspaceId, d.id)
+      if (cached) {
+        setSymbols(cached)
+        setSymbolsLoading(false)
+        const first = (['functions', 'variables', 'classes'] as const).find(
+          tab => cached.some((sym: any) => tabForKind(sym.kind) === tab)
+        )
+        if (first && !d.onSymbolsChange) setActiveTab(current =>
+          cached.some((sym: any) => tabForKind(sym.kind) === current) ? current : first
+        )
+        return
+      }
+
       const controller = new AbortController()
       setSymbolsLoading(true)
-      fetch(`http://127.0.0.1:7744/api/files/${d.id}/symbols?workspace=${encodeURIComponent(workspaceId)}`, { signal: controller.signal })
-        .then(res => {
-          if (!res.ok) throw new Error()
-          return res.json()
-        })
-        .then(data => {
+      fetchFileSymbols(workspaceId, d.id, controller.signal)
+        .then(syms => {
           if (symbolRequestRef.current !== request) return
-          const syms = Array.isArray(data) ? data : []
           setSymbols(syms)
           setSymbolsLoading(false)
           // Default to the first non-empty category so class-only files
@@ -343,6 +359,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
   const editableSymbols = Boolean(d.onSymbolsChange)
   const updateSymbols = (next: any[]) => {
     setSymbols(next)
+    setCachedSymbols(workspaceId, d.id, next)
     d.onSymbolsChange?.(next)
   }
   const addSymbolForActiveTab = () => {
@@ -445,7 +462,9 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       >
       <ShapeBackdrop shape={shellShape} stroke={perimeter} strokeWidth={perimeterW}
         headBand={shellShape === 'box' || shellShape === 'classbox' ? 29 : undefined}
-        headBandOpacity={detailAlpha} />
+        headBandOpacity={detailAlpha}
+        width={(typeof width === 'number' && width > 0 ? width : 220) / s}
+        height={(typeof height === 'number' && height > 0 ? height : 110) / s} />
       <>
       {/* Name compartment: icon + filename left, line count right. Rule is
           INSET (not full-bleed) so it never collides with shaped silhouettes. */}
@@ -739,64 +758,97 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
             '--living-signal-close': `${LIVING_FILE_SIGNAL_CLOSE_MS}ms`,
           } as React.CSSProperties}
         >
+          {/* Luminous perimeter energy border around the active file node */}
+          <div
+            className="axiom-living-file-telemetry__border"
+            style={{
+              position: 'absolute',
+              inset: -2,
+              borderRadius: 2,
+              border: `2px solid ${livingRevealColor}`,
+              boxShadow: `0 0 14px color-mix(in srgb, ${livingRevealColor} 55%, transparent), inset 0 0 8px color-mix(in srgb, ${livingRevealColor} 20%, transparent)`,
+              pointerEvents: 'none',
+            }}
+          />
+          {/* Corner accents */}
           <div style={{
             position: 'absolute',
-            inset: 0,
-            width: `${100 / s}%`,
-            height: `${100 / s}%`,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            padding: '14px 16px',
-            border: `2px solid ${livingRevealColor}`,
-            background:
-              `linear-gradient(110deg, color-mix(in srgb, ${livingRevealColor} 16%, var(--bg-raised)), ` +
-              'var(--bg-raised) 68%)',
-            boxShadow:
-              `4px 4px 0 color-mix(in srgb, ${livingRevealColor} 24%, transparent), ` +
-              `0 0 24px color-mix(in srgb, ${livingRevealColor} 48%, transparent)`,
-            transform: `scale(${s})`,
-            transformOrigin: 'top left',
-          }}>
-            <div style={{
-              width: 38,
-              height: 38,
-              display: 'grid',
-              flex: '0 0 38px',
-              placeItems: 'center',
-              border: `1px solid color-mix(in srgb, ${livingRevealColor} 65%, var(--border))`,
-              background: 'var(--bg-surface)',
-            }}>
-              <LanguageIcon language={d.language ?? ''} size={25} />
-            </div>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{
-                color: livingRevealColor,
-                fontFamily: 'var(--font-mono)',
-                fontSize: 8,
-                fontWeight: 900,
-                letterSpacing: '0.13em',
-                lineHeight: 1,
-              }}>
-                {livingSignalLabel}
-              </div>
-              <div style={{
-                marginTop: 7,
-                overflow: 'hidden',
-                color: 'var(--text-primary)',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 14,
-                fontWeight: 750,
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}>
-                {d.label}
-              </div>
-            </div>
+            top: -2,
+            left: -2,
+            width: 8,
+            height: 8,
+            borderTop: `2px solid ${livingRevealColor}`,
+            borderLeft: `2px solid ${livingRevealColor}`,
+            pointerEvents: 'none',
+          }} />
+          <div style={{
+            position: 'absolute',
+            bottom: -2,
+            right: -2,
+            width: 8,
+            height: 8,
+            borderBottom: `2px solid ${livingRevealColor}`,
+            borderRight: `2px solid ${livingRevealColor}`,
+            pointerEvents: 'none',
+          }} />
+          {/* Sleek floating agent activity badge hovering above the node */}
+          <div
+            className="axiom-living-file-telemetry__badge"
+            style={{
+              position: 'absolute',
+              top: -26,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '3px 9px',
+              borderRadius: 4,
+              border: `1px solid color-mix(in srgb, ${livingRevealColor} 60%, var(--border))`,
+              borderTop: `2px solid ${livingRevealColor}`,
+              background: 'var(--bg-raised)',
+              boxShadow: `0 4px 12px rgba(0,0,0,0.28), 0 0 10px color-mix(in srgb, ${livingRevealColor} 30%, transparent)`,
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+            }}
+          >
             <div
               className="axiom-living-file-signal__beacon"
-              style={{ background: livingRevealColor, boxShadow: `0 0 12px ${livingRevealColor}` }}
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: livingRevealColor,
+                boxShadow: `0 0 8px ${livingRevealColor}`,
+              }}
             />
+            <span
+              style={{
+                color: livingRevealColor,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 8.5,
+                fontWeight: 900,
+                letterSpacing: '0.12em',
+                lineHeight: 1,
+              }}
+            >
+              {livingSignalLabel}
+            </span>
+            <span style={{ color: 'var(--border)', fontSize: 9 }}>•</span>
+            <span
+              style={{
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 9,
+                fontWeight: 700,
+                lineHeight: 1,
+                maxWidth: 140,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {d.label}
+            </span>
           </div>
         </div>
       )}
@@ -876,10 +928,12 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       )}
       </div>
 
-      <AxiomNodeResizer nodeId={d.id} presentationScale={s} nodeWidth={width} nodeHeight={height} isVisible={selected}
-        isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
-        minWidth={1} minHeight={1} color="var(--accent)"
-        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
+      {selected && (
+        <AxiomNodeResizer nodeId={d.id} presentationScale={s} nodeWidth={width} nodeHeight={height} isVisible={selected}
+          isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
+          minWidth={1} minHeight={1} color="var(--accent)"
+          onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
+      )}
 
       {previewSymbol && <SourcePreviewDialog
         fileId={d.id}
@@ -898,4 +952,4 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       <Handle id="target-left" type="target" position={Position.Left} {...connectionHandleProps(isConnectable, s)} />
     </div>
   )
-}
+})

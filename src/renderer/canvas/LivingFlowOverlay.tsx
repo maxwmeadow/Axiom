@@ -81,7 +81,7 @@ export function LivingFlowOverlay({
         targetX: target.x,
         targetY: target.y,
         targetPosition: positionBySide[anchors.targetSide],
-        borderRadius: 0,
+        borderRadius: 14,
         offset: 18,
       })
       const pulse = livingPulseGeometry(source, target, zoom)

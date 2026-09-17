@@ -1,3 +1,4 @@
+import React from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { InfraNodeData } from '../sceneTypes'
 import { useInfraService } from '../../store/registryStore'
@@ -20,25 +21,29 @@ function providerTag(provider: string): string {
   return (provider || 'EXT').replace(/[^a-z0-9]/gi, '').slice(0, 3).toUpperCase()
 }
 
-export function InfraNode({ data, selected, width, height, isConnectable }: NodeProps) {
+export const InfraNode = React.memo(function InfraNode({ data, selected, width, height, isConnectable }: NodeProps) {
   const d = data as unknown as InfraNodeData
   const svc = useInfraService(d.service)
   const presentationScale = fitPresentationScale(width, height, 260, 160, d.worldScale ?? 1)
+  const contentW = (typeof width === 'number' && width > 0 ? width : 260) / presentationScale
+  const contentH = (typeof height === 'number' && height > 0 ? height : 160) / presentationScale
 
   if (!svc) return <div style={{
     width: '100%', height: '100%', position: 'relative', userSelect: 'none', cursor: 'grab',
   }}>
-    <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
-      isResizable={typeof d.onResizeStart === 'function' && typeof d.onResizeEnd === 'function'}
-      minWidth={1} minHeight={1} color="var(--accent)"
-      onResizeStart={d.onResizeStart} onResizeEnd={d.onResizeEnd} />
+    {selected && (
+      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
+        isResizable={typeof d.onResizeStart === 'function' && typeof d.onResizeEnd === 'function'}
+        minWidth={1} minHeight={1} color="var(--accent)"
+        onResizeStart={d.onResizeStart} onResizeEnd={d.onResizeEnd} />
+    )}
     <div style={{
       width: `${100 / presentationScale}%`, height: `${100 / presentationScale}%`,
       transform: `scale(${presentationScale})`, transformOrigin: 'top left', position: 'relative',
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       gap: 9, padding: '12px 28px',
     }}>
-      <ShapeBackdrop stock="blueprint" shape="hexagon" stroke="var(--infra-border)" strokeWidth={1} fill="var(--infra-surface)" />
+      <ShapeBackdrop stock="blueprint" shape="hexagon" stroke="var(--infra-border)" strokeWidth={1} fill="var(--infra-surface)" width={contentW} height={contentH} />
       <EditableNodeTitle value={d.name} onRename={d.onRename} style={{
         color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 700,
         textAlign: 'center', maxWidth: '78%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -69,10 +74,12 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       cursor: 'grab',
       userSelect: 'none',
     }}>
-      <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
-        isResizable={typeof d.onResizeStart === 'function' && typeof d.onResizeEnd === 'function'}
-        minWidth={1} minHeight={1} color={accent}
-        onResizeStart={d.onResizeStart} onResizeEnd={d.onResizeEnd} />
+      {selected && (
+        <AxiomNodeResizer nodeId={d.id} presentationScale={presentationScale} nodeWidth={width} nodeHeight={height} isVisible={selected}
+          isResizable={typeof d.onResizeStart === 'function' && typeof d.onResizeEnd === 'function'}
+          minWidth={1} minHeight={1} color={accent}
+          onResizeStart={d.onResizeStart} onResizeEnd={d.onResizeEnd} />
+      )}
       <div style={{
       width: `${100 / presentationScale}%`,
       height: `${100 / presentationScale}%`,
@@ -90,7 +97,7 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       transition: 'border-color 0.15s ease, opacity 0.15s ease',
       boxShadow: 'none',
     }}>
-      <ShapeBackdrop stock="blueprint" shape={shape} stroke="var(--infra-border)" strokeWidth={1} dashed={proposed} fill="var(--infra-surface)" />
+      <ShapeBackdrop stock="blueprint" shape={shape} stroke="var(--infra-border)" strokeWidth={1} dashed={proposed} fill="var(--infra-surface)" width={contentW} height={contentH} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
         {officialIcon ? (
           <img src={officialIcon} width={14} height={14} alt="" style={{ flexShrink: 0 }} />
@@ -164,4 +171,4 @@ export function InfraNode({ data, selected, width, height, isConnectable }: Node
       <Handle type="target" position={Position.Left}   {...connectionHandleProps(isConnectable, presentationScale)} />
     </div>
   )
-}
+})

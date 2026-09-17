@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
+import { WindowControls } from './WindowControls'
 
 interface WorkbenchTitleBarProps {
   context: ReactNode
@@ -13,6 +14,10 @@ export function WorkbenchTitleBar({
   statusTone = 'ready',
   className = '',
 }: WorkbenchTitleBarProps) {
+  useEffect(() => {
+    void window.axiom?.setTitleBarHeight?.(44)
+  }, [])
+
   return (
     <header className={`axiom-workbench-titlebar ${className}`.trim()}>
       <div className="axiom-workbench-titlebar__product">
@@ -29,6 +34,7 @@ export function WorkbenchTitleBar({
       >
         {status}
       </span>
+      <WindowControls />
     </header>
   )
 }
