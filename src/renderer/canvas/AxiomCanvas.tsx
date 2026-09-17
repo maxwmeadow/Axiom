@@ -100,7 +100,11 @@ import { routeWheelEvent, wheelScrollStep } from './wheelRouting'
 import { rectContainsRect } from './selectionResize'
 import { sheetEditableNodeIds } from './sheetEditability'
 import { advanceSceneMeasurement, sceneMeasurementIsSettled } from './initialCameraFit'
-import { LARGE_SCENE_NODE_COUNT, shouldDeferCanvasMaterialization } from './canvasPerformance'
+import {
+  LARGE_SCENE_NODE_COUNT,
+  VIEWPORT_CULLING_NODE_COUNT,
+  shouldDeferCanvasMaterialization,
+} from './canvasPerformance'
 import {
   diffScene,
   recordSceneMutation,
@@ -3000,9 +3004,42 @@ export function AxiomCanvas({ readOnly = false, reviewScene, binScene }: AxiomCa
         floorLayouts: replaceFloorLayouts(state.floorLayouts, plan.previousLayouts, plan.changedKeys),
       }))
     })
-    return
-
   }, [workspaceIdForOverlay, sheetSystemIds, sheetFileIds, sheetInfraIds, sheetEffectiveLayouts, reviewMode, reviewScene?.workspaceId, reviewEditableNodeIds, saveReviewLayouts, systems, files, floorLayouts])
+
+  const onNodeResizeEndRef = useRef(onNodeResizeEnd)
+  onNodeResizeEndRef.current = onNodeResizeEnd
+
+  const armResizeEndFallbackRef = useRef(armResizeEndFallback)
+  armResizeEndFallbackRef.current = armResizeEndFallback
+
+  const resizeHandlersRef = useRef(new Map<string, { onResizeStart: (p: NodeResizeParams) => void; onResizeEnd: (p: NodeResizeParams) => void }>())
+  const getResizeHandlers = useCallback((nodeId: string, isSheet = false) => {
+    const key = `${nodeId}:${isSheet ? 'sheet' : 'canvas'}`
+    let handlers = resizeHandlersRef.current.get(key)
+    if (!handlers) {
+      const onResizeStart = (params: NodeResizeParams) => {
+        setIsTransitioningLayout(false)
+        resizingNodeIdRef.current = nodeId
+        draggingNodeIdRef.current = null
+        dragPositionRef.current.delete(nodeId)
+        const sourceNodes = isSheet ? displayNodesRef.current : rfNodesRef.current
+        const children = new Map(sourceNodes
+          .filter(child => child.parentId === nodeId)
+          .map(child => [child.id, { x: child.position.x, y: child.position.y }]))
+        resizeInteractionNodeIdsRef.current = new Set([nodeId, ...children.keys()])
+        resizeStartRef.current.set(nodeId, { ...params, children })
+        armResizeEndFallbackRef.current?.(nodeId)
+        if (isSheet) {
+          setSheetInteractionNodes(current => current ?? displayNodesRef.current)
+        }
+      }
+      const onResizeEnd = (params: NodeResizeParams) => onNodeResizeEndRef.current?.(nodeId, params)
+      handlers = { onResizeStart, onResizeEnd }
+      resizeHandlersRef.current.set(key, handlers)
+    }
+    return handlers
+  }, [])
+
 
   useEffect(() => {
     if (deferCanvasMaterialization) {
@@ -3159,34 +3196,21 @@ export function AxiomCanvas({ readOnly = false, reviewScene, binScene }: AxiomCa
       }
     }
 
-    const layoutWithCallbacks = layout.map(n => ({
-      ...n,
-      draggable: reviewMode
-        ? reviewLayoutReady && (reviewEditableNodeIds?.has(n.id) ?? false)
-        : n.draggable,
-      selectable: true,
-      data: {
-        ...n.data,
-        onResizeStart: readOnly || (reviewMode && !reviewLayoutReady) ? undefined : (params: NodeResizeParams) => {
-          // Resize geometry must never compete with a sheet/layout morph.
-          // Otherwise the previous larger frame remains composited behind the
-          // live frame and reads as a resize ghost.
-          setIsTransitioningLayout(false)
-          resizingNodeIdRef.current = n.id
-          draggingNodeIdRef.current = null
-          dragPositionRef.current.delete(n.id)
-          const children = new Map(rfNodesRef.current
-            .filter(child => child.parentId === n.id)
-            .map(child => [child.id, { x: child.position.x, y: child.position.y }]))
-          resizeInteractionNodeIdsRef.current = new Set([n.id, ...children.keys()])
-          resizeStartRef.current.set(n.id, { ...params, children })
-          armResizeEndFallback(n.id)
+    const layoutWithCallbacks = layout.map(n => {
+      const handlers = readOnly || (reviewMode && !reviewLayoutReady) ? undefined : getResizeHandlers(n.id, false)
+      return {
+        ...n,
+        draggable: reviewMode
+          ? reviewLayoutReady && (reviewEditableNodeIds?.has(n.id) ?? false)
+          : n.draggable,
+        selectable: true,
+        data: {
+          ...n.data,
+          onResizeStart: handlers?.onResizeStart,
+          onResizeEnd: handlers?.onResizeEnd,
         },
-        onResizeEnd: readOnly || (reviewMode && !reviewLayoutReady)
-          ? undefined
-          : (params: NodeResizeParams) => onNodeResizeEnd(n.id, params),
-      },
-    }))
+      }
+    })
     // A large first projection is about to be fitted to an overview. Starting
     // its semantic tier at the default 0.5x would briefly mount every child of
     // a large root before fitView reaches the real overview zoom - exactly the
@@ -3216,7 +3240,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene, binScene }: AxiomCa
       layoutBuiltRef.current = projectId
       pendingInitialFitProjectRef.current = projectId
     }
-  }, [systems, files, infraNodes, floorLayouts, dependencies, onNodeResizeEnd, armResizeEndFallback, deferCanvasMaterialization, reviewMode, reviewLayoutReady, reviewEditableNodeIds, saveReviewLayouts, reviewLayoutPersistenceRevision, interactionProjectionRevision, sceneProjectId])
+  }, [systems, files, infraNodes, floorLayouts, dependencies, getResizeHandlers, readOnly, deferCanvasMaterialization, reviewMode, reviewLayoutReady, reviewEditableNodeIds, saveReviewLayouts, reviewLayoutPersistenceRevision, interactionProjectionRevision, sceneProjectId])
 
   // The first camera used to be an 80ms guess after setRfNodes. That raced both
   // React Flow measurement and the immediate persisted-layout reprojection, so
@@ -4292,30 +4316,24 @@ export function AxiomCanvas({ readOnly = false, reviewScene, binScene }: AxiomCa
 
   }, [currentProject, getInternalNode, getViewport, screenToFlowPosition, overlaySheetId, activeElementByNodeId, activePlannedByNodeId, activeNodeIds, workspaceIdForOverlay, updateInteractiveNodes, sheetSystemIds, sheetFileIds, sheetInfraIds, sheetEffectiveLayouts, reviewMode, reviewScene?.workspaceId, reviewEditableNodeIds, previewReviewLayouts, saveReviewLayouts, systems, files, infraNodes, floorLayouts])
 
-  const renderedNodes = overlaySheetId
-    ? attentionNodes.map(n => activeNodeIds.has(n.id)
-      ? {
-          ...n,
-          data: {
-            ...n.data,
-            onResizeStart: readOnly ? undefined : (params: NodeResizeParams) => {
-              setIsTransitioningLayout(false)
-              resizingNodeIdRef.current = n.id
-              draggingNodeIdRef.current = null
-              dragPositionRef.current.delete(n.id)
-              const children = new Map(displayNodesRef.current
-                .filter(child => child.parentId === n.id)
-                .map(child => [child.id, { x: child.position.x, y: child.position.y }]))
-              resizeInteractionNodeIdsRef.current = new Set([n.id, ...children.keys()])
-              resizeStartRef.current.set(n.id, { ...params, children })
-              armResizeEndFallback(n.id)
-              setSheetInteractionNodes(current => current ?? displayNodesRef.current)
-            },
-            onResizeEnd: readOnly ? undefined : (params: NodeResizeParams) => onNodeResizeEnd(n.id, params),
-          },
-        }
-      : n)
-    : attentionNodes
+  const renderedNodes = useMemo(() => {
+    if (!overlaySheetId) return attentionNodes
+    return attentionNodes.map(n => {
+      if (!activeNodeIds.has(n.id)) return n
+      const handlers = readOnly ? undefined : getResizeHandlers(n.id, true)
+      if (n.data.onResizeStart === handlers?.onResizeStart && n.data.onResizeEnd === handlers?.onResizeEnd) {
+        return n
+      }
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          onResizeStart: handlers?.onResizeStart,
+          onResizeEnd: handlers?.onResizeEnd,
+        },
+      }
+    })
+  }, [attentionNodes, overlaySheetId, activeNodeIds, readOnly, getResizeHandlers])
 
   // Identity of renderedNodes churns every render while a sheet overlay is
   // open, so the recovery below keys off this value-stable signature instead.
@@ -4557,7 +4575,7 @@ export function AxiomCanvas({ readOnly = false, reviewScene, binScene }: AxiomCa
         snapToGrid={false}
         // Large graphs: skip rendering off-screen nodes. Kept off for small
         // graphs where the per-move visibility recompute isn't worth it.
-        onlyRenderVisibleElements={rfNodes.length > LARGE_SCENE_NODE_COUNT}
+        onlyRenderVisibleElements={rfNodes.length > VIEWPORT_CULLING_NODE_COUNT}
       >
         {/* Pattern color transparent - the drafting line grid is painted by
             .react-flow__background CSS; this component just provides the element. */}

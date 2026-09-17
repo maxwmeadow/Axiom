@@ -15,6 +15,11 @@ import { SourcePreviewDialog } from '../../components/SourcePreviewDialog'
 import { fitPresentationScale } from '../resizeGeometry'
 import { connectionHandleProps } from './connectionChrome'
 import { AxiomNodeResizer } from './AxiomNodeResizer'
+import {
+  fetchFileSymbols,
+  getCachedSymbols,
+  setCachedSymbols,
+} from '../symbolCache'
 
 type SymbolTab = 'functions' | 'variables' | 'classes'
 
@@ -161,7 +166,7 @@ function RuntimeTooltip({ runtime, color }: { runtime: RuntimeNodeState; color: 
   )
 }
 
-export function FileNode({ data, selected, width, height, isConnectable }: NodeProps) {
+export const FileNode = React.memo(function FileNode({ data, selected, width, height, isConnectable }: NodeProps) {
   const d = data as unknown as FileNodeData
   const livingSignal = useRetainedLivingFileSignal(d.fx)
   const { onResizeStart, onResizeEnd } = d as any
@@ -268,7 +273,8 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
   const currentProject = useGraphStore(s => s.currentProject)
   const workspaceId = currentProject?.id ?? 'demo'
   const suppliedSymbols = d.symbols
-  const [symbols, setSymbols] = React.useState<any[] | null>(suppliedSymbols ?? null)
+  const cachedSymbols = suppliedSymbols ?? getCachedSymbols(workspaceId, d.id)
+  const [symbols, setSymbols] = React.useState<any[] | null>(cachedSymbols ?? null)
   const [symbolsLoading, setSymbolsLoading] = React.useState(false)
   const [activeTab, setActiveTab] = React.useState<SymbolTab>('functions')
   const [previewSymbol, setPreviewSymbol] = React.useState<any | null>(null)
@@ -279,12 +285,14 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
     const request = ++symbolRequestRef.current
     if (symbolNodeIdRef.current !== d.id) {
       symbolNodeIdRef.current = d.id
-      setSymbols(suppliedSymbols ?? null)
+      const initial = suppliedSymbols ?? getCachedSymbols(workspaceId, d.id)
+      setSymbols(initial ?? null)
       setSymbolsLoading(false)
       return
     }
     if (suppliedSymbols) {
       setSymbols(suppliedSymbols)
+      setCachedSymbols(workspaceId, d.id, suppliedSymbols)
       setSymbolsLoading(false)
       const first = (['functions', 'variables', 'classes'] as const).find(
         tab => suppliedSymbols.some(sym => tabForKind(sym.kind) === tab)
@@ -295,16 +303,24 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       return
     }
     if ((detailRevealed || d.onSymbolsChange) && !symbols) {
+      const cached = getCachedSymbols(workspaceId, d.id)
+      if (cached) {
+        setSymbols(cached)
+        setSymbolsLoading(false)
+        const first = (['functions', 'variables', 'classes'] as const).find(
+          tab => cached.some((sym: any) => tabForKind(sym.kind) === tab)
+        )
+        if (first && !d.onSymbolsChange) setActiveTab(current =>
+          cached.some((sym: any) => tabForKind(sym.kind) === current) ? current : first
+        )
+        return
+      }
+
       const controller = new AbortController()
       setSymbolsLoading(true)
-      fetch(`http://127.0.0.1:7744/api/files/${d.id}/symbols?workspace=${encodeURIComponent(workspaceId)}`, { signal: controller.signal })
-        .then(res => {
-          if (!res.ok) throw new Error()
-          return res.json()
-        })
-        .then(data => {
+      fetchFileSymbols(workspaceId, d.id, controller.signal)
+        .then(syms => {
           if (symbolRequestRef.current !== request) return
-          const syms = Array.isArray(data) ? data : []
           setSymbols(syms)
           setSymbolsLoading(false)
           // Default to the first non-empty category so class-only files
@@ -343,6 +359,7 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
   const editableSymbols = Boolean(d.onSymbolsChange)
   const updateSymbols = (next: any[]) => {
     setSymbols(next)
+    setCachedSymbols(workspaceId, d.id, next)
     d.onSymbolsChange?.(next)
   }
   const addSymbolForActiveTab = () => {
@@ -445,7 +462,9 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       >
       <ShapeBackdrop shape={shellShape} stroke={perimeter} strokeWidth={perimeterW}
         headBand={shellShape === 'box' || shellShape === 'classbox' ? 29 : undefined}
-        headBandOpacity={detailAlpha} />
+        headBandOpacity={detailAlpha}
+        width={(typeof width === 'number' && width > 0 ? width : 220) / s}
+        height={(typeof height === 'number' && height > 0 ? height : 110) / s} />
       <>
       {/* Name compartment: icon + filename left, line count right. Rule is
           INSET (not full-bleed) so it never collides with shaped silhouettes. */}
@@ -909,10 +928,12 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       )}
       </div>
 
-      <AxiomNodeResizer nodeId={d.id} presentationScale={s} nodeWidth={width} nodeHeight={height} isVisible={selected}
-        isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
-        minWidth={1} minHeight={1} color="var(--accent)"
-        onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
+      {selected && (
+        <AxiomNodeResizer nodeId={d.id} presentationScale={s} nodeWidth={width} nodeHeight={height} isVisible={selected}
+          isResizable={typeof onResizeStart === 'function' && typeof onResizeEnd === 'function'}
+          minWidth={1} minHeight={1} color="var(--accent)"
+          onResizeStart={onResizeStart} onResizeEnd={onResizeEnd} />
+      )}
 
       {previewSymbol && <SourcePreviewDialog
         fileId={d.id}
@@ -931,4 +952,4 @@ export function FileNode({ data, selected, width, height, isConnectable }: NodeP
       <Handle id="target-left" type="target" position={Position.Left} {...connectionHandleProps(isConnectable, s)} />
     </div>
   )
-}
+})

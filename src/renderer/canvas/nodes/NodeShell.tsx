@@ -21,6 +21,8 @@ export interface NodeShellProps {
   children: React.ReactNode
   minWidth?: number
   maxWidth?: number
+  width?: number
+  height?: number
 }
 
 // Shape metrics: how much the body must inset so content clears the geometry.
@@ -85,7 +87,10 @@ function cylinderRimPath(w: number): string {
 // `3px 3px 0` material pass.
 export const CARD_SHADOW = 'drop-shadow(3px 3px 0 rgba(86,91,85,0.38))'
 
-export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = 'var(--bg-surface)', stock = 'paper', headBand, headBandOpacity = 1 }: {
+export function ShapeBackdrop({
+  shape, stroke, strokeWidth = 1, dashed, fill = 'var(--bg-surface)',
+  stock = 'paper', headBand, headBandOpacity = 1, width, height,
+}: {
   shape: ShellShape
   stroke: string
   strokeWidth?: number
@@ -98,6 +103,8 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
   // Height is in the card's base-pixel coordinate space; 0/undefined = none.
   headBand?: number
   headBandOpacity?: number
+  width?: number
+  height?: number
 }) {
   const clipId = React.useId()
   const ref = useRef<SVGSVGElement>(null)
@@ -105,20 +112,34 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
   const rimRef = useRef<SVGPathElement>(null)
   const clipRef = useRef<SVGPathElement>(null)
   const textureRef = useRef<SVGPathElement>(null)
+
+  const initialW = typeof width === 'number' && width > 0 ? width : 180
+  const initialH = typeof height === 'number' && height > 0 ? height : 72
+
   useLayoutEffect(() => {
     const svg = ref.current
-    const el = svg?.parentElement
-    if (!svg || !el) return
+    if (!svg) return
 
-    const update = (width: number, height: number) => {
-      const w = Number.isFinite(width) && width > 0 ? width : 1
-      const h = Number.isFinite(height) && height > 0 ? height : 1
-      svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
-      pathRef.current?.setAttribute('d', shellPath(shape, w, h))
-      clipRef.current?.setAttribute('d', shellPath(shape, w, h))
-      textureRef.current?.setAttribute('d', shellPath(shape, w, h))
-      rimRef.current?.setAttribute('d', cylinderRimPath(w))
+    const update = (w: number, h: number) => {
+      const validW = Number.isFinite(w) && w > 0 ? w : 1
+      const validH = Number.isFinite(h) && h > 0 ? h : 1
+      svg.setAttribute('viewBox', `0 0 ${validW} ${validH}`)
+      pathRef.current?.setAttribute('d', shellPath(shape, validW, validH))
+      clipRef.current?.setAttribute('d', shellPath(shape, validW, validH))
+      textureRef.current?.setAttribute('d', shellPath(shape, validW, validH))
+      rimRef.current?.setAttribute('d', cylinderRimPath(validW))
     }
+
+    // Fast path: explicit dimensions provided by parent node (FileNode, InfraNode)
+    if (typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0) {
+      update(width, height)
+      return
+    }
+
+    const el = svg.parentElement
+    if (!el) return
+
+    // Fallback path: measure DOM
     const computed = getComputedStyle(el)
     update(Number.parseFloat(computed.width), Number.parseFloat(computed.height))
 
@@ -134,13 +155,13 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [shape])
+  }, [shape, width, height])
 
   return (
     <svg
       ref={ref}
       width="100%" height="100%"
-      viewBox="0 0 180 72"
+      viewBox={`0 0 ${initialW} ${initialH}`}
       preserveAspectRatio="none"
       // zIndex -1: the parent's transform creates a stacking context, so this
       // sits behind the card's static content but still inside the node.
@@ -150,7 +171,7 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
       <path
         ref={pathRef}
         className="axiom-shape-backdrop-path"
-        d={shellPath(shape, 180, 72)}
+        d={shellPath(shape, initialW, initialH)}
         fill={fill}
         stroke={stroke}
         strokeWidth={strokeWidth}
@@ -164,20 +185,20 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
         ref={textureRef}
         className="axiom-shape-texture"
         data-stock={stock}
-        d={shellPath(shape, 180, 72)}
+        d={shellPath(shape, initialW, initialH)}
         stroke="none"
         pointerEvents="none"
       />
       {headBand ? (
         <>
-          <clipPath id={clipId}><path ref={clipRef} d={shellPath(shape, 180, 72)} /></clipPath>
+          <clipPath id={clipId}><path ref={clipRef} d={shellPath(shape, initialW, initialH)} /></clipPath>
           <rect x={0} y={0} width="100%" height={headBand} clipPath={`url(#${clipId})`}
             fill="var(--card-head)" opacity={headBandOpacity}
             style={{ transition: 'opacity 0.25s ease, fill 420ms ease-out' }} />
         </>
       ) : null}
       {shape === 'cylinder' && (
-        <path ref={rimRef} d={cylinderRimPath(180)} fill="none" stroke={stroke} strokeWidth={strokeWidth}
+        <path ref={rimRef} d={cylinderRimPath(initialW)} fill="none" stroke={stroke} strokeWidth={strokeWidth}
           strokeDasharray={dashed ? '6 4' : undefined} style={{ transition: 'stroke 0.2s ease' }} />
       )}
     </svg>
@@ -186,23 +207,32 @@ export function ShapeBackdrop({ shape, stroke, strokeWidth = 1, dashed, fill = '
 
 export function NodeShell({
   shape, accent, dashed, selected, fill = 'var(--bg-raised)',
-  children, minWidth = 190, maxWidth = 300,
+  children, minWidth = 190, maxWidth = 300, width, height,
 }: NodeShellProps) {
   const ref = useRef<HTMLDivElement>(null)
-  const [size, setSize] = useState({ w: minWidth, h: 60 })
+  const [size, setSize] = useState({
+    w: typeof width === 'number' && width > 0 ? width : minWidth,
+    h: typeof height === 'number' && height > 0 ? height : 60,
+  })
 
-  // Track content size so the SVG shell always matches the DOM rect.
+  // Track content size when width/height are not provided.
   useLayoutEffect(() => {
+    if (typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0) {
+      setSize(prev => (prev.w === width && prev.h === height ? prev : { w: width, h: height }))
+      return
+    }
     const el = ref.current
     if (!el) return
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect()
       // getBoundingClientRect is zoom-scaled inside ReactFlow - use offset* instead
-      setSize({ w: el.offsetWidth || r.width, h: el.offsetHeight || r.height })
+      const nextW = el.offsetWidth || r.width
+      const nextH = el.offsetHeight || r.height
+      setSize(prev => (prev.w === nextW && prev.h === nextH ? prev : { w: nextW, h: nextH }))
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [width, height])
 
   const inset = INSETS[shape]
   const { w, h } = size

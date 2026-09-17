@@ -106,7 +106,7 @@ function GridOverlay({ d }: { d: SystemNodeData }) {
   )
 }
 
-export function SystemNode({ data, selected, width, height, isConnectable }: NodeProps) {
+export const SystemNode = React.memo(function SystemNode({ data, selected, width, height, isConnectable }: NodeProps) {
   const d = data as unknown as SystemNodeData
   const infraCategory = d.umlMetadata?.category ?? 'platform'
   const isDeploymentBoundary = d.umlKind === 'infra'

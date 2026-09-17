@@ -122,7 +122,14 @@ function traceEvent(event: PointerEvent, target: Element): unknown {
  * Chromium cancels a pointer. Geometry remains in floating-point flow units,
  * preserving one-screen-pixel precision at 100x zoom.
  */
-export function AxiomNodeResizer({
+import { recordResizerRender } from '../perfMetrics'
+
+export function AxiomNodeResizer(props: AxiomNodeResizerProps) {
+  if (!props.isVisible) return null
+  return <AxiomNodeResizerActive {...props} />
+}
+
+function AxiomNodeResizerActive({
   nodeId,
   isVisible,
   presentationScale,
@@ -139,6 +146,7 @@ export function AxiomNodeResizer({
   onResizeStart,
   onResizeEnd,
 }: AxiomNodeResizerProps) {
+  recordResizerRender()
   const store = useStoreApi()
   const sessionRef = useRef<ResizeSession | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
