@@ -39,6 +39,10 @@ class ErrorBoundary extends React.Component<
   }
 }
 
+const detectedPlatform = window.axiom?.platform
+  || (navigator.userAgent.includes('Mac') ? 'darwin' : navigator.userAgent.includes('Win') ? 'win32' : 'linux')
+document.documentElement.dataset.platform = detectedPlatform
+
 const root = document.getElementById('root')
 if (!root) {
   console.error('[axiom] #root element not found - check index.html')

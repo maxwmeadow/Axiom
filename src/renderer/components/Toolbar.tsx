@@ -6,6 +6,7 @@ import { SendToAgentDialog } from './SendToAgentDialog'
 import { useSheetStore } from '../store/sheetStore'
 import { ChromeButton } from './ui/ChromeButton'
 import { InvestigationsMenu } from './InvestigationsMenu'
+import { WindowControls } from './ui/WindowControls'
 
 interface ToolbarProps {
   onSearch: () => void
@@ -35,6 +36,7 @@ export function Toolbar({
   const surfaceKind = activeSheetId ? 'Overlay Sheet' : 'Live Code Graph'
 
   useEffect(() => {
+    void window.axiom?.setTitleBarHeight?.(34)
     const openDispatch = () => setAgentMsgOpen(true)
     window.addEventListener('axiom:open-agent-dispatch', openDispatch)
     return () => window.removeEventListener('axiom:open-agent-dispatch', openDispatch)
@@ -57,6 +59,7 @@ export function Toolbar({
         <div className={isIndexing ? 'axiom-title-strip__status axiom-title-strip__status--busy' : 'axiom-title-strip__status'}>
           {isIndexing ? 'INDEXING SOURCE…' : 'INDEX CLEAN'}
         </div>
+        <WindowControls />
       </div>
 
       <div className="axiom-command-strip">

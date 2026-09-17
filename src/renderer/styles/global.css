@@ -1692,8 +1692,8 @@ a { color: var(--accent); text-decoration: none; }
 .axiom-toolbar {
   --workbench-accent: #4f8279;
   --workbench-accent-strong: #346a62;
-  --workbench-title: #2c3937;
-  --workbench-title-dark: #202b29;
+  --workbench-title: #26332f;
+  --workbench-title-dark: #26332f;
   --workbench-chrome: #deddd6;
   --workbench-chrome-light: #f0eee7;
   --workbench-chrome-dark: #b7bbb7;
@@ -1714,9 +1714,9 @@ a { color: var(--accent); text-decoration: none; }
   width: 100%;
   height: 34px;
   flex: 0 0 34px;
-  padding: 0 150px 0 10px;
+  padding: 0 16px;
   color: #f2f1eb;
-  background: linear-gradient(90deg, var(--workbench-title), #35433f 58%, var(--workbench-title-dark));
+  background: linear-gradient(90deg, #26332f, #2d3b37 45%, #26332f 80%);
   border-bottom: 1px solid #151e1c;
   box-shadow: inset 0 -1px #46534f;
 }
@@ -3938,12 +3938,78 @@ select.axiom-inspector-input {
   height: 44px;
   flex: 0 0 44px;
   align-items: center;
-  padding: 0 156px 0 16px;
+  padding: 0 16px;
   border-bottom: 1px solid #101816;
   color: #f2f1eb;
-  background: linear-gradient(90deg, #26332f, #35433f 62%, #192320);
+  background: linear-gradient(90deg, #26332f, #2d3b37 45%, #26332f 80%);
   box-shadow: inset 0 -1px #46534f;
   -webkit-app-region: drag;
+}
+
+/* ── Platform-Aware Window Clearance ─────────────────────────────────────── */
+
+/* macOS: Reserve clearance on the top-left for traffic lights */
+[data-platform="darwin"] .axiom-title-strip,
+[data-platform="darwin"] .axiom-workbench-titlebar {
+  padding-left: 78px;
+  padding-right: 16px;
+}
+
+/* Windows: Reserve clearance on the top-right for native titleBarOverlay */
+[data-platform="win32"] .axiom-title-strip,
+[data-platform="win32"] .axiom-workbench-titlebar {
+  padding-left: 14px;
+  padding-right: 146px;
+}
+
+/* Linux: Custom window controls dock cleanly at the far right */
+[data-platform="linux"] .axiom-title-strip,
+[data-platform="linux"] .axiom-workbench-titlebar {
+  padding-left: 14px;
+  padding-right: 0;
+}
+
+/* ── Custom Window Controls (Linux) ──────────────────────────────────────── */
+
+.axiom-window-controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  margin-left: 8px;
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+
+.axiom-window-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #c7d2ce;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.axiom-window-control:hover {
+  background: #384943;
+  color: #ffffff;
+}
+
+.axiom-window-control:active {
+  background: #2f3e39;
+}
+
+.axiom-window-control--close:hover {
+  background: #c43c35;
+  color: #ffffff;
+}
+
+.axiom-window-control--close:active {
+  background: #a82e28;
 }
 
 .axiom-launcher__titlebar {
