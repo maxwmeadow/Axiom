@@ -68,6 +68,50 @@ func inboxHTTP(t *testing.T, handler http.Handler, method, path string, body any
 	return response
 }
 
+func TestDeliveryInspectionDoesNotClaimOrExposeLease(t *testing.T) {
+	_, mux, _ := inboxServer(t)
+	sent := inboxHTTP(t, mux, "POST", "/api/canvas/send", map[string]any{
+		"workspaceId": "ws", "id": "delivery-order", "note": "Build this", "deliveryMode": "addressed",
+	})
+	if sent.Code != http.StatusOK {
+		t.Fatal(sent.Code, sent.Body.String())
+	}
+	inspect := func() db.InboxItem {
+		r := inboxHTTP(t, mux, "GET", "/api/canvas/message?workspace=ws&messageId=delivery-order", nil)
+		var item db.InboxItem
+		if r.Code != http.StatusOK || json.Unmarshal(r.Body.Bytes(), &item) != nil {
+			t.Fatal(r.Code, r.Body.String())
+		}
+		if item.LeaseToken != "" || item.SheetContext != "" || item.BuildSpec != "" {
+			t.Fatal("delivery inspection exposed private context or lease")
+		}
+		return item
+	}
+	if inspect().Status != "queued" || inspect().LeaseExpiresAt != 0 {
+		t.Fatal("inspection claimed the request")
+	}
+	claim := inboxHTTP(t, mux, "POST", "/api/canvas/claim", map[string]any{
+		"workspaceId": "ws", "messageId": "delivery-order", "connectionId": "agent-a", "agent": "codex",
+	})
+	if claim.Code != http.StatusOK {
+		t.Fatal(claim.Code, claim.Body.String())
+	}
+	if item := inspect(); item.Status != "delivered" || item.LeaseExpiresAt == 0 {
+		t.Fatal("inspection did not report the current claim")
+	}
+	for _, target := range []string{
+		"/api/canvas/message?workspace=other&messageId=delivery-order",
+		"/api/canvas/message?workspace=ws&messageId=missing",
+	} {
+		if r := inboxHTTP(t, mux, "GET", target, nil); r.Code != http.StatusNotFound {
+			t.Fatal(r.Code, r.Body.String())
+		}
+	}
+	if r := inboxHTTP(t, mux, "GET", "/api/canvas/message?workspace=ws", nil); r.Code != http.StatusBadRequest {
+		t.Fatal(r.Code, r.Body.String())
+	}
+}
+
 func TestInboxSnapshotRetainsSentPlanAfterSheetChanges(t *testing.T) {
 	s, mux, _ := inboxServer(t)
 	d, _ := s.dbFor("ws")

@@ -107,6 +107,18 @@ sheet, build spec and comparison in one transaction → an agent claims by ID
 (15-minute lease) → builds → `reply_to_canvas` → structural re-comparison →
 you accept or request changes. Agent-reported results are labelled unverified.
 
+**Delivery** (`electron/agentDelivery.ts`, `AgentDelivery.tsx`): the send panel
+lists every installer host. Claude Code, Codex and Copilot CLI start fresh local
+runs after the request is durably saved; editor/desktop hosts copy the handoff and
+open the project/app when a launcher is available. The main process verifies the
+registered project, current request state and claim before launching, supplies
+workspace-bound MCP config, and records launch receipts/output under
+`~/.axiom/delivery/`. Receipts prevent duplicate execution across retries/reloads;
+review revisions permit another run. One managed run edits a root at a time.
+Launch status is distinct from MCP claim and reply status. Runs edit the existing
+graph root, can be stopped in the inbox, and are asked to stop when Axiom quits.
+See INBOX_PROTOCOL's host table and recovery limits.
+
 **Infra detection** (`internal/infradetect`, `internal/registry`): a pure
 analysis of package imports, environment reads, the import graph and config
 files (compose, `.env`, Dockerfile, Procfile, fly/vercel/netlify/render/railway,

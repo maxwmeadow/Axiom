@@ -55,20 +55,19 @@ sessions run at once, pick items in **different areas** so branches don't
 collide. Full context for each item is in its section below.
 
 1. ❓ `floor-edit-rules` - decide how Floor edits relate to sheets (*Decisions*). Blocks `floor-reality-to-work-order`. [Max]
-2. ⬜ `work-order-delivery` - investigate and fix how a work order reaches an agent. [mcp, electron, docs]
-3. ⬜ `agents-draw-first` - agents draw on a sheet before structural changes. [installers, mcp descriptions]
-4. ⬜ `curation-history-undo` - journal and undo meaning edits. [archd delta/journal, DeltaPanel]
-5. ⬜ `ci-e2e` - run the MCP end-to-end and Playwright suites in CI. [.github/workflows]
-6. ⬜ `canvas-undo-redo` - undo and redo on the canvas. [canvas]
-7. ⬜ `headless-watch` - a daemon started by an agent watches files too. [archd cmd/api]
-8. ⬜ `mac-update-manifest` + `actions-node24` - release workflow fixes (one branch). [.github/workflows]
-9. ⬜ `imports-rust-java-ruby-cpp` - import edges for four languages. [archd parser]
-10. ⬜ `rules-and-drift` - standing architecture rules and drift checks (design first; large). [archd, mcp, canvas]
-11. ⬜ `agent-sheet-arrival` - notice and review agent-drawn sheets. [renderer sheets]
-12. ⬜ `runtime-tests` - unit tests for the runtime layer. [archd runtime]
-13. ⬜ `log-noise` + `gofmt-dbquery` + `remove-legacy-archd` - quick cleanup (one branch). [archd, build]
-14. ⬜ `schema-upgrade-tests` + `db-corruption-recovery` - map durability. [archd db, electron]
-15. ⬜ `model-explorer` - outline panel for large maps. [renderer]
+2. ⬜ `agents-draw-first` - agents draw on a sheet before structural changes. [installers, mcp descriptions]
+3. ⬜ `curation-history-undo` - journal and undo meaning edits. [archd delta/journal, DeltaPanel]
+4. ⬜ `ci-e2e` - run the MCP end-to-end and Playwright suites in CI. [.github/workflows]
+5. ⬜ `canvas-undo-redo` - undo and redo on the canvas. [canvas]
+6. ⬜ `headless-watch` - a daemon started by an agent watches files too. [archd cmd/api]
+7. ⬜ `mac-update-manifest` + `actions-node24` - release workflow fixes (one branch). [.github/workflows]
+8. ⬜ `imports-rust-java-ruby-cpp` - import edges for four languages. [archd parser]
+9. ⬜ `rules-and-drift` - standing architecture rules and drift checks (design first; large). [archd, mcp, canvas]
+10. ⬜ `agent-sheet-arrival` - notice and review agent-drawn sheets. [renderer sheets]
+11. ⬜ `runtime-tests` - unit tests for the runtime layer. [archd runtime]
+12. ⬜ `log-noise` + `gofmt-dbquery` + `remove-legacy-archd` - quick cleanup (one branch). [archd, build]
+13. ⬜ `schema-upgrade-tests` + `db-corruption-recovery` - map durability. [archd db, electron]
+14. ⬜ `model-explorer` - outline panel for large maps. [renderer]
 
 ---
 
@@ -124,7 +123,6 @@ agent, and each sees the other's changes ([docs/PRODUCT.md §1](docs/PRODUCT.md)
 
 ## Sheets and work orders
 
-- ⬜ `work-order-delivery` **Investigate and fix how a work order reaches an agent.** Today the human copies a work-order ID into the agent's chat (see [docs/INBOX_PROTOCOL.md](docs/INBOX_PROTOCOL.md): "There is no automatic delivery or reliable cross-harness hook"). This is the weakest link in "you draw, agent builds". Investigate per host, and write the findings into INBOX_PROTOCOL.md: Claude Code hooks (`SessionStart`, `UserPromptSubmit` injecting pending work orders), MCP resource/list-changed notifications and elicitation support per host, launching the host CLI headless with the work order (`claude -p`, `codex exec`, Gemini/Antigravity CLI, Copilot CLI) into a worktree, IDE deep links that open a chat with a prompt (VS Code, Cursor, Windsurf, JetBrains), and one-click "copy + focus the agent window". **Done when:** a capability table per host exists, and the best option is built for at least Claude Code and Codex so that "Send" starts the work without copy-paste.
 - ⬜ `work-order-recovery` **Recovery across hosts and interruptions.** A real Sheet request, an interrupted agent, an expired claim, a retry and a requested revision all return to review without duplicate execution or lost context. **Start:** `archd-go/internal/api/inbox.go`, `internal/db/work_order_snapshot.go`, `src/renderer/components/WorkOrderReview.tsx`.
 - ⬜ `send-dialog-modes` **Split Ask / Propose / Start build in the send dialog.** Asking a question, asking for a plan (agent draws, human confirms) and ordering a build are different contracts. **Start:** `SendToAgentDialog.tsx`.
 - ⬜ `build-plan-panel` **A persistent Build Plan panel** replacing the modal, showing what was sent, who holds it, and realisation live.
@@ -286,11 +284,17 @@ New items go at the bottom: `- ⬜ \`slug\` **Title** - context. (date, source)`
 
 - ⬜ `readme-screenshots` **README screenshots** of the Floor, a sheet and Review Changes, once the rename and theme settle. (2026-09-30, docs cleanup)
 
+- ⬜ `work-order-delivery-live` **Record authenticated provider delivery smoke runs** for Claude Code, Codex and Copilot CLI, and verify launcher behavior on macOS/Windows. Automated delivery tests use simulated agents; test auth, MCP startup, host permissions and the actual claim/build/reply loop. (2026-09-30, work-order-delivery)
+- ⬜ `work-order-isolated-roots` **Isolated agent runs with truthful review.** Before creating a worktree on Send, bind indexing/comparison to the run’s root so review checks the branch the agent edited. Current direct runs use the existing live root and prevent overlapping managed runs. (2026-09-30, work-order-delivery)
+- ⬜ `more-direct-delivery` **Extend host-specific delivery adapters.** Validate Cursor Agent CLI and project-bound VS Code chat delivery; add direct routes where the destination and permissions can be verified. Keep editor/desktop copy/open fallbacks and the host capability table current. (2026-09-30, work-order-delivery)
+
 ---
 
 ## Done log
 
 Newest first. One line each: date, slug, what changed, branch/commit.
+
+- 2026-09-30 `work-order-delivery` Send can launch Claude Code, Codex or Copilot CLI with workspace-bound MCP and durable launch receipts; all ten hosts have delivery choices, editor/desktop copy/open fallbacks, output and Stop controls, and a documented capability table. Provider smoke runs and isolated roots remain explicit follow-ups. (codex/work-order-delivery)
 
 - 2026-09-30 `docs-consolidation` Stray briefs and plans consolidated: current docs in `docs/`, old plans in `docs/history/`, the bug hunt became `docs/testing/CANVAS_QA_CHECKLIST.md`, LAUNCH split into this file and `docs/DECISIONS.md`, new PRODUCT/ARCHITECTURE docs, README repositioned around bidirectional architecture. (claude/gracious-gauss-1bgdv9)
 - 2026-09-30 `ci-fix` Open-time backup made synchronous; path tests made host-independent. (c063eb8)

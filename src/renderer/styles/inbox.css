@@ -198,3 +198,11 @@
 .axiom-sheet-rail__archive { padding: 10px; border-top: 1px solid #dce0d6; font-size: 11px; }
 .axiom-sheet-rail__archive button { background: transparent; color: inherit; border: 1px solid #c7cec3; border-radius: 4px; padding: 5px; cursor: pointer; }
 .axiom-sheet-rail__archive > div { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.axiom-inbox__delivery { display: grid; gap: 6px; padding: 8px 0; }
+.axiom-inbox__delivery label { display: grid; gap: 4px; font-size: 12px; }
+.axiom-inbox__delivery select { width: 100%; padding: 6px; color: inherit; background: var(--inbox-surface); border: 1px solid var(--inbox-line); border-radius: 0; font: inherit; }
+.axiom-inbox__delivery select:focus-visible { outline: 2px solid #69a799; outline-offset: -2px; }
+.axiom-inbox__delivery small { font-size: 11px; opacity: .75; overflow-wrap: anywhere; }
+.axiom-inbox__delivery-run { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; font-size: 11px; }
+.axiom-inbox__delivery-run span { flex-basis: 100%; }
+.axiom-inbox .axiom-inbox__delivery-run button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--inbox-line); padding: 3px 6px; cursor: pointer; }

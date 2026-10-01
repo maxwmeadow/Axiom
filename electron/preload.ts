@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { MapBackup, ProjectConfig, TrashedProject, WsMessage } from '../src/shared/types'
 import type { AppSettings } from '../src/shared/appSettings'
 import type { CommandId, SystemRole } from '../src/shared/appMenu'
+import type { DeliveryHost, DeliveryRequest, DeliveryResult, DeliveryRun } from '../src/shared/agentDelivery'
 
 // Expose a safe API to the renderer process
 contextBridge.exposeInMainWorld('axiom', {
@@ -80,6 +81,11 @@ contextBridge.exposeInMainWorld('axiom', {
   // Which agents are on this machine
   listAgentHosts: (projectRoot?: string): Promise<AgentHostInfo[]> =>
     ipcRenderer.invoke('agent:hosts', projectRoot),
+
+  listDeliveryHosts: (): Promise<DeliveryHost[]> => ipcRenderer.invoke('agent:delivery-hosts'),
+  deliverWorkOrder: (request: DeliveryRequest): Promise<DeliveryResult> => ipcRenderer.invoke('agent:deliver', request),
+  listDeliveryRuns: (workspaceId: string): Promise<DeliveryRun[]> => ipcRenderer.invoke('agent:delivery-runs', workspaceId),
+  stopDeliveryRun: (workspaceId: string, key: string): Promise<void> => ipcRenderer.invoke('agent:delivery-stop', workspaceId, key),
 
   // Install Axiom into one agent - server entry and slash command
   installAgent: (hostId: string, projectRoot?: string): Promise<AgentInstallResult> =>
@@ -304,6 +310,10 @@ declare global {
       getAppInfo: () => Promise<{ version: string; dataDir: string; platform: string; mcpPath: string; archdApiUrl: string; archdWsUrl: string; isPackaged: boolean }>
       getAgentConnection: () => Promise<AgentConnection>
       listAgentHosts: (projectRoot?: string) => Promise<AgentHostInfo[]>
+      listDeliveryHosts: () => Promise<DeliveryHost[]>
+      deliverWorkOrder: (request: DeliveryRequest) => Promise<DeliveryResult>
+      listDeliveryRuns: (workspaceId: string) => Promise<DeliveryRun[]>
+      stopDeliveryRun: (workspaceId: string, key: string) => Promise<void>
       installAgent: (hostId: string, projectRoot?: string) => Promise<AgentInstallResult>
       installFamily: (familyId: string, projectRoot?: string) => Promise<AgentInstallResult>
       locateAgentHost: (hostId: string) => Promise<AgentOverrideResult>

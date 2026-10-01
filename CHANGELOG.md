@@ -8,6 +8,9 @@ in the app as "What's New" after updating, so write it for users.
 ## [Unreleased]
 
 ### Added
+- Work-order destinations for every supported agent: start a new Claude Code,
+  Codex or Copilot CLI run from Send, or copy the handoff and open your editor.
+  Managed runs show launch failures, local output and a Stop control.
 - Command palette, keyboard shortcuts and a shortcut reference; full menus
   (File, Edit, View, Go, Map, Agent, Help) and right-click menus on the map.
 - Settings: reopen last project, update checks, interface zoom, reduce

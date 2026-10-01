@@ -64,6 +64,7 @@ func (s *Server) registerSheetRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/canvas/outbox", s.handleCanvasOutbox)
 	mux.HandleFunc("/api/canvas/reply", s.handleCanvasReply)
 	mux.HandleFunc("/api/canvas/history", s.handleInboxHistory)
+	mux.HandleFunc("/api/canvas/message", s.handleInboxMessage)
 	mux.HandleFunc("/api/canvas/snapshot", s.handleInboxSnapshot)
 	mux.HandleFunc("/api/canvas/snapshot-comparison", s.handleInboxSnapshotComparison)
 	mux.HandleFunc("/api/canvas/claim", s.handleInboxClaim)

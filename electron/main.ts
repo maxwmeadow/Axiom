@@ -22,6 +22,9 @@ import { buildHosts, detectHosts, inspectHostConfiguration, installFamily } from
 import { uninstallAll, uninstallHost } from './agentUninstall'
 import { resolveNodeCommand } from './platformPaths'
 import { readOverrides, setOverride, clearOverride } from './agentOverrides'
+import { DeliveryRunner, deliveryTargets, deliveryArguments, checkDeliveryMessage } from './agentDelivery'
+import { workOrderHandoff } from '../src/shared/workOrderHandoff'
+import type { DeliveryRequest } from '../src/shared/agentDelivery'
 import {
   createProjectId,
   exportManifest,
@@ -55,6 +58,7 @@ const PROJECTS_FILE = join(CONFIG_DIR, 'projects.json')
 const SETTINGS_FILE = join(CONFIG_DIR, 'settings.json')
 const DATA_DIR = join(os.homedir(), '.axiom', 'data')
 const LOG_DIR = join(CONFIG_DIR, 'logs')
+const deliveryRunner = new DeliveryRunner(join(CONFIG_DIR, 'delivery'))
 const WINDOW_STATE_FILE = join(CONFIG_DIR, 'window-state.json')
 // Where "Report a Bug" leads. Update alongside the repository if it moves.
 const ISSUES_URL = 'https://github.com/maxwmeadow/Axiom/issues/new'
@@ -1328,6 +1332,44 @@ function setupIPC(): void {
     })
   })
 
+  ipcMain.handle('agent:delivery-hosts', () => deliveryTargets(buildHosts()).map(({ launcher: _launcher, ...host }) => host))
+  ipcMain.handle('agent:delivery-runs', (_event, workspaceId: string) => {
+    if (typeof workspaceId !== 'string' || !loadRecentProjects().some(project => project.id === workspaceId)) return []
+    return deliveryRunner.list(workspaceId)
+  })
+  ipcMain.handle('agent:delivery-stop', (_event, workspaceId: string, key: string) => {
+    if (typeof workspaceId !== 'string' || typeof key !== 'string') throw new Error('Invalid agent run.')
+    deliveryRunner.stop(workspaceId, key)
+  })
+  ipcMain.handle('agent:deliver', async (_event, request: DeliveryRequest) => {
+    if (!request || ![request.workspaceId, request.messageId, request.hostId].every(value => typeof value === 'string' && value.length > 0 && value.length <= 256)) throw new Error('Invalid work-order destination.')
+    const project = loadRecentProjects().find(item => item.id === request.workspaceId)
+    if (!project || !fs.existsSync(project.rootPath)) throw new Error('This project is unavailable. Open or relocate it before sending work.')
+    const { status, body } = await archdJson(`/api/canvas/message?workspace=${encodeURIComponent(project.id)}&messageId=${encodeURIComponent(request.messageId)}`, { signal: AbortSignal.timeout(10000) })
+    if (status !== 200 || body?.workspaceId !== project.id || body?.id !== request.messageId) throw failure('Could not find this work order in this project', body)
+    checkDeliveryMessage(body, project.id, request.messageId)
+    const target = deliveryTargets(buildHosts()).find(host => host.id === request.hostId)
+    if (!target || !target.available) throw new Error(target?.detail ?? 'Unknown agent host.')
+    const prompt = workOrderHandoff(project.name, project.id, project.rootPath, request.messageId)
+    if (target.route !== 'run') {
+      clipboard.writeText(prompt)
+      if (!target.launcher) return { detail: `Handoff copied for ${target.label}. Paste it into the chat you choose.` }
+      const launcher = target.launcher
+      const args = request.hostId === 'claude-desktop' ? launcher.args : [...launcher.args, project.rootPath]
+      try {
+        await new Promise<void>((resolveLaunch, rejectLaunch) => {
+          const child = spawn(launcher.command, args, { cwd: project.rootPath, shell: false, detached: true, stdio: 'ignore' })
+          child.once('error', rejectLaunch)
+          child.once('spawn', () => { child.unref(); resolveLaunch() })
+        })
+        return { detail: `Handoff copied and ${target.label} opened. Paste it into the chat you choose; work has not started yet.` }
+      } catch { return { detail: `Handoff copied, but ${target.label} could not open. Open it yourself and paste into the chat you choose.` } }
+    }
+    if (!fs.existsSync(mcpServerPath())) throw new Error('This Axiom install has no MCP server. Repair the installation before starting an agent.')
+    const run = await deliveryRunner.start({ ...request, rootPath: project.rootPath, revision: body.review?.id ?? 'initial', launcher: target.launcher!, args: deliveryArguments(request.hostId, mcpLaunchSpec(), project.id, prompt), prompt })
+    return { detail: run.detail, run }
+  })
+
   // Install Axiom into one agent modality.
   ipcMain.handle('agent:install', (_event, hostId: string, projectRoot?: string) => {
     const host = buildHosts(undefined, undefined, process.platform, readOverrides(CONFIG_DIR))
@@ -1736,6 +1778,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   quitting = true
+  deliveryRunner.stopAll()
   // An attached daemon was started by an agent and stays for it; it exits by
   // itself once idle. Only the daemon this app started is stopped.
   if (attachedWatch) clearInterval(attachedWatch)
@@ -1743,8 +1786,8 @@ app.on('before-quit', () => {
 })
 
 // Ensure archd is killed if the process is terminated via Ctrl+C or signal
-process.on('SIGINT', () => { quitting = true; stopArchd(); process.exit(0) })
-process.on('SIGTERM', () => { quitting = true; stopArchd(); process.exit(0) })
+process.on('SIGINT', () => { quitting = true; deliveryRunner.stopAll(); stopArchd(); process.exit(0) })
+process.on('SIGTERM', () => { quitting = true; deliveryRunner.stopAll(); stopArchd(); process.exit(0) })
 
 // Security: the window only ever shows Axiom. A link that would navigate it
 // elsewhere opens in the browser instead; embedded web views are refused.

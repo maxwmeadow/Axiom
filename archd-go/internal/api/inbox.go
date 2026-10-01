@@ -72,6 +72,36 @@ func (s *Server) handleInboxHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOK(w, map[string]any{"messages": items, "nextCursor": next, "availableCount": available})
 }
+
+// Delivery inspects exactly one request without taking an agent's lease.
+func (s *Server) handleInboxMessage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+	workspace, id := r.URL.Query().Get("workspace"), r.URL.Query().Get("messageId")
+	if workspace == "" || id == "" {
+		jsonError(w, "workspace and messageId are required", 400)
+		return
+	}
+	d, err := s.dbFor(workspace)
+	if err != nil {
+		inboxError(w, err)
+		return
+	}
+	item, err := db.ReadInboxItem(d, id, time.Now().UnixMilli())
+	if err != nil {
+		inboxError(w, err)
+		return
+	}
+	if item.WorkspaceID != workspace {
+		inboxError(w, sql.ErrNoRows)
+		return
+	}
+	item.LeaseToken, item.SheetContext, item.BuildSpec = "", "", ""
+	w.Header().Set("Cache-Control", "no-store")
+	jsonOK(w, item)
+}
 func (s *Server) handleInboxSnapshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.NotFound(w, r)

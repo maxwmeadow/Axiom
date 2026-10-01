@@ -10,6 +10,7 @@ import { InboxSheetPicker } from './InboxSheetPicker'
 import { AgentMessageContent } from './AgentMessageContent'
 import { AgentHandoff } from './AgentHandoff'
 import { WorkOrderReview } from './WorkOrderReview'
+import { AgentDeliveryDestination, AgentDeliveryStatus, deliveryAction, useAgentDelivery } from './AgentDelivery'
 import '../styles/inbox.css'
 
 export function SendToAgentDialog({ isOpen, onClose, onManageConnections }: { isOpen: boolean; onClose: () => void; onManageConnections?: () => void }) {
@@ -17,6 +18,8 @@ export function SendToAgentDialog({ isOpen, onClose, onManageConnections }: { is
   const sheet = useSheetStore(useShallow(s => ({ sheets: s.sheets, activeSheetId: s.activeSheetId, layers: s.layersById, selected: s.selectedCanvasIds, messages: s.messages, error: s.inboxError, next: s.inboxNextCursor, send: s.sendToAgent })))
   const draftKey = `axiom:inbox-draft:${graph.workspaceId}`
   const pendingKey = `${draftKey}:pending`
+  const delivery = useAgentDelivery(graph.workspaceId, isOpen)
+  const deliveryHost = delivery.hosts.find(host => host.id === delivery.hostId)
   const [note, setNote] = useState(() => { try { return localStorage.getItem(draftKey) ?? '' } catch { return '' } })
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -33,7 +36,7 @@ export function SendToAgentDialog({ isOpen, onClose, onManageConnections }: { is
   const [attachedSheetId, setAttachedSheetId] = useState<string | null>(() => { try { const saved = JSON.parse(localStorage.getItem(`${draftKey}:sheet`) ?? 'null'); return typeof saved === 'string' ? saved : null } catch { return null } })
   const attachmentChosen = useRef((() => { try { return localStorage.getItem(`${draftKey}:sheet`) !== null } catch { return false } })())
   const sendLock = useRef(false)
-  const retry = useRef<{ id: string; note: string; selection: string[]; sheetId: string | null }>(undefined)
+  const retry = useRef<{ id: string; note: string; selection: string[]; sheetId: string | null; hostId?: string }>(undefined)
   const restored = useRef(false)
   if (!restored.current) {
     restored.current = true
@@ -129,13 +132,14 @@ export function SendToAgentDialog({ isOpen, onClose, onManageConnections }: { is
     if (sendLock.current || !(retry.current?.note ?? note).trim() || effectiveSelection.length > 100) return
     if (!retry.current && attachedSheetId && !attachedSheet) { setError('This attached sheet is no longer available. Remove it before sending.'); return }
     sendLock.current = true; setSending(true); setError(null); setPickerOpen(false)
-    if (!retry.current) retry.current = { id: crypto.randomUUID(), note: note.trim(), selection, sheetId: attachedSheetId }
+    if (!retry.current) retry.current = { id: crypto.randomUUID(), note: note.trim(), selection, sheetId: attachedSheetId, hostId: delivery.hostId }
     try { localStorage.setItem(pendingKey, JSON.stringify(retry.current)) } catch { /* in-memory retries still work */ }
     try {
       const pending = retry.current
       await sheet.send(graph.workspaceId, pending.note, pending.selection, pending.sheetId, pending.id)
       setNote(''); retry.current = undefined; nearBottom.current = true
       try { localStorage.removeItem(pendingKey) } catch { /* already acknowledged */ }
+      if (pending.hostId) await delivery.deliver(pending.id, pending.hostId)
     } catch (err) {
       const status = (err as { status?: number }).status
       if (status && status >= 400 && status < 500) {
@@ -165,8 +169,10 @@ export function SendToAgentDialog({ isOpen, onClose, onManageConnections }: { is
           </div>
           <div className="axiom-inbox__meta"><span className={`axiom-inbox__status axiom-inbox__status--${message.status}`}>{inboxStatus(message)}</span><time title={new Date(message.createdAt).toLocaleString()} dateTime={new Date(message.createdAt).toISOString()}>{new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
             {(message.status === 'queued' || message.status === 'delivered') && <button type="button" className="axiom-inbox__handoff-copy" onClick={() => copy(workOrderHandoff(graph.name ?? 'this project', graph.workspaceId, graph.rootPath, message.id), `handoff:${message.id}`)} title={`Copy handoff for work order ${message.id}`}><InboxIcon name={copied === `handoff:${message.id}` ? 'check' : 'copy'} size={12} />{copied === `handoff:${message.id}` ? 'Copied' : 'Copy handoff'}</button>}
+            {(message.status === 'queued' || message.status === 'delivered') && deliveryHost && <button type="button" className="axiom-inbox__handoff-copy" disabled={!!delivery.busy || !deliveryHost.available || (message.leaseExpiresAt ?? 0) > Date.now() || (deliveryHost.route === 'run' && delivery.runs.some(run => run.messageId === message.id && run.revision === (message.review?.id ?? 'initial') && run.state !== 'launch-failed'))} onClick={() => { void delivery.deliver(message.id) }}>{delivery.busy === message.id ? 'Delivering…' : deliveryAction(deliveryHost)}</button>}
             {(message.status === 'queued' || message.status === 'delivered') && <button type="button" className="axiom-inbox__cancel" onClick={() => { void cancelInboxMessage(graph.workspaceId, message.id).catch(err => setError(String(err))) }}>Cancel request</button>}
           </div>
+          <AgentDeliveryStatus run={delivery.runs.filter(run => run.messageId === message.id).sort((a, b) => b.startedAt - a.startedAt)[0]} hosts={delivery.hosts} onStop={run => { void delivery.stop(run) }} />
           {message.status !== 'answered' && message.sessions?.filter(session => !session.endedAt).slice(-1).map(session => <section key={session.id} className="axiom-inbox__progress" aria-label={`Work progress: ${session.goal}`}><strong>{session.agent || 'Agent'} · {session.goal}</strong>{session.notes.length > 0 && <p>{session.notes.at(-1)?.text}</p>}</section>)}
           {message.reply && <div className="axiom-inbox__reply"><div className="axiom-inbox__reply-heading"><InboxIcon name="agent" size={16} /><strong>{message.reply.agent}</strong></div><AgentMessageContent text={message.reply.body} /><button type="button" className="axiom-inbox__copy-reply" aria-label={copied === message.id ? 'Reply copied' : 'Copy reply'} onClick={() => copy(message.reply!.body, message.id)}><InboxIcon name={copied === message.id ? 'check' : 'copy'} size={13} />{copied === message.id ? 'Copied' : 'Copy'}</button></div>}
           {message.status === 'answered' && !message.reply && <p className="axiom-inbox__notice">This older reply is no longer available.</p>}
@@ -180,6 +186,8 @@ export function SendToAgentDialog({ isOpen, onClose, onManageConnections }: { is
       <AgentHandoff workspaceId={graph.workspaceId} projectRoot={graph.rootPath} onManageConnections={onManageConnections} />
       {effectiveSheetId && attachedSheet && <SheetComparison key={effectiveSheetId} workspaceId={graph.workspaceId} sheetId={effectiveSheetId} />}
       <form className="axiom-inbox__compose" onSubmit={submit}>
+        <AgentDeliveryDestination hosts={delivery.hosts} hostId={retry.current?.hostId ?? delivery.hostId} onChange={delivery.setHostId} disabled={locked || !!delivery.busy} rootPath={graph.rootPath} />
+        {delivery.notice && <p className="axiom-inbox__notice" role="status">{delivery.notice}</p>}
         {(effectiveSheetId || effectiveSelection.length > 0) && <div className="axiom-inbox__attachments">
           {effectiveSheetId && <div className="axiom-inbox__attachment" title={attachedSheet ? `${attachedSheet.name} · revision ${attachedSheet.revision} · snapshot and structural comparison included` : 'This sheet is no longer available'}><span className="axiom-inbox__sheet-icon"><InboxIcon name="sheet" size={16} /></span><span><strong>{attachedSheet?.name ?? 'Sheet unavailable'}</strong><small>{attachedSheet?.resolvedAt ? 'Resolved sheet' : attachedSheet ? 'Sheet' : 'Remove attachment'}</small></span><button className="axiom-inbox__icon" type="button" disabled={locked} aria-label="Remove attached sheet" onClick={() => attachSheet(null)}><InboxIcon name="close" size={13} /></button></div>}
           {chips(effectiveSelection, true)}
@@ -192,7 +200,7 @@ export function SendToAgentDialog({ isOpen, onClose, onManageConnections }: { is
         <div className="axiom-inbox__compose-tools"><div ref={attachmentArea} className="axiom-inbox__attach-anchor">
           <button type="button" className="axiom-inbox__icon" disabled={locked} aria-label="Attach context" aria-haspopup="dialog" aria-expanded={pickerOpen} title="Attach a sheet (@)" onClick={() => setPickerOpen(!pickerOpen)}><InboxIcon name="attach" size={19} /></button>
           {pickerOpen && <InboxSheetPicker sheets={sheet.sheets} attachedId={effectiveSheetId} onClose={dismissPicker} onSelect={id => { attachSheet(id); dismissPicker() }} />}
-        </div><span>{retry.current && !sending ? 'Send unconfirmed · retry' : sending ? 'Saving…' : 'Enter to send · Shift+Enter for new line'}</span><button className="axiom-inbox__send" type="submit" aria-label="Send to inbox" title={retry.current ? 'Retry original message' : 'Send to inbox'} disabled={sending || !(retry.current?.note ?? note).trim() || effectiveSelection.length > 100}><InboxIcon name={retry.current && !sending ? 'retry' : 'send'} size={19} /></button></div>
+        </div><span>{retry.current && !sending ? 'Send unconfirmed · retry' : sending ? 'Sending…' : 'Enter to send · Shift+Enter for new line'}</span><button className="axiom-inbox__send" type="submit" aria-label={deliveryAction(deliveryHost)} title={retry.current ? 'Retry original message' : deliveryAction(deliveryHost)} disabled={sending || !!delivery.busy || !(retry.current?.note ?? note).trim() || effectiveSelection.length > 100}><InboxIcon name={retry.current && !sending ? 'retry' : 'send'} size={19} /></button></div>
       </form>
       {effectiveSelection.length > 100 && <small className="axiom-inbox__limit" role="alert">Attach up to 100 canvas items per message.</small>}
     </div>

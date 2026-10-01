@@ -36,9 +36,9 @@ when a harness shares one MCP process across chats.
 
 Older open-queue messages remain claimable with `get_inbox()` and are never silently
 converted. New addressed work does **not** appear in an unspecific inbox check or
-legacy outbox read. It waits until the user gives its ID to a chat. The handoff asks
+legacy outbox read. Delivery passes its exact ID to one chosen host. The handoff asks
 the agent to handle only that work order; it does not invite queue draining. There is
-no automatic delivery or reliable cross-harness hook. Installers that support skills
+no reliable cross-harness hook that selects an existing human chat. Installers that support skills
 also install `axiom-inbox` beside `axiom-map`;
 manual language remains the universal entry point. Installing is optional for an already
 connected agent. No hook, slash-command convention, or permanent polling loop is required.
@@ -79,6 +79,98 @@ Picked up means the connector claimed the instruction, not proof of ongoing mode
 Replies remain visible after restarting Axiom or deleting the originating canvas objects.
 Cancellation prevents acceptance of a later reply; it cannot stop an external coding
 process. The panel tells the user to stop that agent separately if necessary.
+
+## Delivery routes (2026-09-30)
+
+**Deliver to** lists all ten installer modalities. The default is **Choose chat
+manually**, preserving the existing workflow. Choosing a CLI makes Send save the
+request first, then start a fresh local run; choosing an editor/desktop host copies
+the same handoff and opens the project/app when its launcher is available. The
+request card can deliver an already-saved request, including one reopened with
+review feedback. An editor launch is labelled **work has not started yet**.
+
+| Supported host | Headless / hook / chat options investigated | Route built in Axiom |
+| --- | --- | --- |
+| Claude Code (CLI, shared config with VS Code/JetBrains extensions) | `claude -p`; `SessionStart` and `UserPromptSubmit` can inject context on host activity, but do not select a conversation on Send | Start a new CLI run with per-run MCP config |
+| Claude Desktop | No documented external API for starting a specific existing chat; MCP connections can be shared | Copy + open Claude on macOS when installed; copy on other platforms |
+| Copilot in VS Code | `code chat` supports a prompt, agent mode, and new/reused windows. A new chat window is empty; a reused window can belong to another project | Copy + open this project in VS Code; paste into the chosen chat |
+| Copilot CLI | `copilot -p`, per-session `--additional-mcp-config`, and named tool permissions | Start a new CLI run with per-run MCP config |
+| Codex (CLI, shared config with IDE extension/app) | `codex exec`, stdin prompts, workspace-write sandbox, `-c` MCP overrides; CLI worktree support varies by version | Start a new CLI run with per-run MCP config |
+| Cursor | Separate Agent CLI has headless mode; editor hooks are tied to user/agent activity. No verified public route to a particular existing editor chat | Copy + open this project in Cursor when its launcher is found |
+| Windsurf / Devin Local | Cascade hooks can observe activity; no verified external prompt route selecting a project and chat | Copy + open this project in Windsurf when its launcher is found |
+| Antigravity | Its IDE MCP setup is separate from Gemini CLI. Gemini's documented `-p` mode does not establish an Antigravity chat-delivery API | Copy + open this project when the `antigravity` launcher is found |
+| JetBrains AI Assistant | IDE/project links open projects or files; no verified public link that submits a prompt to the chosen AI chat | Copy + open this project in a detected JetBrains IDE |
+| Zed | Agent panel and MCP support; no verified external route to a particular panel conversation | Copy + open this project in Zed when its launcher is found |
+
+All editor/desktop rows fall back to **Copy for host** if no launcher is found.
+Missing CLI executables are shown explicitly; the generic copy handoff always
+remains available. A configured MCP file alone does not prove a runnable CLI.
+Discovery covers native executables, common GUI PATH gaps, and known npm JS
+entrypoints (including Windows), without interpolating a prompt into a shell.
+
+Sources: [Claude CLI](https://code.claude.com/docs/en/cli-reference),
+[Claude hooks](https://code.claude.com/docs/en/hooks),
+[Codex noninteractive mode](https://developers.openai.com/codex/noninteractive),
+[Copilot CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
+[VS Code CLI](https://code.visualstudio.com/docs/configure/command-line),
+[Cursor headless mode](https://cursor.com/docs/cli/headless),
+[Windsurf hooks](https://docs.windsurf.com/windsurf/cascade/hooks),
+[Antigravity MCP](https://antigravity.google/docs/mcp),
+[Gemini headless mode](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/headless.md),
+[JetBrains MCP](https://www.jetbrains.com/help/ai-assistant/mcp.html),
+[Zed MCP](https://zed.dev/docs/ai/mcp). Codex's installed CLI help, upstream
+Copilot/VS Code references, and Claude's upstream changelog were also inspected.
+Unverified chat routes are deliberately not offered as automatic delivery.
+
+### Why hooks, notifications and elicitation are not dispatch
+
+MCP resource `list_changed` notifications announce a changed resource catalogue;
+they do not submit a user message or choose a chat. Axiom currently exposes tools
+and prompts, not a work-order resource subscription. Hosts vary in whether they
+surface resource notifications in model context. Elicitation, where a client
+supports it, asks the human for input during a tool interaction; it is not a
+portable API for starting an agent turn. Neither is used as a delivery guarantee
+for any host in the table. Host hooks can provide a reminder on the next session
+or prompt, but blindly exposing all addressed work to every session would undo
+the request-ID routing. They remain complementary options, not queue drainers.
+
+### Run ownership and failure behavior
+
+The privileged Electron handler reloads the registered project and reads exactly
+the requested message from archd before starting anything. Closed work, legacy
+open-queue work, wrong-workspace requests and live claims are refused. The process
+runs in that project's existing root; inline MCP configuration and environment
+pin its workspace and host. It must claim before editing and renew before the
+15-minute lease expires. A race with another claimant is still fenced by MCP.
+
+Direct runs use the host's existing account. Codex keeps workspace-write
+sandboxing and refuses approval-dependent escalation. Claude uses accept-edits
+mode plus Axiom tools and named local read/check commands. Copilot allows Axiom,
+file writing, and named local check commands. No route enables a dangerous bypass,
+all-path access, all-URL access or arbitrary shell auto-approval. A task requiring
+additional permissions may need continuation in the host's interactive chat.
+
+One managed run may edit a root at a time. A launch receipt in
+`~/.axiom/delivery/` is keyed by workspace, request and review revision, and saved
+before spawn. Double clicks and renderer reloads return that receipt. Only a
+confirmed spawn failure is automatically retryable; a process that ran and failed
+or was interrupted is never silently rerun. Requesting changes creates a new
+review revision and permits a fresh run. After an app crash an old live PID blocks
+another managed run until the previous agent has been checked/stopped separately.
+
+The inbox distinguishes process launch/exit from claim/reply. Exit code zero alone
+does not mark a request answered. Output is kept locally (up to 1 MiB per run),
+with **Show agent output** and **Stop run** controls. Stop terminates the managed
+process tree where supported, keeps edits already made and does not cancel the
+durable request or release its MCP lease. Axiom asks managed runs to stop on quit.
+Manual handoff remains available for recovery and unsupported chat integrations.
+
+A new worktree is not created automatically: Axiom's comparison follows the live
+graph root, so reviewing a different worktree would be misleading. Isolated-run
+projection and live authenticated provider smoke tests are tracked in WORK.md.
+The automated UI test exercises real Electron IPC and child processes with
+simulated CLI agents and an editor launcher; it does not certify provider auth,
+model behavior, or every OS launcher installation.
 
 ## Work-order review
 
@@ -165,6 +257,7 @@ Endpoints (all require the local bearer token):
 | `POST /api/canvas/cancel` | Cancel unresolved work using `{workspaceId, msgId}` |
 | `POST /api/canvas/review` | Accept or reopen a submission using `{workspaceId, msgId, reviewId, decision, note?}` |
 | `GET /api/canvas/history?workspace=…&before=…&limit=…` | Newest-first history; stable `(createdAt,id)` pagination |
+| `GET /api/canvas/message?workspace=…&messageId=…` | Inspect exactly one request for delivery, without claiming or exposing its lease token/context |
 | `GET /api/canvas/outbox?workspace=…&peek=1` | `queued` total and `open` count; only `open` drives generic discovery hints |
 | `GET /api/agent/workspace?cwd=…&workspace=…` | Resolve persisted project/root identity |
 
