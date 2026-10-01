@@ -12,12 +12,24 @@ function fixture() {
   const appData = path.join(home, 'AppData')
   const project = path.join(home, 'project')
   fs.mkdirSync(project, { recursive: true })
+  // Linux Zed reads XDG_CONFIG_HOME rather than the injected appData root.
+  // Keep installs/removals inside this fixture instead of racing other workers.
+  const previousXdg = process.env.XDG_CONFIG_HOME
+  process.env.XDG_CONFIG_HOME = path.join(home, 'xdg-config')
   // Other tools' configuration that must survive.
   fs.mkdirSync(path.join(home, '.cursor'), { recursive: true })
   fs.writeFileSync(path.join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { github: { command: 'gh' } } }))
   fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
   fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'model = "o3"\n\n[mcp_servers.github]\ncommand = "gh"\n')
-  return { home, appData, project, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) }
+  return {
+    home, appData, project,
+    cleanup: () => {
+      try { fs.rmSync(home, { recursive: true, force: true }) } finally {
+        if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
+        else process.env.XDG_CONFIG_HOME = previousXdg
+      }
+    },
+  }
 }
 
 test('uninstalling every agent removes only what Axiom wrote', () => {

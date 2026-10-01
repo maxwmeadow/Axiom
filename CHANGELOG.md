@@ -8,6 +8,10 @@ in the app as "What's New" after updating, so write it for users.
 ## [Unreleased]
 
 ### Added
+- Agents receive guidance to draw structural changes on a sheet before editing
+  code, reuse approved plans, and compare after building. Project reminders
+  support every installed coding host; Claude Desktop receives MCP/chat guidance.
+- Agents can draw typed dependencies between planned and existing sheet nodes.
 - Command palette, keyboard shortcuts and a shortcut reference; full menus
   (File, Edit, View, Go, Map, Agent, Help) and right-click menus on the map.
 - Settings: reopen last project, update checks, interface zoom, reduce

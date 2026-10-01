@@ -56,7 +56,7 @@ collide. Full context for each item is in its section below.
 
 1. ❓ `floor-edit-rules` - decide how Floor edits relate to sheets (*Decisions*). Blocks `floor-reality-to-work-order`. [Max]
 2. ⬜ `work-order-delivery` - investigate and fix how a work order reaches an agent. [mcp, electron, docs]
-3. ⬜ `agents-draw-first` - agents draw on a sheet before structural changes. [installers, mcp descriptions]
+3. 🚧 `agents-draw-first` - agents draw on a sheet before structural changes. [installers, mcp descriptions]
 4. ⬜ `curation-history-undo` - journal and undo meaning edits. [archd delta/journal, DeltaPanel]
 5. ⬜ `ci-e2e` - run the MCP end-to-end and Playwright suites in CI. [.github/workflows]
 6. ⬜ `canvas-undo-redo` - undo and redo on the canvas. [canvas]
@@ -109,7 +109,7 @@ The product's first rule: every artifact can be written by both you and your
 agent, and each sees the other's changes ([docs/PRODUCT.md §1](docs/PRODUCT.md)).
 
 - ⬜ `bidirectional-audit` **Prove each direction for each artifact.** For systems, sheets, infrastructure, changes and (later) rules, write down and test: can the human create/edit it, can the agent, does each see the other's change, is it journaled and attributed. **Done when:** a table in docs/PRODUCT.md §1 is backed by one test per cell (MCP e2e or Playwright), and every ❌ has a WORK item.
-- ⬜ `agents-draw-first` **Agents draw before they build.** The tools exist (`edit_sheet` create/add, `plan_element`) but nothing asks agents to use them. The workflow files Axiom installs per agent (instructions, skills, and hooks where the host supports them) should say: for any structural change - new system, new dependency between systems, moving responsibility - draw it on a sheet first, tell the human, then build; after building, `edit_sheet compare`. Research: MCP tools are rarely chosen spontaneously; the popular code-graph tools install hooks to force use. **Done when:** a fresh Claude Code and Codex session, asked to add a feature that crosses systems, draws a sheet before editing code, in a recorded run. **Start:** `electron/agentInstallers.ts`, the installed workflow/skill files, `mcp/axiom-mcp.ts` tool descriptions.
+- 🚧 `agents-draw-first` **Agents draw before they build.** The tools exist (`edit_sheet` create/add, `plan_element`) but nothing asks agents to use them. The workflow files Axiom installs per agent (instructions, skills, and hooks where the host supports them) should say: for any structural change - new system, new dependency between systems, moving responsibility - draw it on a sheet first, tell the human, then build; after building, `edit_sheet compare`. Research: MCP tools are rarely chosen spontaneously; the popular code-graph tools install hooks to force use. **Done when:** a fresh Claude Code and Codex session, asked to add a feature that crosses systems, draws a sheet before editing code, in a recorded run. **Start:** `electron/agentInstallers.ts`, the installed workflow/skill files, `mcp/axiom-mcp.ts` tool descriptions. (🚧 Codex, codex/agents-draw-first, 2026-09-30) **Progress:** Implementation and all-host installer/real MCP tests are ready; recorded fresh Claude Code/Codex model trials remain required. This environment rejects Codex authentication (HTTP 401), and Claude Code is not installed. Trial commands and host matrix: [docs/testing/AGENTS_DRAW_FIRST.md](docs/testing/AGENTS_DRAW_FIRST.md).
 - ⬜ `agent-sheet-arrival` **Notice and review agent-drawn sheets.** When an agent creates or changes a sheet, the human needs to see it: a badge on the sheet rail, a notice, and a clear confirm / reject / edit flow for its planned elements. **Done when:** an agent-drawn sheet cannot go unnoticed and each planned element can be confirmed or rejected in one action.
 - ⬜ `agents-see-human-changes` **Agents learn what the human changed.** When you rename, regroup or reject something, the next agent session should know without re-reading the whole map: e.g. `get_architecture` scope `changes_since` (or a section in `start_work`'s response) listing human meaning edits and decisions since that agent's last session. **Done when:** an agent starting work is told "Max moved `billing.ts` from Orders to Payments yesterday".
 - ⬜ `floor-reality-to-work-order` (blocked by `floor-edit-rules`) **Reality edits on the Floor become work orders.** Gestures that imply code change offer "Draft as a work order", opening a sheet with the change pre-drawn.
@@ -285,12 +285,15 @@ Current state: [docs/INVESTIGATIONS.md](docs/INVESTIGATIONS.md). Old plan: [docs
 New items go at the bottom: `- ⬜ \`slug\` **Title** - context. (date, source)`
 
 - ⬜ `readme-screenshots` **README screenshots** of the Floor, a sheet and Review Changes, once the rename and theme settle. (2026-09-30, docs cleanup)
+- ⬜ `draw-first-editor-smoke` **Live draw-first trials on the other supported hosts** - use the host matrix in `docs/testing/AGENTS_DRAW_FIRST.md`; record plan-before-code, human approval, existing-plan reuse, and a small fix without a new sheet. Copilot CLI has an opt-in trial; editor/Desktop runs still need a real host. (2026-09-30, agents-draw-first implementation)
 
 ---
 
 ## Done log
 
 Newest first. One line each: date, slug, what changed, branch/commit.
+
+- 2026-09-30 `ci-xdg-test-isolation` Isolated installer/rule/uninstaller test fixtures from inherited XDG configuration; added a regression proving the inherited directory stays untouched. Fixes the Ubuntu parallel-test failure in [CI run 36811623304](https://github.com/maxwmeadow/Axiom/actions/runs/36811623304). (codex/agents-draw-first)
 
 - 2026-09-30 `docs-consolidation` Stray briefs and plans consolidated: current docs in `docs/`, old plans in `docs/history/`, the bug hunt became `docs/testing/CANVAS_QA_CHECKLIST.md`, LAUNCH split into this file and `docs/DECISIONS.md`, new PRODUCT/ARCHITECTURE docs, README repositioned around bidirectional architecture. (claude/gracious-gauss-1bgdv9)
 - 2026-09-30 `ci-fix` Open-time backup made synchronous; path tests made host-independent. (c063eb8)

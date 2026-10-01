@@ -30,7 +30,7 @@ const WRITE_TOOLS = new Set([
   'create_infra_node', 'update_infra_node', 'delete_infra_node', 'connect_infra',
   'record_infra_contents', 'record_infra_requirements', 'decide_infra',
   'edit_infra',
-  'create_sheet', 'add_to_sheet', 'annotate_sheet', 'edit_sheet',
+  'create_sheet', 'add_to_sheet', 'annotate_sheet', 'connect_sheet', 'edit_sheet',
 ])
 
 const PLAN_TOOLS = new Set([

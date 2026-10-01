@@ -43,7 +43,7 @@ export function presentAgentHost(
   if (result?.ok || (host.configured && host.workflowInstalled)) {
     return {
       state: 'installed',
-      detail: `Axiom MCP and its canvas inbox${host.command ? ` and ${host.command} mapping` : ''} workflow are installed for ${host.modalityLabel || host.label}.`,
+      detail: `Axiom MCP, draw-first guidance, and its canvas inbox${host.command ? ` and ${host.command} mapping` : ''} workflow are installed for ${host.modalityLabel || host.label}.`,
       action: 'reinstall',
     }
   }
@@ -59,7 +59,7 @@ export function presentAgentHost(
   if (host.configured && !host.workflowInstalled) {
     return {
       state: 'repair',
-      detail: `Axiom MCP is configured for ${host.modalityLabel || host.label}, but a reusable workflow (mapping or inbox) is missing.`,
+      detail: `Axiom MCP is configured for ${host.modalityLabel || host.label}, but mapping, inbox, or draw-first instructions need repair.`,
       action: 'repair',
     }
   }

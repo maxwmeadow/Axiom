@@ -221,7 +221,7 @@ export async function startHarness(options = {}) {
     })
     const client = new McpClient(mcp)
 
-    await client.request('initialize', {
+    const initialization = await client.request('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
       clientInfo: { name: 'axiom-harness', version: '1.0.0' },
@@ -229,6 +229,7 @@ export async function startHarness(options = {}) {
 
     return {
       client,
+      initialization: initialization.result,
       snapshot,
       workspaceId,
       projectDir,

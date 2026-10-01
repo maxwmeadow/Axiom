@@ -129,6 +129,16 @@ legacy tool names still route but are not advertised. Budget and merge rules:
 [MCP_SURFACE.md](MCP_SURFACE.md). Installers for ten agent hosts live in
 `electron/agentInstallers.ts`.
 
+Draw-first guidance has one source, `src/shared/agentWorkflow.ts`, used by
+installed mapping/inbox/build skills and MCP connection/prompt instructions.
+`electron/agentRules.ts` adds host-specific project rules with hashed managed
+blocks; inspection detects missing/edited rules and uninstall keeps authored
+text and rules still shared by another configured host. `edit_sheet(connect)`
+draws typed planned edges through the existing workspace-scoped sheet API,
+validating endpoints against that sheet. Plans and approval use the existing
+sheet model; no additional tool or database migration is needed. Host coverage
+and validation limits are in [testing/AGENTS_DRAW_FIRST.md](testing/AGENTS_DRAW_FIRST.md).
+
 ## Renderer
 
 React + React Flow (`@xyflow/react` 12) with zustand stores. The canvas is

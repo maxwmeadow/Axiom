@@ -41,6 +41,28 @@ Restoration creates a new revision; historical resolution evidence remains store
 
 ## Agent workflow
 
+Before a structural code change, installed host instructions and the MCP
+connection ask the agent to draw a scoped sheet and tell the human. Reuse an
+existing approved sheet instead of duplicating it. New `plan_element` proposals
+remain pending until human approval; `get_build_plan({id})` reads that status.
+Approval plus an explicit build instruction authorizes its scope. Discussion
+requests, pending/rejected proposals, and new scope additions do not authorize
+implementation. Small edits within an existing boundary need no new sheet.
+
+Use `edit_sheet({op:"connect",sheet,from,to,kind})` to draw a typed relationship
+between exact planned/live IDs already on the sheet (`DEPENDS_ON` by default).
+Add live context with `edit_sheet(add)` first. This writes a planned edge, not
+a live dependency; sequential retries return the same relationship. Comparison
+checks the requested type against live indexed dependencies, so choose a type
+the index can prove rather than an arbitrary diagram label. For responsibility
+moves/removals, `edit_sheet(annotate)` records before/after and rationale;
+annotations and relationships alone have no independent approval control.
+Return them for explicit human review instead of treating their existence as
+permission. Axiom guidance does not intercept host file writes.
+
+Installation details and live-host validation:
+[AGENTS_DRAW_FIRST.md](testing/AGENTS_DRAW_FIRST.md).
+
 1. Read the user's inbox instruction and snapshot context, or find a named sheet.
    `edit_sheet({op:"get",sheet:"checkout redesign"})` accepts an exact ID, a
    case-insensitive exact name, or an unambiguous fragment containing all supplied
